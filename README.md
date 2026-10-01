@@ -17,7 +17,7 @@ Guardian (Docker, AWS Tokyo): reconcile, restore stops, execute plan rules, Tele
 - **Extending the desk:** [docs/RESEARCH.md](docs/RESEARCH.md)
 - **Deploy:** [deploy/DEPLOY.md](deploy/DEPLOY.md)
 - **Quick start (local, demo):**
-  1. `uv venv --python 3.13 .venv && uv pip install -e ".[dev]" --python .venv/bin/python`
+  1. `uv sync --locked --extra dev --python 3.13` (exact versions from `uv.lock`; see [deploy/DEPLOY.md](deploy/DEPLOY.md#9-dependencies-uvlock))
   2. `cp .env.example .env`, then add demo keys from demo.binance.com
   3. `.venv/bin/pytest -q`
   4. `.venv/bin/shortbot brief`
