@@ -99,6 +99,7 @@ class Journal(ResearchStore):
         for col, ddl in TRADE_COLUMNS.items():
             if col not in have:
                 self.db.execute(f"ALTER TABLE trades ADD COLUMN {col} {ddl}")
+        self._migrate_research()
         self.db.commit()
 
     def _insert(self, sql: str, args: tuple) -> int:

@@ -4,24 +4,40 @@ desk learns even on days it doesn't trade. New signal features are reported auto
 
 Short returns are positive when price FELL (good for a short): short_ret = (p0 - p_t) / p0 * 100.
 max_adverse_24h = worst rise against the short within 24h (squeeze risk); max_favorable_24h = best drop.
+
+Since 2026-10-01 (#27) the report counts one observation per symbol-episode (rescans of a coin within the 24h
+outcome horizon are the same bet), compares groups against the median of their own scan, subtracts costs and gives
+95% intervals clustered by day (research_stats). Labels start at the scan time, not the scan's floored hour.
 """
 
 from __future__ import annotations
 
+import re
 import statistics
 from typing import Any
 
+from . import research_stats as rs
 from .exchange import Exchanges
+from .journal_research import LABEL_VERSION
 
 HOUR_MS = 3_600_000
 NUMERIC_SKIP = {"funding_interval_h"}
+HORIZON_H = 24          # outcome horizon of short_ret_24h / max_adverse_24h: the episode window
+BAR_MS = 300_000        # label bars: 5m, the first one opening at/after the scan (weight 5 per 864-bar request)
+BARS_PER_H = 12
+COST_PCT = 0.1          # round-trip fees + slippage, % (as patterns.COST_PCT)
+SQUEEZE_PCT = 15
+BASIS = "episodes (since 2026-10-01)"
+ALL_ROWS = 10_000_000   # report on every labelled row: a capped sample would silently drop the oldest days
 
 
-def outcome_from_candles(p0: float, candles: list[list[float]]) -> dict[str, float | None]:
-    """candles: 1h OHLCV starting at the candidate's hour."""
+def outcome_from_candles(p0: float, candles: list[list[float]], bars_per_hour: int = 1) -> dict[str, float | None]:
+    """candles: OHLCV bars opening at (or just after) the scan time, `bars_per_hour` per hour, so no price action
+    from before the scan leaks in. The close of bar h * bars_per_hour - 1 is the price h hours later."""
     def ret_at(h: int) -> float | None:
-        return (p0 - candles[h][4]) / p0 * 100 if len(candles) > h else None
-    first24 = candles[:25]
+        i = h * bars_per_hour - 1
+        return (p0 - candles[i][4]) / p0 * 100 if len(candles) > i else None
+    first24 = candles[:24 * bars_per_hour]
     return {
         "short_ret_4h": ret_at(4), "short_ret_24h": ret_at(24), "short_ret_72h": ret_at(72),
         "max_adverse_24h": (max(c[2] for c in first24) - p0) / p0 * 100 if first24 else None,
@@ -29,18 +45,19 @@ def outcome_from_candles(p0: float, candles: list[list[float]]) -> dict[str, flo
     }
 
 
-async def label_outcomes(ex: Exchanges, journal, now_ms: int, limit: int = 30) -> int:
-    """Label candidates at least 72h old (all horizons at once). Returns how many were labelled."""
-    rows = journal.unlabelled_candidates(older_than_ms=now_ms - 73 * HOUR_MS, limit=limit)
+async def label_outcomes(ex: Exchanges, journal, now_ms: int, limit: int = 120) -> int:
+    """Label candidates at least 72h old (all horizons at once), and relabel ones labelled by an older method.
+    120 per hourly run keeps ahead of ~50 logged rows an hour. Returns how many were labelled."""
+    rows = journal.unlabelled_candidates(older_than_ms=now_ms - 73 * HOUR_MS, limit=limit, version=LABEL_VERSION)
     n = 0
     for r in rows:
         try:
-            candles = await ex.public.fetch_ohlcv(r["symbol"], "1h", since=r["ts_ms"] - r["ts_ms"] % HOUR_MS,
-                                                  limit=80)
-            outcome = outcome_from_candles(r["price"], candles) if candles and r["price"] else {}
+            start = -(-r["ts_ms"] // BAR_MS) * BAR_MS          # first 5m bar opening at/after the scan
+            candles = await ex.public.fetch_ohlcv(r["symbol"], "5m", since=start, limit=72 * BARS_PER_H)
+            outcome = outcome_from_candles(r["price"], candles, BARS_PER_H) if candles and r["price"] else {}
         except Exception:  # noqa: BLE001 - delisted/renamed symbols: label empty so we don't retry forever
             outcome = {}
-        journal.label_candidate(r["id"], outcome)
+        journal.label_candidate(r["id"], outcome, LABEL_VERSION)
         n += 1
     return n
 
@@ -71,31 +88,82 @@ async def label_post_exit(ex: Exchanges, journal, now_ms: int, limit: int = 10) 
     return n
 
 
-def _summary(vals: list[dict[str, Any]]) -> dict[str, Any]:
-    r24 = [v["short_ret_24h"] for v in vals if v.get("short_ret_24h") is not None]
-    adv = [v["max_adverse_24h"] for v in vals if v.get("max_adverse_24h") is not None]
-    if not r24:
-        return {"n": 0}
+def funding_carry_24h(features: dict[str, Any]) -> float:
+    """Estimated funding a short collects over 24h (%), holding the scan-time rate: positive funding pays shorts."""
+    rate, iv = features.get("funding_rate"), features.get("funding_interval_h") or 8
+    return rate * 100 * 24 / iv if isinstance(rate, (int, float)) and not isinstance(rate, bool) else 0.0
+
+
+def _r(x: float | None, n: int = 2) -> float | None:
+    return None if x is None else round(x, n)
+
+
+def _ci(c: dict[str, Any]) -> list[float] | None:
+    return [round(c["ci95"][0], 2), round(c["ci95"][1], 2)] if c and c.get("ci95") else None
+
+
+COMPACT_DROP = ("n_eff", "ci95_short_ret_24h", "avg_net_ret_24h", "descriptive_only")
+
+
+def _summary(vals: list[dict[str, Any]], compact: bool = False) -> dict[str, Any]:
+    """One observation per symbol-episode; existing keys keep their names and units, on that basis. compact (the
+    exploratory feature tertiles): existing keys + rows, days and the excess return with its CI."""
+    rows = [v for v in vals if v.get("short_ret_24h") is not None]
+    obs = rs.episodes(rows, HORIZON_H)
+    if not obs:
+        return {"n": 0, "rows": 0}
+    r24 = [o["short_ret_24h"] for o in obs]
+    adv = [o["max_adverse_24h"] for o in obs if o.get("max_adverse_24h") is not None]
+    days = rs.days_of(obs)
+    raw = rs.clustered_mean(r24, days)
+    ex = [(o["excess_ret_24h"], d) for o, d in zip(obs, days) if o.get("excess_ret_24h") is not None]
+    exc = rs.clustered_mean([e for e, _ in ex], [d for _, d in ex]) if ex else None
+    net = [o["short_ret_24h"] - COST_PCT + funding_carry_24h(o.get("features") or {}) for o in obs]
+    out = {"n": len(obs), "rows": len(rows), "days": raw["days"], "n_eff": _r(raw["n_eff"], 1),
+           "avg_short_ret_24h": round(raw["mean"], 2), "ci95_short_ret_24h": _ci(raw),
+           "median_short_ret_24h": round(statistics.median(r24), 2),
+           "hit_rate_pct": round(sum(x > 0 for x in r24) / len(r24) * 100, 1),
+           "avg_excess_ret_24h": _r(exc and exc["mean"]), "ci95_excess_ret_24h": _ci(exc),
+           "avg_net_ret_24h": round(statistics.fmean(net), 2),
+           "avg_max_adverse_24h": round(statistics.mean(adv), 2) if adv else None,
+           "squeeze_rate_pct": round(sum(a > SQUEEZE_PCT for a in adv) / len(adv) * 100, 1) if adv else None}
+    if raw["days"] < rs.MIN_DAYS:
+        out["descriptive_only"] = True
+    return {k: v for k, v in out.items() if k not in COMPACT_DROP} if compact else out
+
+
+def _rows_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The pre-2026-10-01 basis: every scan row counted, so n overstates the evidence. Kept for comparison."""
+    r24 = [r["short_ret_24h"] for r in rows]
+    adv = [r["max_adverse_24h"] for r in rows if r.get("max_adverse_24h") is not None]
     return {"n": len(r24), "avg_short_ret_24h": round(statistics.mean(r24), 2),
-            "median_short_ret_24h": round(statistics.median(r24), 2),
             "hit_rate_pct": round(sum(x > 0 for x in r24) / len(r24) * 100, 1),
-            "avg_max_adverse_24h": round(statistics.mean(adv), 2) if adv else None,
-            "squeeze_rate_pct": round(sum(a > 15 for a in adv) / len(adv) * 100, 1) if adv else None}
+            "squeeze_rate_pct": round(sum(a > SQUEEZE_PCT for a in adv) / len(adv) * 100, 1) if adv else None,
+            "note": "row-based (every rescan counted): overstates n; compare, don't cite"}
+
+
+def veto_key(v: str) -> str:
+    """Veto reason without its numbers, so 'OI $4.4M < $30M: too thin' and 'OI $8.1M ...' are one veto."""
+    return re.sub(r"-?\d+(?:[.,]\d+)*", "#", v.split(":")[0].split(" (")[0])[:40]
+
+
+def _num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _tertiles(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
-    vals = sorted(r["features"][key] for r in rows if isinstance(r["features"].get(key), (int, float))
-                  and not isinstance(r["features"].get(key), bool))
+    """Cut points from one value per symbol-episode, so rescans of a coin don't move them."""
+    have = [r for r in rows if _num(r["features"].get(key))]
+    vals = sorted(r["features"][key] for r in rs.episodes(have, HORIZON_H))
     if len(vals) < 9:
         return {}
     lo, hi = vals[len(vals) // 3], vals[2 * len(vals) // 3]
     buckets: dict[str, list[dict[str, Any]]] = {f"<{lo:.3g}": [], f"{lo:.3g}-{hi:.3g}": [], f">{hi:.3g}": []}
     names = list(buckets)
-    for r in rows:
-        v = r["features"].get(key)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            buckets[names[0] if v < lo else names[2] if v > hi else names[1]].append(r)
-    return {k: _summary(v) for k, v in buckets.items()}
+    for r in have:
+        v = r["features"][key]
+        buckets[names[0] if v < lo else names[2] if v > hi else names[1]].append(r)
+    return {k: _summary(v, compact=True) for k, v in buckets.items()}
 
 
 def archetype_of(features: dict[str, Any]) -> str:
@@ -140,16 +208,19 @@ def by_liquidity(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def report(journal, min_n: int = 5) -> dict[str, Any]:
-    """What predicted drops? Grouped by tradable/vetoed, veto reason, setup, score bucket, feature tertiles."""
-    rows = [r for r in journal.candidates(labelled_only=True) if r.get("short_ret_24h") is not None]
+    """What predicted drops? Grouped by tradable/vetoed, veto reason, setup, score bucket, feature tertiles.
+    n = symbol-episodes (min_n applies to them); rows = raw scan rows."""
+    rows = [r for r in journal.candidates(labelled_only=True, limit=ALL_ROWS) if r.get("short_ret_24h") is not None]
     if not rows:
         return {"labelled_candidates": 0, "note": "No labelled candidates yet: outcomes are labelled 72h after "
                 "each scan by the guardian. Keep scanning."}
+    for r, e in zip(rows, rs.scan_excess(rows)):
+        r["excess_ret_24h"] = e
     by_veto: dict[str, list] = {}
     by_setup: dict[str, list] = {}
     for r in rows:
         for v in r["vetoes"] or []:
-            by_veto.setdefault(v.split(":")[0].split(" (")[0][:40], []).append(r)
+            by_veto.setdefault(veto_key(v), []).append(r)
         for s in r["setups"] or ["none"]:
             by_setup.setdefault(s, []).append(r)
     score_b: dict[str, list] = {}
@@ -158,17 +229,39 @@ def report(journal, min_n: int = 5) -> dict[str, Any]:
         score_b.setdefault(b, []).append(r)
     keep = lambda d: {k: s for k, s in ((k, _summary(v)) for k, v in d.items()) if s["n"] >= min_n}  # noqa: E731
     arch = archetypes(rows)
-    numeric = sorted({k for r in rows for k, v in r["features"].items()
-                      if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in NUMERIC_SKIP})
+    numeric = sorted({k for r in rows for k, v in r["features"].items() if _num(v) and k not in NUMERIC_SKIP})
+    tert = {k: t for k in numeric if (t := _tertiles(rows, k))}
+    n_buckets = sum(1 for t in tert.values() for b in t.values() if b["n"])
+    allx = _summary(rows)
     return {
-        "labelled_candidates": len(rows), "all": _summary(rows),
+        "labelled_candidates": len(rows), "basis": BASIS,
+        "sample": {"rows": len(rows), "episodes": allx["n"], "days": allx["days"], "n_eff": allx["n_eff"],
+                   "legacy_labels": sum(r.get("label_v") is None for r in rows),
+                   "episode_rule": f"a symbol's first appearance plus its rescans within {HORIZON_H}h (overlapping "
+                                   "outcome windows) = one observation"},
+        "baseline": {"kind": "same_scan_median", "field": "short_ret_24h", "min_symbols": rs.MIN_SCAN_SYMBOLS,
+                     "note": "excess = short_ret_24h minus the median of the candidates in the same scan: removes "
+                             "the shared market move. 'all' excess is ~0 by construction: judge the pool's absolute "
+                             "edge by avg_short_ret_24h and its ci95"},
+        "costs": {"round_trip_pct": COST_PCT, "funding": "estimated carry: scan-time rate held 24h (shorts collect "
+                  "positive funding)", "field": "avg_net_ret_24h"},
+        "inference": rs.inference_note(allx["days"]),
+        "all": allx, "all_rows": _rows_summary(rows),
         "tradable": _summary([r for r in rows if r["tradable"]]),
         "vetoed": _summary([r for r in rows if not r["tradable"]]),
         "by_veto_reason": keep(by_veto), "by_setup": keep(by_setup), "by_score": keep(score_b),
         "by_lifecycle": keep(arch["lifecycle"]), "by_controller": keep(arch["controller"]),
         "by_archetype": keep(arch["archetype"]), "by_session": keep(arch["session"]),
         "by_open_interest": by_liquidity(rows),
-        "by_feature_tertile": {k: t for k in numeric if (t := _tertiles(rows, k))},
-        "how_to_read": "short_ret > 0 = price fell (short wins). A veto is useful if its vetoed coins show a low "
-                       "short_ret or high squeeze_rate. Treat n < 30 as anecdote.",
+        "feature_mining": {"features": len(tert), "buckets": n_buckets,
+                           "expected_false_hits_95": round(n_buckets * 0.05, 1),
+                           "note": "exploratory: every numeric feature is mined into tertiles, so ~5% of buckets "
+                                   "show a ci95 excluding 0 by chance alone. Confirm on later data before acting. "
+                                   "Buckets are compact (no n_eff, raw-return CI or net): dig with shortbot.lab."},
+        "by_feature_tertile": tert,
+        "how_to_read": "short_ret > 0 = price fell (short wins). n = independent symbol-episodes (rescans of a coin "
+                       "within 24h count once), rows = raw scan rows, days = distinct UTC days. Compare groups by "
+                       "avg_excess_ret_24h (vs the same scan's median) and its ci95; descriptive_only = fewer than "
+                       f"{rs.MIN_DAYS} days. avg_net_ret_24h = after costs. A veto is useful if its vetoed coins "
+                       "show a low short_ret or high squeeze_rate. Treat n < 30 episodes as anecdote.",
     }

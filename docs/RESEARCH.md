@@ -37,6 +37,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 
 ## Rules of evidence
 - n < 30 is an anecdote. Say so when recording a learning.
+- Rescans are not new evidence: count symbol-episodes (`research_report` `n`, since 2026-10-01) and days, not rows. With fewer than 20 days, intervals are descriptive only (`research_stats.py`).
 - Compare against the baseline (`research_report.all`), not against zero: in a falling market everything "works".
 - Watch `max_adverse_24h` and `squeeze_rate_pct`, not just average return. A short edge that sometimes costs +50% isn't an edge at 3× leverage.
 - Keep one experiment at a time per parameter, so results are attributable.

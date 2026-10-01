@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     id INTEGER PRIMARY KEY, ts TEXT NOT NULL, ts_ms INTEGER NOT NULL, symbol TEXT NOT NULL, price REAL,
     score INTEGER, tradable INTEGER, setups TEXT, vetoes TEXT, signals TEXT, features TEXT, regime TEXT,
     short_ret_4h REAL, short_ret_24h REAL, short_ret_72h REAL, max_adverse_24h REAL, max_favorable_24h REAL,
-    labelled_at TEXT
+    labelled_at TEXT, label_v INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cand_unlabelled ON candidates (labelled_at, ts_ms);
 CREATE TABLE IF NOT EXISTS predictions (
@@ -32,12 +32,23 @@ CREATE TABLE IF NOT EXISTS learnings (
     statement TEXT NOT NULL, evidence TEXT, status TEXT NOT NULL, confidence TEXT
 );
 """
+# Label method of a candidate's outcome. NULL = legacy (1h candles from the scan's floored hour, so the first bar
+# included price action from before the scan); 2 = 5m bars opening at/after the scan time. Older versions are
+# re-queued by unlabelled_candidates, so the whole dataset converges on one method.
+LABEL_VERSION = 2
+CANDIDATE_COLUMNS = {"label_v": "INTEGER"}
 LEARNING_STATUS = ("hypothesis", "supported", "rejected", "adopted")
 CONFIDENCE = ("low", "medium", "high")
 
 
 class ResearchStore:
     db: Any  # provided by Journal
+
+    def _migrate_research(self) -> None:
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(candidates)")}
+        for col, ddl in CANDIDATE_COLUMNS.items():
+            if col not in have:
+                self.db.execute(f"ALTER TABLE candidates ADD COLUMN {col} {ddl}")
 
     # ------------------------------------------------------------ candidates
     def log_candidates(self, ts: str, ts_ms: int, rows: list[dict[str, Any]], regime: str | None) -> int:
@@ -50,14 +61,16 @@ class ResearchStore:
         self.db.commit()
         return len(rows)
 
-    def unlabelled_candidates(self, older_than_ms: int, limit: int = 50) -> list[dict[str, Any]]:
-        return self._rows("SELECT id, symbol, ts_ms, price FROM candidates WHERE labelled_at IS NULL AND ts_ms < ?"
-                          " ORDER BY ts_ms LIMIT ?", (older_than_ms, limit))
+    def unlabelled_candidates(self, older_than_ms: int, limit: int = 50,
+                              version: int = LABEL_VERSION) -> list[dict[str, Any]]:
+        """Candidates due a label: never labelled, or labelled by an older method (relabelled oldest first)."""
+        return self._rows("SELECT id, symbol, ts_ms, price FROM candidates WHERE ts_ms < ? AND (labelled_at IS NULL"
+                          " OR label_v IS NULL OR label_v < ?) ORDER BY ts_ms LIMIT ?", (older_than_ms, version, limit))
 
-    def label_candidate(self, cid: int, outcome: dict[str, float | None]) -> None:
+    def label_candidate(self, cid: int, outcome: dict[str, float | None], version: int = LABEL_VERSION) -> None:
         cols = ("short_ret_4h", "short_ret_24h", "short_ret_72h", "max_adverse_24h", "max_favorable_24h")
-        self.db.execute(f"UPDATE candidates SET {', '.join(c + '=?' for c in cols)}, labelled_at=datetime('now')"
-                        " WHERE id=?", (*(outcome.get(c) for c in cols), cid))
+        self.db.execute(f"UPDATE candidates SET {', '.join(c + '=?' for c in cols)}, labelled_at=datetime('now'),"
+                        " label_v=? WHERE id=?", (*(outcome.get(c) for c in cols), version, cid))
         self.db.commit()
 
     def candidates(self, labelled_only: bool = False, limit: int = 5000) -> list[dict[str, Any]]:

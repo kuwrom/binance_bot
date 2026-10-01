@@ -15,7 +15,8 @@ The desk learns from three data streams:
 1. `research_report`:
    - Does a higher score actually mean a higher `avg_short_ret_24h`?
    - Which vetoes save us (the vetoed coins squeeze) and which cost us (the vetoed coins dropped anyway)?
-   - Which feature tertiles separate winners?
+   - Which feature tertiles separate winners? These are exploratory (`feature_mining`): confirm on later data.
+   - Since 2026-10-01 (`basis`), `n` counts symbol-episodes (rescans of a coin within 24h are one bet), `rows` the raw scan rows and `days` the independent market days. Compare groups by `avg_excess_ret_24h` (vs the median of the same scan) and its `ci95_excess_ret_24h`; `descriptive_only` means fewer than 20 days. Learnings that cite row-based n from before 2026-10-01 overstate their evidence.
 2. `journal`: stats by setup and by experiment. Treat n < 30 as anecdote.
 3. Update learnings (`add_learning` / `update_learning`), citing the numbers.
 

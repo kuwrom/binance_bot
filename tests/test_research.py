@@ -29,7 +29,7 @@ def test_report_groups_by_veto_setup_and_feature():
     r = report(j, min_n=3)
     assert r["labelled_candidates"] == 12
     assert r["by_score"]["60+"]["avg_short_ret_24h"] == 8.0 and r["by_score"]["0-29"]["squeeze_rate_pct"] == 100.0
-    assert "negative funding -0.01%" in r["by_veto_reason"] and "rsi_1h" in r["by_feature_tertile"]
+    assert "negative funding #%" in r["by_veto_reason"] and "rsi_1h" in r["by_feature_tertile"]   # numbers dropped
     assert "lower_high" not in r["by_feature_tertile"]   # booleans are not bucketed as numbers
 
 
