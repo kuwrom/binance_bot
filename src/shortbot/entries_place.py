@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from . import warmup
+from . import killswitch, warmup
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .setups import resolve
@@ -35,6 +35,8 @@ class EntryPlacement:
         tr = self.tr
         if not 1 <= len(proposals) <= 5:
             return {"ok": False, "error": "propose 1-5 entries per group"}
+        if blocked := await killswitch.gate(tr, "propose_entries"):
+            return blocked
         cold = warmup.gate(self.j)
         if cold and not (warmup_override and warmup_override.strip()):
             return {"ok": False, "vetoed": [cold], "hint": "or pass warmup_override='<reason>'"}
@@ -151,6 +153,8 @@ class EntryPlacement:
                           acct.total_open_notional + sum(n for _, n in worst.values()), acct.day_pnl)
         prod = await tr.ex.public.fetch_ticker(sym)
         check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0)), acct, lim)
+        if blocked := await killswitch.gate(tr, "limit entry"):   # a trip while this group was being placed
+            raise ValueError(blocked["error"])
         order = await tr.t.create_order(sym, "limit", "sell", amount, px,
                                         {"timeInForce": "GTD", "goodTillDate": expires_ms})
         prearm_id = None

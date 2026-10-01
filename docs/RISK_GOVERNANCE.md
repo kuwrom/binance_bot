@@ -40,3 +40,12 @@
   - Pre-declare ≤ 4 cells: BTC trend up/down × vol high/low.
   - Need ≥ 30 trades per cell and shrink the cell's expectancy toward the setup mean with weight n/(n+30).
   - Cut a cell to 0.5× only if the upper 80% bound of its shrunk expectancy is below 0. Switch it off only at ≥ 50 trades with a walk-forward check.
+
+## Kill switch (research 2026-10-01; `killswitch.py`)
+- **Evidence:** FIA 2024 *Automated Trading Risk Controls*: a kill switch blocks new orders, cancels working orders and may allow risk-reducing ones. MiFID II RTS 6 wants the off switch tested. NautilusTrader's trading states are ACTIVE / REDUCING / HALTED.
+- **States** (one journal kv row, `trading_state`, with who, why, when and the cause):
+  - REDUCING: only closes, partial closes, stop tightening and cancelling entries. No new entries, adds, risk-raising amends, stop widening or ladder opt-ins. Resting entries stay; a fill is protected, journalled and alerted, never auto-closed.
+  - HALTED: REDUCING + every resting limit entry is withdrawn. A pre-armed stop goes only with a limit confirmed unfilled. Protective stops on open positions are never cancelled: for a short book a generic cancel-all strips them.
+  - Flatten-all is a command, not a state: HALTED, then every short market-closed reduce-only (`flatten_all` / `shortbot flatten`).
+- **Who:** anyone may trip it (`halt_trading`, `shortbot kill-switch HALTED --reason ...`, guardian auto-trips, the session watchdog). Only a human loosens it: `.venv/bin/shortbot-admin clear --reason ...` in a real terminal (it reads a code from /dev/tty and refuses under Claude Code). That is a speed bump plus a tripwire (every change is journalled and alerted), not a security boundary.
+- **Auto-trips** (sticky until a human clears, past 00:00 UTC too): daily loss past the effective `daily_loss_limit_pct` and drawdown past `dd_stop_pct` (research override if active, else `.env`), an untracked or long position. A stale guardian heartbeat trips HALTED from any session and lifts itself once the heartbeat is fresh again; withdrawn entries stay withdrawn.

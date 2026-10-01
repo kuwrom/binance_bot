@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import killswitch
 from .exchange import to_symbol
 from .ladder import build_ladder
 from .positioning import PositionOps, _r_initial
@@ -50,6 +51,8 @@ def _pending_legs(trader) -> list[dict[str, Any]]:
 async def enable(trader, symbol: str) -> dict[str, Any]:
     """Opt a trade into the live ladder: pins 1R and the exposure base before anything changes size."""
     sym = to_symbol(symbol)
+    if blocked := await killswitch.gate(trader, "ladder enable"):   # opting in arms future adds
+        return blocked
     trade = trader.j.active_trade(sym)
     if not trade:
         return {"ok": False, "error": "no journal-tracked trade"}
@@ -88,6 +91,8 @@ async def apply(trader, symbol: str, dry_run: bool = False) -> dict[str, Any]:
                          "why": f"score {base['score']:+g}: exposure -> {base['x_virtual']:.0%} of full size"})
     elif base["action"] == "add" and any(e["symbol"] == sym for e in _pending_legs(trader)):
         acts.append({"kind": "skip_add", "why": "a split-entry leg is still resting: that IS the planned add"})
+    elif base["action"] == "add" and (blocked := await killswitch.gate(trader, "ladder add")):
+        acts.append({"kind": "skip_add", "why": blocked["error"]})   # cuts and stop re-levels still run
     elif base["action"] == "add":
         r_cap = _r_initial(trade) * max(1.0, trader.ex.limits.max_add_r_mult)
         fit = plan_add(pos["entry"], cur, mark, stop, base["x_virtual"] * full - cur, r_cap,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from . import reconcile, warmup
+from . import killswitch, reconcile, warmup
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier,
@@ -28,6 +28,8 @@ class OpenFlow:
         symbol = to_symbol(symbol)
         st = resolve(setup)
         async with self.lock:
+            if blocked := await killswitch.gate(self, "open_short"):
+                return blocked
             await self.ex.trade_markets()
             if symbol not in self.t.markets:
                 return {"ok": False, "error": f"{symbol} is not listed on the connected "
@@ -81,6 +83,8 @@ class OpenFlow:
             min_cost = self.t.market(symbol)["limits"]["cost"]["min"] or 0
             if amount * price < min_cost:
                 return {"ok": False, "error": f"size {amount * price:.2f} USDT below exchange minimum {min_cost}"}
+            if blocked := await killswitch.gate(self, "open_short"):   # again: a trip during the checks above
+                return blocked
 
             await self._prepare(symbol, leverage)
             features = {**checks.get("features", {}), "regime": checks.get("regime"), "budget": budget,

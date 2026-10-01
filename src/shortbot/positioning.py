@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import indicators as ind
+from . import killswitch
 from .exchange import to_symbol
 
 
@@ -123,6 +124,8 @@ class PositionOps:
     async def widen_stop(self, symbol: str, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr
         symbol = to_symbol(symbol)
+        if blocked := await killswitch.gate(tr, "widen_stop"):   # can raise the loss at stop back up to 1R
+            return blocked
         async with tr.lock:
             await tr.ex.trade_markets()
             pos, trade = await tr.position(symbol), tr.j.active_trade(symbol)
@@ -162,6 +165,8 @@ class PositionOps:
     async def add_to_winner(self, symbol: str, notional: float, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr
         symbol = to_symbol(symbol)
+        if blocked := await killswitch.gate(tr, "add_to_winner"):   # before the pre-add stop tighten
+            return blocked
         pos, trade = await tr.position(symbol), tr.j.active_trade(symbol)
         if not pos or not trade:
             return {"ok": False, "error": "no journal-tracked position"}
@@ -195,6 +200,8 @@ class PositionOps:
             if not mv.get("ok"):
                 return {"ok": False, "error": f"could not tighten the stop first: {mv.get('error')}"}
         async with tr.lock:
+            if blocked := await killswitch.gate(tr, "add_to_winner"):   # tripped meanwhile: the tightened stop stays
+                return blocked
             await tr.t.create_order(symbol, "market", "sell", add_qty)
         plan = dict(trade.get("plan") or {})
         plan.setdefault("r1_usdt", r1)                               # pin 1R before the amount grows

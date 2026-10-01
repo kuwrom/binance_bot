@@ -26,6 +26,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
+from . import killswitch
 from .entries_place import MIN_TTL_S, EntryPlacement, _now_iso  # noqa: F401 (MIN_TTL_S re-export)
 from .market.market_map import cached
 from .sessions import session_bucket
@@ -145,6 +146,9 @@ class EntryDesk(EntryPlacement):
             return {"ok": False, "error": "new limit must stay below the stop"}
         t = self.tr.t
         px = float(t.price_to_precision(e["symbol"], new_limit))
+        # a lower sell limit fills sooner and loses more at the stop; raising it toward the stop only reduces risk
+        if px < e["limit_price"] and (blocked := await killswitch.gate(self.tr, "amend (lower limit)")):
+            return blocked
         await t.edit_order(e["order_id"], e["symbol"], "limit", "sell", e["amount"], px)
         self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}")
         return {"ok": True, "entry_id": entry_id, "new_limit": px}
