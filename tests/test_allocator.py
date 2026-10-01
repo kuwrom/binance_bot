@@ -45,3 +45,13 @@ def test_a_repeated_driver_is_planned_at_half_size_on_top_of_the_read_cut():
 def test_setup_names_follow_the_playbook():
     assert setup_of("pump-fade (wait for trigger: rest limits above the 24h high)") == "pump_fade"
     assert setup_of("delisting-short") == "delisting" and setup_of(None) is None
+
+
+def test_a_breakdown_today_is_skipped_unless_it_is_an_event_setup():
+    soon = rd("SOON", sector="X")
+    soon["setups_detected"] = ["breakdown"]
+    delist = rd("D", playbook="delisting-short", sector="Y")
+    delist["setups_detected"] = ["breakdown"]
+    out = plan([soon, delist], [], 5)
+    assert [a["symbol"] for a in out["add"]] == ["D"]
+    assert "breakdown today" in out["skip"][0]["why"]

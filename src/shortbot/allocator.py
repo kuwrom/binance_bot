@@ -53,6 +53,11 @@ def plan(reads: list[dict[str, Any]], book: list[dict[str, Any]], max_positions:
         if v.get("action") != "short_setup":
             skips.append({"symbol": sym, "why": f"read: {v.get('action')} ({'; '.join(v.get('why') or [])[:120]})"})
             continue
+        if "breakdown" in (r.get("setups_detected") or []) and not (pb or "").startswith(EVENT_PLAYBOOKS):
+            # the read's stage is multi-day ('pumping' over 7-30d) but today's tape is a drop: shorting after the
+            # drop lost money (learning #29: dumped coins -1.35%/24h) and bounce limits fill on failed breakdowns (#90)
+            skips.append({"symbol": sym, "why": "breakdown today: shorting after the drop lost (learnings #29, #90)"})
+            continue
         slot = used + len(adds) + 1
         if slot > max_positions:
             skips.append({"symbol": sym, "why": f"no free slot ({max_positions} max)"})
