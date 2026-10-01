@@ -220,7 +220,8 @@ class PositionChecks:
                 await send_safe(self.n, "kill_switch_state", f"guardian started with the kill switch {st['state']} "
                                 f"since {st.get('at')} ({st.get('by')}: {st.get('reason')})", cooldown_s=0)
             elif seen and st["level"] < seen["level"]:
-                sanctioned = st.get("cause") == "auto_clear" or str(st.get("by")).startswith("human:")
+                sanctioned = (st.get("cause") == "auto_clear" or bool(st.get("restored_at"))   # stale halt lifted
+                              or str(st.get("by")).startswith("human:"))
                 await send_safe(self.n, "kill_switch_loosened", f"{seen['state']} -> {st['state']} by {st.get('by')}: "
                                 f"{st.get('reason')}" + ("" if sanctioned else ". NOT via shortbot-admin: check who "
                                                          "changed it"), urgent=not sanctioned, cooldown_s=0)

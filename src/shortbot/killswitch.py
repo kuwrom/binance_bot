@@ -228,8 +228,10 @@ def effective_limits(settings, j):
 
 
 async def trip_on_daily_loss(j, settings, equity: float, day_pnl: float) -> dict[str, Any] | None:
+    """Day P&L (realized since 00:00 UTC + all unrealized) against START-of-day equity, as governor.daily_cap."""
     lim, src = effective_limits(settings, j)
-    day_pct = day_pnl / equity * 100 if equity else 0.0
+    start = equity - day_pnl
+    day_pct = day_pnl / start * 100 if start > 0 else 0.0
     if not equity or day_pct > -lim.daily_loss_limit_pct:
         return None
     return await trip(j, settings, REDUCING, "guardian", f"daily loss {day_pct:+.2f}% hit the "

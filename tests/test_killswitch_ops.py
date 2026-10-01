@@ -94,10 +94,10 @@ async def test_a_sticky_trip_during_a_stale_halt_outlives_the_auto_clear():
         j = Journal(":memory:")
         j.set(ks.HEARTBEAT_KEY, str(now))
         if order == "before":
-            await ks.trip_on_daily_loss(j, SETTINGS, 10_000, -400)
+            await ks.trip_on_daily_loss(j, SETTINGS, 9_600, -400)
         await ks.trip(j, SETTINGS, HALTED, "session watchdog", "stale", cause=STALE)
         if order == "during":
-            assert not (await ks.trip_on_daily_loss(j, SETTINGS, 10_000, -400))["changed"]
+            assert not (await ks.trip_on_daily_loss(j, SETTINGS, 9_600, -400))["changed"]
             assert ks.read(j)["state"] == HALTED
         await ks.auto_clear_stale(j, SETTINGS, now)
         back = await ks.auto_clear_stale(j, SETTINGS, now)
@@ -121,18 +121,19 @@ async def test_auto_clear_needs_consecutive_fresh_checks_and_never_lifts_other_c
 # ------------------------------------------------------------ auto-trip thresholds
 async def test_daily_loss_trip_follows_the_effective_limit_and_records_which():
     j = Journal(":memory:")
-    assert await ks.trip_on_daily_loss(j, SETTINGS, 10_000, -250) is None          # -2.5% vs 3% baseline
-    assert (await ks.trip_on_daily_loss(j, SETTINGS, 10_000, -350))["changed"]
+    assert await ks.trip_on_daily_loss(j, SETTINGS, 9_750, -250) is None          # -2.5% vs 3% baseline
+    assert await ks.trip_on_daily_loss(j, SETTINGS, 9_705, -295) is None   # -2.95% of START equity (not -3.04%)
+    assert (await ks.trip_on_daily_loss(j, SETTINGS, 9_650, -350))["changed"]
     assert json.loads(j.decisions()[0]["snapshot"])["evidence"]["limit_source"] == ".env baseline"
     j2 = Journal(":memory:")
     ResearchParams(SETTINGS, j2).set({"daily_loss_limit_pct": 5}, "wider day for fades", "dl5")
-    assert await ks.trip_on_daily_loss(j2, SETTINGS, 10_000, -350) is None
-    r = await ks.trip_on_daily_loss(j2, SETTINGS, 10_000, -600)
+    assert await ks.trip_on_daily_loss(j2, SETTINGS, 9_650, -350) is None
+    r = await ks.trip_on_daily_loss(j2, SETTINGS, 9_400, -600)
     assert r["cause"] == "daily_loss" and "research override (dl5)" in r["reason"]
     live = Settings("live", "k", "s", ":memory:", "", "", RiskLimits())          # AI_PARAMS_IN_LIVE off
     j3 = Journal(":memory:")
     j3.set("research_params", json.dumps({"daily_loss_limit_pct": 5}))
-    assert (await ks.trip_on_daily_loss(j3, live, 10_000, -350))["changed"]
+    assert (await ks.trip_on_daily_loss(j3, live, 9_650, -350))["changed"]
 
 
 async def test_drawdown_stop_trips_reducing_for_a_human_review():
@@ -148,7 +149,7 @@ async def test_brief_line_says_what_tripped_it_and_how_it_clears():
     j.set(ks.HEARTBEAT_KEY, str(now - 4))
     assert ks.brief_line(j, now).startswith("### kill switch: ACTIVE; guardian heartbeat 4 s ago")
     assert "slow" in ks.brief_line(j, now + 200)
-    await ks.trip_on_daily_loss(j, SETTINGS, 10_000, -400)
+    await ks.trip_on_daily_loss(j, SETTINGS, 9_600, -400)
     line = ks.brief_line(j, now)
     assert "REDUCING" in line and "guardian (daily_loss): daily loss -4.00%" in line
     assert "shortbot-admin clear" in line and "not via Claude" in line

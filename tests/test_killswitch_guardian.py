@@ -114,6 +114,17 @@ async def test_guardian_lifts_a_stale_halt_and_flags_a_clear_that_bypassed_admin
     assert a["kind"] == "kill_switch_loosened" and "NOT via shortbot-admin" in a["message"]
 
 
+async def test_a_stale_halt_lifting_back_to_a_sticky_trip_is_not_a_tamper_alarm():
+    g, fake = guardian()
+    await ks.trip_on_daily_loss(g.j, SETTINGS, 9_600, -400)
+    await ks.trip(g.j, SETTINGS, HALTED, "session watchdog", "laptop slept", cause=STALE)
+    for _ in range(2):
+        await g.check_entries()
+    a = g.j.alerts(1)[0]
+    assert ks.read(g.j)["cause"] == "daily_loss" and a["kind"] == "kill_switch_loosened"
+    assert "NOT via shortbot-admin" not in a["message"]
+
+
 async def test_kill_switch_hooks_never_fail_the_protective_pass(monkeypatch):
     g, fake = guardian()
     oids = await two_entries(g, fake)
