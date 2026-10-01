@@ -46,7 +46,8 @@ def _f(x: Any, default: float = 0.0) -> float:
 async def default_budget(trader: "Trader", symbol: str, regime: str, conviction: str = "B",
                          setup: str | None = None) -> dict[str, Any]:
     from .risk_budget import compute_budget, gather_inputs
-    return compute_budget(trader.ex.limits, await gather_inputs(trader, regime, setup=setup), symbol, conviction)
+    inp = await gather_inputs(trader, regime, setup=setup, symbol=symbol)
+    return compute_budget(trader.ex.limits, inp, symbol, conviction)
 
 
 async def default_prechecks(ex: Exchanges, symbol: str, ticker: dict) -> dict[str, Any]:

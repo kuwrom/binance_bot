@@ -93,7 +93,7 @@ def test_moonshot_uses_its_own_bucket():
 
 
 def test_tilt_is_capped():
-    lim = RiskLimits(risk_per_trade_pct=1.0, max_conviction_mult=1.2)
+    lim = RiskLimits(risk_per_trade_pct=1.0, max_conviction_mult=1.2, max_positions=1)   # isolate the tilt
     r = compute_budget(lim, BudgetInputs(10_000, 10_000, "favorable", setup_rs=[0.8, -0.5, 1.2] * 12),
                        "X/USDT:USDT", "A")
     assert r["risk_usd"] == 120

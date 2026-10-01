@@ -26,6 +26,7 @@ from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from . import reconcile
+from .book import book_guard, diversity_mult, pending_book, slot_cap
 from .config import RiskLimits
 from .governor import REGIME_MULT, GovInputs, govern
 from .signals.core import MAJORS
@@ -53,6 +54,11 @@ class BudgetInputs:
     setup_rs: list[float] = field(default_factory=list)          # closed R multiples of this setup
     cell_rs: list[float] = field(default_factory=list)           # ... of this setup in the current cell
     moon_quarter_pnl: float = 0.0                                # net pnl of "M" trades this quarter
+    pending_risks: dict[str, float] = field(default_factory=dict)  # other symbols' resting groups (book.py)
+    book: list[dict[str, Any]] = field(default_factory=list)     # open + pending trades: symbol, setup, sector
+    setup: str | None = None                                     # the new trade's setup and sector
+    sector: str | None = None
+    pause: list[str] = field(default_factory=list)               # market-map pause (BTC/ETH impulse, squeeze)
 
 
 def clip(x: float, lo: float, hi: float) -> float:
@@ -87,11 +93,24 @@ def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, convictio
         reasons += [n for n in (note, cell_note if m_cell != 1.0 else "") if n]
         risk_usd = eq * limits.risk_per_trade_pct * m_dd * m_vol * m_regime * m_corr * tilt * m_gov / 100
 
-    heat = sum(inp.open_risks.values())
-    cluster_heat = sum(inp.open_risks[s] for s in same_cluster)
+    # book level (learning #30): resting entries of other symbols can fill, so they are heat too; a new trade gets
+    # at most one slot of the cluster budget; a repeated driver is the same bet; no new risk into a market pause
+    # while the book already holds several alt shorts
+    m_div, div_note = diversity_mult(inp.book, symbol, inp.setup, inp.sector)
+    risk_usd = min(risk_usd * m_div, slot_cap(eq, limits, cl)) if tier != "M" else risk_usd
+    reasons += [div_note] if div_note else []
+    every = {**inp.open_risks}
+    for s, r in inp.pending_risks.items():
+        every[s] = every.get(s, 0.0) + r
+    heat = sum(every.values())
+    cluster_heat = sum(r for s, r in every.items() if cluster_of(s) == cl and s != symbol)
     room = min(eq * limits.max_portfolio_heat_pct / 100 - heat, eq * limits.max_cluster_heat_pct / 100 - cluster_heat)
-    day_room = gov["daily"]["room_usd"] - heat   # open risk would hit the same daily cap
+    day_room = gov["daily"]["room_usd"] - sum(inp.open_risks.values())   # open risk would hit the same daily cap
     capped = max(0.0, min(risk_usd, room, day_room))
+    guard = book_guard(sum(1 for s in inp.open_risks if cluster_of(s) == "alts"), inp.pause) if cl == "alts" else None
+    if guard:
+        reasons.append(guard)
+        capped = 0.0
     if dd >= limits.max_drawdown_pct:
         reasons.append(f"drawdown {dd:.1f}% >= {limits.max_drawdown_pct}%: STOP trading and review")
         capped = 0.0
@@ -103,8 +122,10 @@ def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, convictio
         "risk_usd": round(capped, 2), "risk_pct": round(capped / eq * 100, 3) if eq else 0.0,
         "base_pct": limits.risk_per_trade_pct, "drawdown_pct": round(dd, 2), "conviction": eff, "cell": inp.cell,
         "multipliers": {"m_dd": round(m_dd, 3), "m_vol": round(m_vol, 3), "m_regime": m_regime, "m_corr": m_corr,
-                        "tilt": round(tilt, 3), "m_gov": m_gov},
+                        "tilt": round(tilt, 3), "m_gov": m_gov, "m_div": m_div},
+        "slot_cap_usd": round(slot_cap(eq, limits, cl), 2),
         "heat_pct": round(heat / eq * 100, 3) if eq else None,
+        "pending_heat_pct": round(sum(inp.pending_risks.values()) / eq * 100, 3) if eq else None,
         "cluster": cl, "cluster_heat_pct": round(cluster_heat / eq * 100, 3) if eq else None,
         "halted_until": gov.get("until") if gov["halt"] else None,
         "blocked": capped <= 0, "reasons": reasons,
@@ -147,7 +168,7 @@ def quarter_start(now: datetime) -> str:
 
 
 async def gather_inputs(trader, regime: str, positions: list[dict] | None = None,
-                        setup: str | None = None) -> BudgetInputs:
+                        setup: str | None = None, symbol: str | None = None) -> BudgetInputs:
     """Live inputs: equity + tracked peak, BTC vol + regime cell (cached 1h), open risk per position at its
     exchange stop, governor state (day/week P&L, loss streak, give-back) and this setup's track record."""
     global _vol_cache
@@ -182,10 +203,19 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
                     [(r["closed_at"], r["pnl"]) for r in rows], regime, vnow, tgt, now)
     s_rows = [r for r in rows if setup and r["setup"] == setup and r["r_multiple"] is not None]
     qs = quarter_start(now)
+    from .market.market_map import cached
+    m = cached(trader.j, 900) or {}
+    sector_of = lambda s: ((m.get("coins") or {}).get(s) or {}).get("sector")  # noqa: E731
+    pend, pbook = pending_book(trader.j.db, symbol or "")
+    book = [{"symbol": p["symbol"], "setup": p.get("setup"), "kind": "open"} for p in pos] + pbook
+    for b in book:
+        b["sector"] = sector_of(b["symbol"])
     return BudgetInputs(eq, peak, regime, vnow, tgt, risks, govern(trader.ex.limits, gin), cell,
                         [r["r_multiple"] for r in s_rows],
                         [r["r_multiple"] for r in s_rows if cell and r["regime_cell"] == cell],
-                        sum(r["pnl"] for r in rows if r["conviction"] == "M" and r["closed_at"] >= qs))
+                        sum(r["pnl"] for r in rows if r["conviction"] == "M" and r["closed_at"] >= qs),
+                        pend, book, setup, sector_of(symbol) if symbol else None,
+                        list((m.get("vetoes") or {}).get("pause") or []))
 
 
 async def governor_status(trader, regime: str) -> dict[str, Any]:
