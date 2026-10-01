@@ -324,6 +324,19 @@ class FakeCcxt(Engine):
         return [i for i in self.income if i["time"] >= req.get("startTime", 0)
                 and req.get("symbol") in (None, i["symbol"]) and req.get("incomeType") in (None, i["incomeType"])]
 
+    async def fapiPrivateGetOpenOrders(self, req=None):
+        """Raw GET /fapi/v1/openOrders (Current-All-Open-Orders doc: all symbols without `symbol`, weight 40; regular
+        orders only, conditional ones are on /fapi/v1/openAlgoOrders). Fields and string numbers as in the New-Order
+        doc's order object. Binance generates a client id when none was sent (its format is undocumented)."""
+        s = (req or {}).get("symbol")
+        return [{"orderId": int(i), "clientOrderId": o["cid"] or f"autogen{i}", "symbol": raw(o["symbol"]),
+                 "side": o["side"].upper(), "type": "LIMIT", "origType": "LIMIT", "positionSide": "BOTH",
+                 "status": "PARTIALLY_FILLED" if o["filled"] else "NEW", "price": str(o["price"]),
+                 "origQty": str(o["amount"]), "executedQty": str(o["filled"]), "reduceOnly": o["reduce"],
+                 "closePosition": False, "timeInForce": "GTD" if o["gtd"] else "GTC", "goodTillDate": o["gtd"] or 0,
+                 "time": o["ts"], "updateTime": o["last_ts"] or o["ts"]}
+                for i, o in self.limits.items() if o["status"] == "open" and s in (None, raw(o["symbol"]))]
+
     # --- test controls
     def fill_limit(self, i, qty=None):
         """Fill a resting limit at its own price, and only that: nothing else on the book reacts."""

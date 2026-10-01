@@ -1,17 +1,20 @@
 """Limit-entry placement (mixed into EntryDesk, entries.py): validate and size each proposal from the current risk
-budget, place the resting GTD sell (+ optional pre-armed stop), and record the entry row. A split entry's legs are
-placed far leg first and rolled back as one unit if any leg fails.
+budget, journal the entry row (status 'placing', with its client order id), then place the resting GTD sell
+(+ optional pre-armed stop) and journal the outcome (entry_intents.py). A split entry's legs are placed far leg
+first and rolled back as one unit if any leg fails.
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from . import killswitch, warmup
+from . import clientid, killswitch, warmup
+from .entry_intents import HINTS, ON_BOOK, SendUnknown
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .setups import resolve
@@ -44,7 +47,7 @@ class EntryPlacement:
         regime = await self._regime()
         gid = uuid.uuid4().hex[:8]
         expires_ms = int((time.time() + max(ttl_hours * 3600, MIN_TTL_S)) * 1000)
-        placed, rejected = [], []
+        placed, rejected, unknown, warnings = [], [], [], []
         for p in proposals:
             try:
                 if p.get("tranches"):
@@ -56,21 +59,34 @@ class EntryPlacement:
                     try:
                         for leg in legs:
                             got.append(await self._place_one(gid, leg, regime, expires_ms, prearm_stop))
-                    except Exception:
+                        pinned = tranches.finalize(self.j.db, got)
+                    except Exception as e:
                         await self._rollback(got)   # a split entry is one unit (0G 2026-10-01)
+                        if isinstance(e, SendUnknown):   # that leg is abandoned: cancelled if it turns up
+                            raise ValueError(f"split entry rolled back: a leg's {e}") from e
                         raise
-                    pinned = tranches.finalize(self.j.db, got)
                     placed += [{**x, **pinned} for x in got]
                 else:
                     placed.append(await self._place_one(gid, p, regime, expires_ms, prearm_stop))
+            except SendUnknown as e:   # may rest on the book: resolved by its client id, never by resending
+                unknown.append({"symbol": p.get("symbol"), "entry_id": e.entry_id, "error": str(e),
+                                "hint": HINTS["unknown"]})
             except Exception as e:  # noqa: BLE001 - one bad proposal must not block the others
                 rejected.append({"symbol": p.get("symbol"), "error": f"{type(e).__name__}: {e}"})
-        if placed:
-            self.j.log_decision("propose_entries", f"group {gid}: {len(placed)} limit shorts", None,
-                                snapshot={"group": gid, "placed": placed, "rejected": rejected, "regime": regime})
-            await tr.alert("action_propose", f"group {gid}: " + ", ".join(
-                f"{x['symbol'].split('/')[0]} sell {x['limit_price']} stop {x['stop_price']}" for x in placed), None, False)
-        return {"ok": bool(placed), "group_id": gid, "placed": placed, "rejected": rejected}
+        if placed or unknown:   # bookkeeping: a failure here must not hide what rests on the book
+            try:
+                self.j.log_decision("propose_entries", f"group {gid}: {len(placed)} limit shorts", None, snapshot={
+                    "group": gid, "placed": placed, "rejected": rejected, "unknown": unknown, "regime": regime})
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"decision not journalled: {type(e).__name__}: {e}")
+            try:
+                await tr.alert("action_propose", f"group {gid}: " + ", ".join(
+                    [f"{x['symbol'].split('/')[0]} sell {x['limit_price']} stop {x['stop_price']}" for x in placed]
+                    + [f"{x['symbol']} entry #{x['entry_id']} send status UNKNOWN" for x in unknown]), None, False)
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"alert not sent: {type(e).__name__}: {e}")
+        return {"ok": bool(placed), "group_id": gid, "placed": placed, "rejected": rejected, "unknown": unknown,
+                **({"warnings": warnings} if warnings else {})}
 
     async def _place_one(self, gid: str, p: dict, regime: str, expires_ms: int, prearm: bool) -> dict[str, Any]:
         tr = self.tr
@@ -135,12 +151,14 @@ class EntryPlacement:
         px = float(tr.t.price_to_precision(sym, limit))
         from .risk import ShortRequest, check_open_short
         acct = await tr.account_state()
-        # other groups' pending orders count as exposure: one OCO order per group can fill, but a split entry's
-        # legs can ALL fill, so a group's exposure = its biggest single order or its biggest whole tranche
+        # other groups' resting (or possibly resting: placing/unknown) orders count as exposure: one OCO order per
+        # group can fill, but a split entry's legs can ALL fill, so a group's exposure = its biggest single order or
+        # its biggest whole tranche. Each external order (not ours) can fill on its own: one group each.
         by_group: dict[str, list[dict]] = {}
-        for r in self.pending():
-            if r["group_id"] != gid:
-                by_group.setdefault(r["group_id"], []).append(r)
+        for r in self._rows(ON_BOOK):
+            g = f"external{r['id']}" if r["status"] == "external" else r["group_id"]
+            if g != gid:
+                by_group.setdefault(g, []).append(r)
         worst: dict[str, tuple[str, float]] = {}
         for g, rows in by_group.items():
             units: dict[str, float] = {}
@@ -153,48 +171,76 @@ class EntryPlacement:
                           acct.total_open_notional + sum(n for _, n in worst.values()), acct.day_pnl)
         prod = await tr.ex.public.fetch_ticker(sym)
         check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0)), acct, lim)
-        if blocked := await killswitch.gate(tr, "limit entry"):   # a trip while this group was being placed
-            raise ValueError(blocked["error"])
-        order = await tr.t.create_order(sym, "limit", "sell", amount, px,
-                                        {"timeInForce": "GTD", "goodTillDate": expires_ms})
-        prearm_id = None
-        if prearm:
-            try:
-                o = await tr.t.create_order(sym, "STOP_MARKET", "buy", amount, None, {
-                    "triggerPrice": float(tr.t.price_to_precision(sym, stop)), "reduceOnly": True,
-                    "workingType": "MARK_PRICE"})
-                prearm_id = o.get("id")
-            except Exception:  # noqa: BLE001 - the 5 s fill poll still protects
-                prearm_id = None
-        c1h = await tr.ex.public.fetch_ohlcv(sym, "1h", limit=30)
-        from .indicators import atr
+        c1h = await tr.ex.public.fetch_ohlcv(sym, "1h", limit=30)   # every read comes BEFORE the intent: a failure
+        from .indicators import atr                                   # up to here leaves nothing on the exchange
         a = atr(c1h) or 0.0
-        cur = self.j.db.execute(
+        if blocked := await killswitch.gate(tr, "limit entry"):   # a trip while this group was being placed: no row
+            raise ValueError(blocked["error"])
+        # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
+        cid = clientid.new("entry", gid)
+        eid = self.j._insert(
             "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price, amount,"
             " leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price, ref_ms,"
-            " order_id, prearm_id, conviction, regime_cell, tranche, leg)"
+            " conviction, regime_cell, tranche, leg, client_id, abandon)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (gid, sym, "pending", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
+            (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
              json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
-             p.get("cancel_below"), a, last, int(time.time() * 1000), order.get("id"), prearm_id,
-             budget.get("conviction"), budget.get("cell"), p.get("tranche"), p.get("leg")))
-        self.j.db.commit()
+             p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"), budget.get("cell"),
+             p.get("tranche"), p.get("leg"), cid, 1 if p.get("tranche") else 0))   # a split leg is withdrawn if unsure
+        try:
+            order = await tr.t.create_order(sym, "limit", "sell", amount, px,
+                                            {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
+        except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
+            unsure = clientid.send_unknown(e)
+            self._settle(eid, "placing", status="unknown" if unsure else "rejected", reason=f"{type(e).__name__}: {e}")
+            if unsure:
+                raise SendUnknown(eid, e) from e
+            raise
+        if not self._settle(eid, "placing", status="pending", order_id=order.get("id")):
+            raise RuntimeError(f"entry #{eid} was resolved by the reconciler while its order was in flight")
+        prearm_id = await self._prearm(eid, sym, amount, stop) if prearm else None
         odds = {}
         try:
             from .probability import ProbabilityEngine
             tgts = [t.price for t in plan.targets] or [px * (1 - 2 * dist)]
             pe = await ProbabilityEngine(tr.ex, self.j).short_bracket(
                 sym, stop, tgts[:1], float(plan.time_stop_hours or 24), entry=px,
-                fill_hours=(expires_ms / 1000 - time.time()) / 3600, log_source="entry", ref_id=cur.lastrowid,
+                fill_hours=(expires_ms / 1000 - time.time()) / 3600, log_source="entry", ref_id=eid,
                 context={"setup": p["setup"], "level_type": p.get("level_type"), "regime": regime})
             if pe.get("ok"):
                 odds = {"p_fill_upper_bound": pe.get("fill_prob"), "p_target_first_if_filled": pe["targets"][0]["p_target"],
                         "odds_label": pe["label"]}
         except Exception:  # noqa: BLE001 - odds are informational; never block placement
             pass
-        return {**odds, "entry_id": cur.lastrowid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
+        return {**odds, "entry_id": eid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
                 "risk_usdt": round(amount * (stop - px), 2), "leverage": lev, "prearmed_stop": bool(prearm_id),
+                "client_id": cid,
                 "expires": datetime.fromtimestamp(expires_ms / 1000, timezone.utc).isoformat(timespec="minutes")}
+
+    async def _prearm(self, eid: int, sym: str, amount: float, stop: float) -> str | None:
+        """Reduce-only stop resting from the first fill instant, journalled like its limit: client id first, then the
+        send. A lost answer leaves it unresolved (prearm_cid set, prearm_id NULL) for entry_intents. Never raises: the
+        limit already rests and is tracked, and the 5 s fill poll still protects."""
+        t, cid = self.tr.t, clientid.new("prearm", eid)
+        try:
+            self._update(eid, prearm_cid=cid)
+        except sqlite3.Error:
+            return None   # no intent journalled: don't send
+        o, refused = None, False
+        try:
+            o = await t.create_order(sym, "STOP_MARKET", "buy", amount, None, {
+                "triggerPrice": float(t.price_to_precision(sym, stop)), "reduceOnly": True,
+                "workingType": "MARK_PRICE", "clientOrderId": cid})
+        except Exception as e:  # noqa: BLE001
+            refused = not clientid.send_unknown(e)
+        try:
+            if o is not None:
+                self._update(eid, prearm_id=o.get("id"))
+            elif refused:
+                self._update(eid, prearm_cid=None)   # nothing rests
+        except sqlite3.Error:
+            pass   # the row keeps prearm_cid: entry_intents finds the stop by it
+        return (o or {}).get("id")
 
     async def _rollback(self, got: list[dict]) -> None:
         """Undo a split entry's placed legs after a later leg failed. Cancel each limit FIRST: only a leg cancelled

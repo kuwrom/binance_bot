@@ -27,7 +27,8 @@ from .notify import Notifier
 
 log = logging.getLogger("shortbot.guardian")
 # job: (every_s, timeout_s). Jobs of one lane run one after another; the lanes run side by side.
-PROTECTIVE = {"entries": (5, 240), "positions": (60, 240)}   # streaks escalate; the heartbeat comes from here
+# streaks escalate; the heartbeat comes from here
+PROTECTIVE = {"entries": (5, 240), "positions": (60, 240), "entry_reconcile": (60, 240)}
 WATCH = {"watch": (60, 240)}   # streaks escalate too (silent squeeze checks matter on a short book); no heartbeat
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
            "housekeeping": (86400, 240)}
@@ -62,7 +63,8 @@ class Guardian(PositionChecks, MarketJobs):
         self.lanes: dict[str, Lane] = {}
 
     def _lanes(self) -> dict[str, Lane]:
-        fns = {"entries": self.check_entries, "positions": self.check_positions, "watch": self.watch_positions,
+        fns = {"entries": self.check_entries, "positions": self.check_positions,
+               "entry_reconcile": self.reconcile_entries, "watch": self.watch_positions,
                "governor": self.check_governor, "announcements": self.check_announcements,
                "social": self.record_social, "refresh": self.research_refresh, "housekeeping": self.housekeeping,
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,

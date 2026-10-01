@@ -148,7 +148,7 @@ async def _run(args: argparse.Namespace) -> object:
                 return await EntryDesk(app.trader).propose_group(json.loads(args.proposals), args.ttl_hours,
                                                                  not args.no_prearm, args.warmup_override)
             case "entries":
-                return EntryDesk(app.trader).pending()
+                return EntryDesk(app.trader).pending(all_orders=True)
             case "cancel-group":
                 return await EntryDesk(app.trader).cancel_group(args.group_id, args.reason)
             case "amend":
@@ -209,6 +209,15 @@ async def brief(app) -> str:
                      f"opened {p['opened_at']}")
     if not live and app.ex.trade:
         lines.append("- no open positions")
+    try:   # resting entries, sends of unknown outcome and orders the desk didn't place
+        orders = EntryDesk(app.trader).pending(all_orders=True)
+    except Exception as e:  # noqa: BLE001
+        orders = []
+        lines.append(f"- ⚠️ could not load entry orders: {type(e).__name__}: {e}")
+    if orders:
+        lines.append(f"### entry orders on the book ({len(orders)})")
+        lines += [f"- #{e['id']} {e['symbol']} {e['status']}: {e['amount']} @ {e['limit_price']}, stop "
+                  f"{e['stop_price'] or 'NONE'}" + (f" ⚠️ {e['hint']}" if e.get("hint") else "") for e in orders]
     alerts = j.alerts(15, since=last)
     if alerts:
         lines.append(f"### alerts since last session ({len(alerts)})")

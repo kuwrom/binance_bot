@@ -201,15 +201,18 @@ async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.
     """Limit-entry GROUP (3-5 shorts at better levels). Each: {symbol, limit_price (ABOVE market), stop_price, setup,
     thesis, plan?, leverage?, level_type (round_number|prior_high|sweep|vwap_band|ema_retest), level_reason,
     cancel_below?, conviction? (C|B|A|M, default B)}. GTD expiry on the exchange; pre-armed reduce-only stop; the guardian protects fills within 5 s
-    and cancels the siblings of the first fill. Sized from the current risk budget."""
+    and cancels the siblings of the first fill. Sized from the current risk budget. A send whose outcome is unknown
+    (timeout, 5xx) is listed under `unknown`: it may rest on the book, so don't re-propose it."""
     return await EntryDesk(get_app().trader).propose_group(proposals, ttl_hours, True, warmup_override)
 
 
 @tool
 async def pending_entries() -> list[dict[str, Any]]:
     """Resting limit entries (group, level, limit, stop, expiry). May also list rows awaiting the guardian: one that
-    filled before its cancel landed (adopted as a trade within 5 s) or one whose cancel failed (retried each poll)."""
-    return EntryDesk(get_app().trader).pending()
+    filled before its cancel landed (adopted as a trade within 5 s) or one whose cancel failed (retried each poll).
+    Also every other order that is or may be on the book, each with a hint: sends whose outcome isn't known yet
+    (placing/unknown: never re-propose them) and orders the desk didn't place (external: no plan, no stop)."""
+    return EntryDesk(get_app().trader).pending(all_orders=True)
 
 
 @tool

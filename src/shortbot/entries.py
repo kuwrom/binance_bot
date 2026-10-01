@@ -11,6 +11,8 @@ Mechanics (Binance USDⓈ-M, verified in docs/ccxt 2026-09):
 - a cancel pulls the limit first and believes only what filled (`withdraw`): an order that filled before its cancel
   landed keeps its stop and is adopted by the poll; a failed cancel is retried, never relabelled
 - risk: every pending order is sized from the CURRENT risk budget; a group counts once (only one may fill)
+- journal-first: the row and its client order id are written BEFORE the order is sent; an ambiguous send is
+  resolved by that id, never by resending (entry_intents.py)
 Every entry row is research data: fill rate, time-to-fill, level type, and unfilled counterfactuals.
 
 This module: entry rows and their lifecycle (fill, expiry, cancel, amend). Placement is mixed in from
@@ -20,6 +22,7 @@ entries_place.py (propose_group).
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +31,7 @@ import ccxt.async_support as ccxt
 
 from . import killswitch
 from .entries_place import MIN_TTL_S, EntryPlacement, _now_iso  # noqa: F401 (MIN_TTL_S re-export)
+from .entry_intents import HINTS, ON_BOOK, located
 from .market.market_map import cached
 from .sessions import session_bucket
 
@@ -49,11 +53,14 @@ async def withdraw(t, e: dict[str, Any]) -> str:
     """Cancel a pending entry's limit FIRST, then decide from what actually filled:
     - "unfilled": the limit is dead with nothing filled, so its pre-armed stop is cancelled too
     - "filled": it (partly) filled before the cancel landed: the stop and the pending row stay, the poll adopts it
-    - "unknown": the cancel failed (network, clock, no order id): nothing changes, a later pass retries
+    - "unknown": the cancel failed (network, clock, a send not found yet): nothing changes, a later pass retries
     Binance answers -2011 (ccxt OrderNotFound) for ANY order no longer in the book, filled or dead, so fetch_order
-    decides (MOVR 2026-10-01: a swallowed -2011 stripped a filled order's stop and left a naked short)."""
+    decides (MOVR 2026-10-01: a swallowed -2011 stripped a filled order's stop and left a naked short).
+    A row with no order id (a send of unknown outcome) is first looked up by its client id (entry_intents.located)."""
     if not e.get("order_id"):
-        return "unknown"
+        e = await located(t, e)
+        if isinstance(e, str):
+            return e
     try:
         o = await t.cancel_order(e["order_id"], e["symbol"]) or {}
     except ccxt.OrderNotFound:
@@ -81,11 +88,19 @@ class EntryDesk(EntryPlacement):
         self.j = trader.j
         self.j.db.executescript(SCHEMA)
         have = {r[1] for r in self.j.db.execute("PRAGMA table_info(entries)")}
-        for col, typ in (("conviction", "TEXT"), ("regime_cell", "TEXT"), ("tranche", "TEXT"), ("leg", "INTEGER")):
+        for col, typ in (("conviction", "TEXT"), ("regime_cell", "TEXT"), ("tranche", "TEXT"), ("leg", "INTEGER"),
+                         ("client_id", "TEXT"), ("prearm_cid", "TEXT"), ("abandon", "INTEGER DEFAULT 0")):
             if col not in have:
-                self.j.db.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
+                try:
+                    self.j.db.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
+                except sqlite3.OperationalError as e:   # the guardian and the MCP server may migrate at once
+                    if "duplicate column" not in str(e):
+                        raise
+        self.j.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS entries_client_id ON entries(client_id)")
         self._regime_fn = regime_fn
         self._cancel_fails: dict[int, int] = {}   # entry id -> sibling-retry cancels failed in a row (guardian memory)
+        self._swept_at = 0.0               # entry_intents: last all-symbol open-orders sweep
+        self._flagged: set[tuple] = set()  # entry_intents: alerted once (unmatched pre-arms, late orders)
 
     async def _regime(self) -> str:
         if self._regime_fn:
@@ -104,10 +119,23 @@ class EntryDesk(EntryPlacement):
         self.j.db.execute(f"UPDATE entries SET {', '.join(k + '=?' for k in f)} WHERE id=?", (*f.values(), eid))
         self.j.db.commit()
 
-    def pending(self, group_id: str | None = None) -> list[dict[str, Any]]:
-        if group_id:
-            return self._rows("status='pending' AND group_id=?", (group_id,))
-        return self._rows("status='pending'")
+    def _settle(self, eid: int, frm: str, **f: Any) -> bool:
+        """Compare-and-set: applies only while the row is still `frm`. One statement, so the MCP server and the
+        guardian can't overwrite each other's resolution of the same intent. Returns whether it applied."""
+        cur = self.j.db.execute(f"UPDATE entries SET {', '.join(k + '=?' for k in f)} WHERE id=? AND status=?",
+                                (*f.values(), eid, frm))
+        self.j.db.commit()
+        return cur.rowcount == 1
+
+    def pending(self, group_id: str | None = None, all_orders: bool = False) -> list[dict[str, Any]]:
+        """Resting entries. all_orders=True (the analyst's view, the brief) adds every order that is or may be on the
+        book: sends of unknown outcome (placing/unknown) and orders the desk didn't place (external), with a hint."""
+        where = ON_BOOK if all_orders else "status='pending'"
+        rows = self._rows(where + " AND group_id=?", (group_id,)) if group_id else self._rows(where)
+        for r in rows:
+            if r["status"] in HINTS:
+                r["hint"] = HINTS[r["status"]]
+        return rows
 
     # ------------------------------------------------------------ cancel / amend
     async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:

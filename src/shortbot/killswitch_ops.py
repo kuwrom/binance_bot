@@ -17,15 +17,16 @@ CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who 
 async def cancel_resting(desk, reason: str) -> dict[str, list[int]]:
     """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED). Only an
     "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
-    "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position."""
+    "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position.
+    The desk's own rows only, incl. sends of unknown outcome (placing/unknown: withdraw finds them by client id);
+    never an 'external' order, which may be the owner's (the guardian alerts those instead)."""
     out: dict[str, list[int]] = {"cancelled": [], "left_for_fill_poll": []}
-    rows = desk.pending()
+    rows = desk._rows("status IN ('pending','placing','unknown')")
     if not rows:
         return out
     t = desk.tr.t
-    for e in rows:
-        if await withdraw(t, e) == "unfilled":
-            desk._update(e["id"], status="cancelled", reason=reason)
+    for e in rows:   # compare-and-set: a resolution the reconciler or the placing call made meanwhile wins
+        if await withdraw(t, e) == "unfilled" and desk._settle(e["id"], e["status"], status="cancelled", reason=reason):
             out["cancelled"].append(e["id"])
         else:
             out["left_for_fill_poll"].append(e["id"])

@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from . import reconcile
 from .book import book_guard, diversity_mult, measured_corr, n_eff, pending_book, slot_cap
 from .config import RiskLimits
+from .entry_intents import external_orders
 from .governor import REGIME_MULT, GovInputs, govern
 from .signals.core import MAJORS
 from .tilts import cell_mult, conviction_mult, regime_cell
@@ -181,7 +182,8 @@ def quarter_start(now: datetime) -> str:
 async def gather_inputs(trader, regime: str, positions: list[dict] | None = None,
                         setup: str | None = None, symbol: str | None = None) -> BudgetInputs:
     """Live inputs: equity + tracked peak, BTC vol + regime cell (cached 1h), open risk per position at its
-    exchange stop, governor state (day/week P&L, loss streak, give-back) and this setup's track record."""
+    exchange stop (and per external resting order at the max stop distance), governor state (day/week P&L, loss
+    streak, give-back) and this setup's track record."""
     global _vol_cache
     now = datetime.now(timezone.utc)
     pos = positions if positions is not None else await trader.positions()
@@ -204,6 +206,9 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
         stop, mark, qty = p.get("exchange_stop"), p.get("mark") or 0, p.get("contracts") or 0
         worst = stop if stop else mark * (1 + trader.ex.limits.max_stop_distance_pct / 100)
         risks[p["symbol"]] = max(0.0, (worst - mark) * qty)
+    for e in external_orders(trader.j):   # resting orders the desk didn't place: no known stop, the same worst case
+        risks[e["symbol"]] = risks.get(e["symbol"], 0.0) + (
+            e["amount"] * e["limit_price"] * trader.ex.limits.max_stop_distance_pct / 100)
     try:
         wk = reconcile.summarize_income(await reconcile.income_since(trader.t, week_start_ms(now)))["net"]
     except Exception:  # noqa: BLE001 - fall back to today only; the daily cap still binds

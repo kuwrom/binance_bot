@@ -1,6 +1,7 @@
-"""Guardian position jobs. Protective lane: fills (5 s) and the stop/plan pass (60 s), which touch only the trade
-client and the journal. Watch lane: alert-only checks on open shorts (squeeze, funding, news) that read public data
-and third-party feeds, so they never delay a stop check. Alert thresholds live here."""
+"""Guardian position jobs. Protective lane: fills (5 s), the stop/plan pass (60 s) and entry sends of unknown outcome
+(60 s), which touch only the trade client and the journal. Watch lane: alert-only checks on open shorts (squeeze,
+funding, news) that read public data and third-party feeds, so they never delay a stop check. Alert thresholds live
+here."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from datetime import datetime
 
 from . import indicators as ind
 from . import killswitch as ks
-from . import news, reconcile
+from . import entry_intents, news, reconcile
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -114,10 +115,11 @@ class PositionChecks:
 
     async def _untracked_trip(self, p: dict) -> None:
         """A position the journal doesn't know is a reconciliation mismatch: trip REDUCING once it has stayed untracked
-        for UNTRACKED_GRACE_S with none of our limits resting on the symbol (a fill the 5 s poll is about to journal)."""
+        for UNTRACKED_GRACE_S with nothing explaining it on the symbol: a limit of ours that is (or may be) on the book,
+        whose fill the poll or the reconciler is about to journal, or an external order that filled (entry_intents)."""
         sym = p["symbol"]
         try:
-            if p["journal_status"] != "NOT IN JOURNAL" or any(e["symbol"] == sym for e in self.entries.pending()):
+            if p["journal_status"] != "NOT IN JOURNAL" or sym in entry_intents.explained_symbols(self.entries):
                 self.untracked_since.pop(sym, None)
                 return
             age = time.time() - self.untracked_since.setdefault(sym, time.time())
@@ -194,10 +196,12 @@ class PositionChecks:
     # ------------------------------------------------------------ limit entries (protective, 5 s)
     async def check_entries(self) -> None:
         state = await self._kill_watch()
-        if not self.ex.trade or not self.entries.pending():
+        if not self.ex.trade:
             return
         if state == HALTED:   # every pass: catches entries a session placed before it saw the trip
             await self._halt_sweep()
+        if not self.entries.pending():
+            return
         for ev in await self.entries.poll():
             if ev["event"] in ("cancelled", "expired"):
                 await self.n.send(f"entry_{ev['event']}", f"entry #{ev['entry_id']}: {ev.get('why', '')}",
@@ -239,10 +243,19 @@ class PositionChecks:
                 await send_safe(self.n, "kill_switch_sweep", f"HALTED: withdrew resting entries {r['cancelled']}"
                                 + (f"; left for the fill poll {r['left_for_fill_poll']}" if r["left_for_fill_poll"]
                                    else ""), cooldown_s=0)
+            for x in self.entries._rows("status='external'"):   # not the desk's (maybe the owner's): never cancelled
+                await send_safe(self.n, f"external_while_halted:{x['order_id']}", f"external order {x['order_id']} on "
+                                f"{x['symbol']} ({x['amount']} @ {x['limit_price']}) still resting while HALTED; "
+                                "cancel it on Binance if it must not fill", x["symbol"], urgent=True, cooldown_s=3600)
         except Exception as e:  # noqa: BLE001 (incl. TimeoutError) - the fill poll below must still run
             log.exception("HALTED sweep failed")
             await send_safe(self.n, "guardian_error:kill_switch", f"HALTED sweep: {type(e).__name__}: {e}",
                             urgent=True, cooldown_s=1800)
+
+    async def reconcile_entries(self) -> None:
+        """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts)."""
+        if self.ex.trade:
+            await entry_intents.reconcile(self.entries)
 
     # ------------------------------------------------------------ watch (alert-only, 60 s, own lane)
     async def watch_positions(self) -> None:

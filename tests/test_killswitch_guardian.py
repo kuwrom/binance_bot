@@ -4,8 +4,11 @@ untracked), the stale-heartbeat auto-clear, the loosening tripwire, and hooks th
 import json
 import time
 
+import pytest
+
 from shortbot import killswitch as ks
 from shortbot.entries import EntryDesk
+from shortbot.journal import now_iso
 from shortbot.guardian_positions import UNTRACKED_GRACE_S
 from shortbot.killswitch import ACTIVE, HALTED, REDUCING, STALE
 from tests.fakes import SYM, FakeCcxt
@@ -72,16 +75,19 @@ async def test_daily_loss_breach_trips_reducing_and_records_the_limit_used():
     assert st["state"] == REDUCING and st["cause"] == "daily_loss" and ".env baseline" in st["reason"]
 
 
-async def test_untracked_position_trips_after_the_grace_unless_one_of_our_limits_rests(monkeypatch):
+@pytest.mark.parametrize("explained_by", ["pending", "placing", "unknown", "external", "external_filled"])
+async def test_untracked_position_trips_after_the_grace_unless_one_of_our_limits_rests(explained_by):
     g, fake = guardian()
     fake.position, fake.entry, fake.stops["s1"] = 50, 1.0, 1.1   # opened in the Binance app, stop set there
     await g.check_positions()
     assert ks.read(g.j)["state"] == ACTIVE and SYM in g.untracked_since
     g.untracked_since[SYM] -= UNTRACKED_GRACE_S
-    monkeypatch.setattr(g.entries, "pending", lambda group_id=None: [{"symbol": SYM}])   # a fill in flight
+    eid = g.j._insert("INSERT INTO entries (group_id, symbol, status, created_at, expires_ms) VALUES ('g', ?, ?, ?, 0)",
+                      (SYM, explained_by, now_iso()))   # a fill the poll / reconciler is about to journal
     await g.check_positions()
     assert ks.read(g.j)["state"] == ACTIVE and SYM not in g.untracked_since
-    monkeypatch.undo()
+    g.j.db.execute("UPDATE entries SET status='cancelled' WHERE id=?", (eid,))
+    g.j.db.commit()
     await g.check_positions()
     g.untracked_since[SYM] -= UNTRACKED_GRACE_S
     await g.check_positions()
