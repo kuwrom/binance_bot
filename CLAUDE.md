@@ -1,6 +1,6 @@
 # shortbot: AI-assisted short-only Binance futures research desk
 
-- Trading: use the `trading-session` skill. Reviewing what we learned or changing rules: `research-review`. Extending the code: `docs/RESEARCH.md`.
+- Trading: use the `trading-session` skill. Reviewing what we learned or changing rules: `research-review`. Extending the code: `docs/RESEARCH.md`. Strategy ideas (incl. long/neutral): `docs/strategies/`.
 - Pipeline: `market/` DataHub (data) → `signals/` plug-ins → `tape.py` classifier → setups/plans → trading/entries → guardian. New logic goes into that layer, not into the scanner.
 - The exchange is touched only through the `shortbot` MCP tools. Ad-hoc analysis goes through `shortbot.lab` (read-only), via Bash.
 

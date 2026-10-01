@@ -1,6 +1,6 @@
 # Short Playbook (research-backed, 2026-09)
 
-Operational playbooks per setup live in `.claude/skills/` (pump-fade, listing-fade, delisting-short, unlock-short). This file is the research background with sources. See `docs/RESEARCH.md` for how the rules evolve.
+Operational playbooks per setup live in `.claude/skills/` (pump-fade, listing-fade, delisting-short, unlock-short). This file is the research background with sources. See `docs/RESEARCH.md` for how the rules evolve. Every other strategy we know of (long, short, neutral; not yet traded) is in the library, `docs/strategies/`, with industry benchmarks in `docs/INDUSTRY.md`.
 
 Tags: **[W]** widely used by practitioners, **[S]** single source, **[Mine]** our own synthesis. These are starting rules; the journal decides what we keep.
 

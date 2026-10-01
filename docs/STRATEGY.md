@@ -1,5 +1,7 @@
 # Where the edge is, and how to combine signals (research 2026-09-28)
 
+> **Update 2026-10-01:** [INDUSTRY.md](INDUSTRY.md) §6 corrects four points below with new evidence: carry moved (dispersion, TradFi perps, and a crash-gate signal for us), specialise by mechanism, not direction, venue mechanics drive tail losses, and LLM judgement is not the edge. The full strategy catalogue is in [strategies/](strategies/README.md).
+
 ## How independent (non-market-maker) quants make money
 Profitable independents tie every strategy to a **forced or uneconomic flow**, specialise, keep costs low, size small and fixed, and kill strategies when they decay. Most retail traders lose: in Taiwan only about 5% of day traders are profitable in a given year and under 1% persistently, and costs roughly triple the losses (Barber-Lee-Liu-Odean, peer-reviewed).
 

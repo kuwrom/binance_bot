@@ -28,6 +28,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 | New social/attention source | Fetcher in `market/social.py` + snapshot in the guardian job (never inline in scans) | `research_report.by_feature_tertile` |
 | Unlock / scheduled event | `shortbot unlock-add` with a source; the `unlock` signal and setup pick it up | `calibration` by setup=unlock |
 | Score weights / vetoes | Edit the signal's points/vetoes in `signals/*.py`, with tests | `research_report.by_score`, `by_veto_reason` |
+| New strategy idea (any direction) | A card in `docs/strategies/*.md`; `shortbot registry seed` registers it as a `lib.<id>` draft | moves to shadow once it has a detector and episodes |
 | New setup | Trade as `exp_<name>`, then register it in `setups.py` and add `.claude/skills/<name>/SKILL.md` | `journal.stats.by_setup`, `research_report.by_setup` |
 | Management rule for one trade | `update_plan` | MAE/MFE and R on that trade |
 | Default management of a setup | `Setup.default_plan` in `setups.py` | `by_setup` avg R, MAE/MFE |

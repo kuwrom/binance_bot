@@ -1,0 +1,254 @@
+# New short setups, regime overlays and execution aids (library, research 2026-10-01)
+
+Format and status rules: [README.md](README.md). These extend the current playbook ([../PLAYBOOK.md](../PLAYBOOK.md)).
+Most are features or vetoes for existing setups rather than new setups.
+
+## New short setups
+
+### supply_overhang_short — Short supply created by market-maker deals, discount buyers and unlocks
+- direction: short
+- family: event/supply
+- mechanism: project-to-MM token loans (~1% of supply for ~12 months, call strikes up to +100%) and 5-15% discount OTC "investments" (DWF: $100-150k daily tranches over 1-3 months) create hedged, informed sellers; cliff unlocks add VC/team supply; buyers are retail
+- rules: same as listing_fade / unlock_short, ranked by supply: short 2-4 weeks before large cliff unlocks (> 2% of supply) or 1-14 days after a perp listing once initial volatility settles; stop above the listing/swing high + 1 ATR; time stop at the unlock date or 30 days; low-float (< 30% circulating) tokens with Binance perps. Treat "MM investment" announcements as supply events
+- data needed: exchangeInfo onboardDate, klines, funding, OI: Binance public; unlock calendars and MM-deal disclosures manual
+- evidence: deal mechanics (https://www.theblock.co/post/267354/how-dwf-labs-makes-deals-and-its-tendency-to-talk-about-price, https://www.coindesk.com/business/2023/04/14/market-maker-dwf-labs-more-than-200m-in-deals-blur-what-investing-means); Gotbit wash-trading conviction 2025 (https://www.justice.gov/usao-ma/pr/cryptocurrency-financial-services-firm-gotbit-and-founder-sentenced-market-manipulation); 2025 listings lost ~70% by Mar-2026 (see airdrop_hodler_supply_short)
+- grade: Practitioner-data
+- risks: MMs also pump low floats (squeezes); monitoring tags flip sentiment; crowded shorts mean negative funding; unlocks get priced early
+- fit: High — this is the institutional mechanism behind our listing_fade and unlock setups
+
+### airdrop_hodler_supply_short — HODLer-airdrop, Launchpool and Alpha-graduate supply short
+- direction: short
+- family: event/supply
+- mechanism: airdrop and launchpool recipients (BNB holders, farmers, Alpha users) hold free tokens and sell into the listing and the following weeks; low float and unlocks add overhang
+- rules: *(proposed)* tokens listed via Binance HODLer Airdrop / Launchpool / Alpha -> Futures in the last 30d; wait >= 24-48h (listing_fade rules); short the first lower high below the day-1 VWAP; time stop 21d; skip if OI is tiny or funding < -0.1%
+- data needed: latest_announcements, klines, OI, funding: Binance public
+- evidence: 2025 listings held from day-1 close to 11-Mar-2026: Binance n=92 avg -71.7%; Upbit n=59 -69.5% (median -80.9%, only 2 profitable); Bithumb n=144 -69.1%; H2-2025 cohorts decayed less (Bithumb -59.4% vs -77.3%) (https://www.odaily.news/en/post/5209720)
+- grade: Practitioner-data
+- risks: overlaps listing_fade; violent squeezes in thin floats; the effect weakened in H2-2025
+- fit: High — a source tag for the listing_fade pipeline, using data we already fetch
+
+### lowfloat_highfdv_decay_short — Low-float, high-FDV decay
+- direction: short
+- family: event/supply
+- mechanism: tokens launch with ~10-20% circulating at a very high FDV; ~$155B of unlocks are scheduled 2024-2030 against little organic demand, so they bleed for months
+- rules: *(proposed)* Binance perps listed < 180d with circulating/total < 25% and FDV > $1B; short the first lower high after a 30d high; small size; hold 2-8 weeks; cover before major positive catalysts; stack with unlock calendars
+- data needed: circulating/total supply (CoinGecko/CMC, not Binance), klines
+- evidence: Binance Research, "Low Float & High FDV" (May-2024): ~US$155B unlocking 2024-2030 (https://www.binance.com/en/research/analysis/low-float-and-high-fdv-how-did-we-get-here); 2025 listing cohort -70% (above)
+- grade: Practitioner-data
+- risks: thin float means violent squeezes; overlaps listing_fade and unlock
+- fit: High — a float/FDV ranking feature for listing_fade and unlock candidates
+
+### upbit_warning_short — Upbit/Bithumb "investment warning" short
+- direction: short
+- family: event/supply
+- mechanism: Upbit's warning designation often precedes a KRW delisting; Korean retail, often the main bid, exits while the Binance perp keeps trading
+- rules: *(proposed)* on the warning notice, short the Binance perp on the first 1h lower high; hold through the review (~1-4 weeks); cover on warning removal; exit before the final delisting day if Binance also delists
+- data needed: Upbit notice feed (public, external), Binance klines/OI
+- evidence: none quantified; the second-venue mirror of our delisting short
+- grade: Anecdote
+- risks: warning lifted means a sharp squeeze; low-liquidity perps
+- fit: Med — extends delisting with a second-venue trigger; needs an Upbit notice poller
+
+### hack_exploit_short — Short a protocol token after an exploit (post-announcement drift)
+- direction: short
+- family: event/supply
+- mechanism: the hack is visible on-chain before disclosure; price keeps falling for hours after it becomes common knowledge as slower holders exit and TVL drains
+- rules: on a credible report (protocol account, PeckShield, CertiK) of a loss >= 5% of market cap or TVL, short within the first 1-4h while price is within 15% of pre-news; stop above the pre-news high; hold ~12-15h, exit by 24h (or target 20-30%, time stop 5d); skip on a full-reimbursement announcement
+- data needed: news (coin_news), klines: Binance public
+- evidence: 49 DeFi hacks Jun-2016 to Jan-2025: 24h CAR ~-27%; -17.2% by hour 3 and -19.1% by hour 6 after the on-chain hack; 36% of the decline precedes the announcement; ~-13 pp drift after disclosure (NY Fed SR 1153, https://doi.org/10.59576/sr.1153)
+- grade: Working-paper
+- risks: n=49; many hacked tokens have no perp or get halted; reimbursements and bounties cause violent squeezes; funding goes deeply negative
+- fit: Med — rare but large, and our news tools already see it
+
+### eth_exchange_inflow_short — ETH exchange inflows, short ETH
+- direction: short
+- family: event/supply
+- mechanism: holders move coins to exchanges to sell; the supply hits within hours
+- rules: hourly; when ETH net exchange inflow is top-decile, short the ETH perp for 1-6h
+- data needed: on-chain ETH exchange flows: NOT Binance
+- evidence: 2017-2023: ETH net inflows negatively predict ETH returns at every 1-6h horizon; BTC inflows mostly don't (https://arxiv.org/abs/2411.06327)
+- grade: Working-paper
+- risks: data latency and cost; wallet relabelling
+- fit: Med — a clean hourly short signal if a flow feed is ever added
+
+### crowded_long_unwind_short — Short crowded leverage ahead of cascades
+- direction: short
+- family: microstructure
+- mechanism: over-levered longs pay funding and sit on liquidation clusters; a shock forces sales that feed on themselves (10 Oct: 87% of $19.3bn liquidated were longs, $7bn in < 1h)
+- rules: *(proposed)* funding > 0.05%/8h for >= 3 prints AND OI +20% in 7d AND price stalls (4h lower high); enter on a break of the 4h swing low; stop above the swing high; target the prior volume node; time stop 3 days; bank 50% on the first > 2 ATR move (ADL risk)
+- data needed: funding, OI hist, long/short ratios, taker ratio: Binance public (30d history only, so log it)
+- evidence: 10-Oct structure (https://insights4vc.substack.com/p/inside-the-19b-flash-crash); BIS WP 1087 (carry_crash_regime); no trade-level stats
+- grade: Anecdote
+- risks: crowded longs stay crowded for weeks; squeezes on low float; the winning short gets ADL'd in the very cascade it predicted
+- fit: High — the core shortbot thesis; overlaps funding_hi, so register as a variant, not a new setup
+
+### forced_flow_crowding_sizing — Calendar forced flows are crowded: size them down
+- direction: both
+- family: event/supply
+- mechanism: index adds/deletes, delistings, listings and unlocks force trades on known dates; pods and MMs harvest them, so the edge is real but crowded
+- rules: keep using the delisting/listing/unlock playbooks; enter after the announcement shock fades, exit before the forced date; cap per-event risk below normal
+- data needed: exchangeInfo deliveryDate/onboardDate, announcements, unlock calendars
+- evidence: Millennium lost ~$900m on index add/delete bets in Feb-2025 (-1.3%, its worst month in 6+ years) despite best-in-class risk limits (https://www.hedgeweek.com/millennium-posts-rare-monthly-loss-amid-index-rebalancing-trades/)
+- grade: Practitioner-data
+- risks: everyone sees the same calendar; squeezes into delivery
+- fit: Med — a sizing rule for setups we already run
+
+## Regime overlays and vetoes
+
+### carry_crash_regime — High aggregate carry = crash-risk regime
+- direction: both
+- family: carry
+- mechanism: small trend-chasers bid for leveraged longs while arbitrage capital is scarce; extreme carry marks crowded, fragile longs, and crashes follow
+- rules: daily OI-weighted annualised funding/basis on BTC+ETH (and an alt aggregate); top decile (funding > 0.03%/8h for days, or quarterly basis > 20-25% ann.) -> allow larger short exposure on high-beta alts and cut longs; low or negative carry -> cut new shorts, long bias. Use for sizing and stops, not timing
+- data needed: funding, premiumIndex, delivery prices: Binance public
+- evidence: BTC/ETH futures carry averages > 10% a year and peaks near 60%; high carry predicts future crashes, more negative skew and costlier crash insurance; a $1 rise in basis predicts ~$5 lower spot to maturity; +10% carry predicts +44% (of OI) more sell-side liquidations next month (Schmeling-Schrimpf-Todorov, BIS WP 1087, https://www.bis.org/publ/work1087.htm)
+- grade: Working-paper
+- risks: carry stays high for months in bull runs (see high_funding_trend_confirm); monthly horizon; Ethena-scale capital may cap future extremes
+- fit: High — free, daily, and a regime gate for both books
+
+### high_funding_squeeze_veto — Rising coin funding: size down, don't exclude
+- direction: short
+- family: carry
+- mechanism: rising carry predicts more short-side liquidations and higher volatility before any crash
+- rules: if a coin's funding or basis is top-decile AND rising over 24-72h, halve size or require a confirmed lower high, and widen stops
+- data needed: funding, OI, klines: Binance public
+- evidence: BIS WP 1087 (above); retail crypto traders chase momentum (Kogan et al. JFE 2024, https://doi.org/10.1016/j.jfineco.2024.103897)
+- grade: Working-paper
+- risks: may veto the best crash shorts, since high carry also predicts crashes; sizing tool only
+- fit: High — a free mechanical overlay on every short
+
+### liquidation_wick_harvest — Deep resting reduce-only take-profits to catch cascade wicks
+- direction: both
+- family: microstructure
+- mechanism: in cascades liquidation engines market-sell into books MMs have emptied; resting bids far below market fill at "completely ridiculous" prices (Wintermute's Gaevoy); Hyperliquid's HLP is paid exactly this as backstop
+- rules: for every open short, ladder GTC reduce-only take-profit buys at -5% / -10% / -20% below mark; optional long version: tiny resting bids 15-30% below on high-OI alts in high funding/OI regimes, exit at a 50% wick retrace or a 4h time stop
+- data needed: OI hist, funding, depth, !forceOrder@arr: Binance public
+- evidence: HLP +$40-41.5m (~+10%) on the 10-11 Oct 2025 weekend and +$15m on 31-Jan-2026; the two events ~41% of its $136.9m lifetime profit (https://www.coingecko.com/learn/hyperliquid-hlp-vault-analysis); 10-Oct prints ATOM ~$0.001, TON -80%, WLD -70% (https://coinshares.com/us/insights/knowledge/billions-in-liquidations-what-happened/)
+- grade: Practitioner-data
+- risks: rarely fills; the venue may bust trades; outages block cancels; must not race the guardian's own exits
+- fit: High — reduce-only ladders on shorts are nearly free and monetise exactly the 10-Oct wicks; the long version needs a long book
+
+### oi_price_funding_regime — OI / price / funding divergence classifier
+- direction: both
+- family: microstructure
+- mechanism: who is adding risk. OI up + price down + funding positive = longs averaging down (long trap, short continuation); OI up + price down + funding negative = late shorts piling in (squeeze fuel, long on reclaim)
+- rules: *(proposed)* 8h windows; long trap needs >= 2 positive 8h funding prints before shorting; squeeze fuel -> long only after a reclaim of local resistance; flat funding = no trade
+- data needed: openInterestHist (30d), funding, klines: Binance public
+- evidence: framework only (https://coinunited.io/en/research/crypto/crypto-open-interest-divergence-signals-guide-2026); BTC OI +12% in a month with negative funding preceded a squeeze attempt, Feb-2026 (CoinDesk)
+- grade: Anecdote
+- risks: unvalidated; OI history only 30d via the API
+- fit: Med — inputs are in the DataHub; test as a tape.py feature, not a setup
+
+### ls_ratio_taker_contrarian — Retail long/short ratio and taker-flow contrarian filter
+- direction: both
+- family: microstructure
+- mechanism: the global account ratio counts retail heads; the top-trader position ratio tracks large accounts; retail heavily short while top traders are long and taker buys dominate tends to squeeze up (mirror for shorts)
+- rules: *(proposed)* 1h; long when globalLongShortAccountRatio < 0.8 (or 7d z < -2), topLongShortPositionRatio rising and takerlongshortRatio > 1.1 for 3 bars above the 1h VWAP; mirror as a short confirmation; exit when the ratio normalises
+- data needed: /futures/data/globalLongShortAccountRatio, topLongShortPositionRatio, takerlongshortRatio: Binance public, 30 days only
+- evidence: no published backtest; used descriptively by CoinGlass and CoinDesk
+- grade: Anecdote
+- risks: noisy and venue-specific; account ratio is not notional
+- fit: Med — free hourly data; start logging it now so it can be tested in 2-3 months
+
+### cross_exchange_premium_sentiment — Korea premium as a froth gauge
+- direction: short
+- family: stat-arb
+- mechanism: capital controls segment markets; a retail-driven local premium marks speculative excess
+- rules: premium = Upbit KRW price / (Binance USDT price x USDKRW); premium spikes on Upbit-listed alts = froth filter for shorts
+- data needed: Upbit public API + FX (free, not Binance)
+- evidence: large, recurrent cross-country spreads lasting days to weeks, driven by capital controls (Makarov-Schoar JFE 2020, https://doi.org/10.1016/j.jfineco.2019.07.001); no direct return-predictability test
+- grade: Peer-reviewed
+- risks: premiums stay high for weeks
+- fit: Med — free data, a good overlay for alt shorts
+
+## Execution aids (not strategies)
+
+### reversal_15m_flow_execution — 15-min reversal after aggressive taker flow
+- direction: both
+- family: microstructure
+- mechanism: compensated liquidity provision: bars driven by aggressive takers partly reverse next bar
+- rules: bet against the previous 15m candle, strongest after top-quintile |taker imbalance| bars; use only to place short limit entries just after an aggressive taker-buy bar instead of chasing
+- data needed: 15m klines with takerBuyBaseVolume: Binance public
+- evidence: 90% of 183 Binance pairs show significant out-of-sample reversal (vs 2.7% of US stocks) every coin-year since 2021, on USDⓈ-M perps too; gross edge ~1.3 bp/trade vs 5 bp round trip (Kitron-Wengrowicz, https://arxiv.org/abs/2608.21888)
+- grade: Working-paper
+- risks: edge below taker cost
+- fit: Med — free timing for maker entries
+
+### funding_settlement_drift — Drift around funding timestamps
+- direction: both
+- family: microstructure
+- mechanism: carry harvesters open just before 00/08/16 UTC and close just after; with large funding this creates a small predictable drift, and the post-settlement pressure reverses
+- rules: *(proposed)* for |predicted funding| > 0.05%: avoid entering on the payer side in the last 30-60 min before settlement; lab test: short T-60m to T+0 when funding > +0.1%, mirror when < -0.1%; fade the 15-60 min move into settlement when funding is extreme, exit within 1-2h
+- data needed: premiumIndex (predicted rate, nextFundingTime), 1m/1h klines: Binance public
+- evidence: settlement-tied intraday spread patterns, spreads peak ~2h after settlement (https://www.mdpi.com/2227-7072/14/5/103, snippet only); Polymarket 5-min BTC contracts show settlement flow spikes and reversals (https://arxiv.org/abs/2606.31675, different venue)
+- grade: Single-source
+- risks: tiny vs fees; hourly-funding symbols blur the timestamps
+- fit: Med — a zero-cost lab test on stored data; at least an execution-timing rule
+
+### intraday_hour_seasonality — Hour-of-day seasonality
+- direction: both
+- family: other
+- mechanism: recurring flows by time zone and session (funding times, US/Asia opens)
+- rules: signal by hour of day on majors; parameters not published
+- data needed: 1h klines: Binance public
+- evidence: Robot Wealth research strategy, no public stats (https://robotwealth.com/index-of-strategies/)
+- grade: Practitioner-data
+- risks: small vs taker fees; regime-dependent
+- fit: Low — an entry-timing tweak only
+
+### orderbook_imbalance_l2 — L2 depth state and order-flow imbalance
+- direction: both
+- family: microstructure
+- mechanism: thin, one-sided books predict short-horizon moves; order flow matters only when liquidity is stressed
+- rules: classify the top-20 L2 state (calm/mixed/stressed) before events; minutes horizon
+- data needed: depth snapshots/diff-depth websocket: Binance public, live only
+- evidence: Binance BTC/ETH 2023-2026, rolling monthly OOS: pre-event L2 state is the first-order predictor; flow helps ETH under stress; BTC "no regime that clears at both horizons"; no PnL (https://arxiv.org/abs/2607.09230)
+- grade: Working-paper
+- risks: latency; edge lives at seconds to minutes
+- fit: Low — at most a "thin book: smaller size, wider stop" check (our depth logging, learning #31)
+
+### investor_base_vol_sizing — Investor-base growth raises idiosyncratic volatility
+- direction: both
+- family: volatility
+- mechanism: new, less-informed holders trade noisily
+- rules: if a coin's community/follower growth spikes, cut size or widen stops in proportion to expected vol
+- data needed: Reddit/X follower counts: not Binance
+- evidence: 355 coins Jan-2014 to Jul-2022: subreddit follower growth significantly raises idiosyncratic vol (https://arxiv.org/abs/2211.13274)
+- grade: Working-paper
+- risks: vol, not direction; social data access
+- fit: Low — marginal over realised-vol sizing
+
+### liquidation_magnet — Liquidation-cluster magnet and sweep-reverse
+- direction: both
+- family: microstructure
+- mechanism: dense estimated liquidation levels attract price as hunters push into them for liquidity; after the sweep price often reverses
+- rules: *(proposed)* estimate clusters from OI build-up zones x typical 10-25x leverage; trade the reversal after a sweep with a 1h close back inside; stop beyond the wick
+- data needed: CoinGlass heatmaps (paid estimates); Binance only live liquidation prints + OI hist
+- evidence: no rigorous public study
+- grade: Anecdote
+- risks: estimated levels are guesses; cascades run far past them (10 Oct)
+- fit: Low — keep as a qualitative "where are the stops" note in plans (our sweep_high detector covers the measurable part)
+
+### cme_gap_fill — CME weekend gap fill (BTC)
+- direction: both
+- family: other
+- mechanism: CME closes on weekends; the perp gaps vs Friday's close; folklore says Monday re-hedging fills it
+- rules: *(proposed)* Sunday 22:00 to Monday UTC: if |perp - CME Friday close| > 2%, fade toward the gap, 50% target, time stop Tuesday close
+- data needed: CME close (external), perp klines
+- evidence: none verified; unfilled gaps are forgotten (selection bias)
+- grade: Anecdote
+- risks: gaps stay open for months
+- fit: Low — external data, weak evidence
+
+## Anti-cards (documented so we don't rediscover them)
+
+### llm_discretionary_perps — An LLM making discretionary perp calls
+- direction: both
+- family: other
+- mechanism: none identified: no price-insensitive counterparty, and LLMs are weak on numeric time series
+- rules: Nof1 Alpha Arena: $10k per model, Hyperliquid perps, identical prompts and data, autonomous decisions
+- data needed: n/a
+- evidence: Season 1 (Oct-Nov 2025): 2 of 6 models positive (+22%, +5%), 4 lost 31-63%; Season 1.5: 6 of 32 accounts positive, -35% overall, and the S1 winner lost in all 4 runs; the S1 winner made ~43 trades (< 3/day) (https://www.iweaver.ai/blog/alpha-arena-ai-trading-season-1-results/, https://github.com/josejuarez96/tradepartner/pull/233)
+- grade: Practitioner-data
+- risks: overtrading, fees, rank instability
+- fit: Low — evidence against AI judgement as the alpha source. Keep the LLM on research, ops and executing explicit rule-based signals (this argues for rules, not for approval gates)

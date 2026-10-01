@@ -150,7 +150,8 @@ def _ts(s: str) -> int:
 def seed_all(journal, bt_dir: str | Path | None = None, week_coins: list | None = None) -> dict[str, Any]:
     db = journal.db
     R.ensure(db)
-    out: dict[str, Any] = {"static": seed_static(db), "scripts": seed_scripts(db)}
+    from .library_seed import seed_library
+    out: dict[str, Any] = {"static": seed_static(db), "scripts": seed_scripts(db), "library": seed_library(db)}
     if week_coins:
         out["week_study_episodes"] = seed_week_study(db, week_coins)
     if bt_dir and Path(bt_dir, "results.json").exists():
