@@ -4,8 +4,9 @@ is a versioned record with a status, its episodes (as-of features + outcome) and
     status: draft -> shadow -> live -> probation -> retired   (retired rows stay: they still count as trials)
 
 - a changed definition / detector / metric = a NEW version (old episodes stay with the old version)
-- promotion to live needs out-of-sample evidence (>= 30 OOS episodes on distinct coins, CI above 0, t >= 3);
-  the code refuses otherwise. Probation / retirement when the last-90-day CI crosses zero (decay alarm)
+- promotion to live needs out-of-sample evidence (>= 30 OOS episodes on distinct coins, CI above 0, coin- and
+  day-clustered t >= 3; no day-clustered t, e.g. all on one day, fails); the code refuses otherwise.
+  Probation / retirement when the last-90-day CI crosses zero (decay alarm)
 - a new pattern whose episodes mostly coincide with an existing one's is flagged as a duplicate
 Evidence cards summarise a node for `read_coin`; lessons are full-text searchable (FTS5)."""
 
@@ -144,7 +145,7 @@ def _stats(eps: list[tuple]) -> dict[str, Any] | None:
     se = statistics.stdev(cm) / math.sqrt(len(cm)) if len(cm) > 1 else None
     wins = [e[2] for e in xs if e[2] is not None]
     maes = sorted(e[3] for e in xs if e[3] is not None)
-    return {"n": len(xs), "n_coins": len(by), "mean": round(m, 3),
+    return {"n": len(xs), "n_coins": len(by), "n_days": len({e[4] // DAY_MS for e in xs}), "mean": round(m, 3),
             "ci95": [round(m - 1.96 * se, 3), round(m + 1.96 * se, 3)] if se else None,
             "t": round(m / se, 2) if se else None, "t_day": _clustered_t(xs, 4),
             "win_pct": round(sum(wins) / len(wins) * 100, 1) if wins else None,
@@ -186,10 +187,11 @@ def _recent(rows: list[tuple], now_ms: int) -> list[tuple]:
 
 
 def verdict(status: str, rows: list[tuple], now_ms: int) -> str:
-    """What the evidence allows (the human/analyst still makes the call through set_status)."""
+    """What the evidence allows (the human/analyst still makes the call through set_status). A missing day-clustered
+    t fails the gate: one day's episodes are one market move, however many coins they span."""
     oos, recent = _stats(_oos(rows)), _stats(_recent(rows, now_ms))
     eligible = bool(oos and oos["n_coins"] >= PROMOTE_MIN_OOS and oos["ci95"] and oos["ci95"][0] > 0
-                    and min(oos["t"] or 0, oos["t_day"] if oos["t_day"] is not None else 99) >= PROMOTE_MIN_T)
+                    and oos["t_day"] is not None and min(oos["t"] or 0, oos["t_day"]) >= PROMOTE_MIN_T)
     decayed = bool(recent and recent["n_coins"] >= 10 and recent["ci95"] and recent["ci95"][0] <= 0)
     if status == "live" and decayed:
         return "probation: last-90d CI crosses 0"
@@ -197,6 +199,9 @@ def verdict(status: str, rows: list[tuple], now_ms: int) -> str:
         return "retire: edge gone"
     if status in ("draft", "shadow") and eligible:
         return "eligible for live"
+    if status in ("draft", "shadow") and oos and oos["t_day"] is None:
+        why = "all OOS episodes on one day" if oos["n_days"] < 2 else "no day-to-day variance"
+        return f"keep {status}: no day-clustered t ({why})"
     return "keep " + status
 
 
@@ -209,8 +214,9 @@ def set_status(db, pid: str, status: str, reason: str) -> dict[str, Any]:
     if status == "live":
         c = card(db, pid)
         if not c or c["verdict"] != "eligible for live":
-            return {"ok": False, "error": f"not eligible for live: {c and c['oos']} (needs >= {PROMOTE_MIN_OOS} OOS "
-                                          f"coins, CI above 0, coin- and day-clustered t >= {PROMOTE_MIN_T})"}
+            return {"ok": False, "error": f"not eligible for live ({c and c['verdict']}): {c and c['oos']} (needs >= "
+                                          f"{PROMOTE_MIN_OOS} OOS coins, CI above 0, coin- and day-clustered t >= "
+                                          f"{PROMOTE_MIN_T}; a missing day-clustered t fails)"}
         dup = [d for d in duplicates(db, pid) if (latest(db, d["id"]) or {}).get("level") == p["level"]]
         if dup:
             return {"ok": False, "error": f"duplicate of an active pattern at the same level: {dup}"}

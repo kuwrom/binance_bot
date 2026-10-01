@@ -48,6 +48,34 @@ def test_card_is_coin_clustered_and_promotion_needs_oos_evidence():
     assert not R.set_status(d, "weak", "live", "hope")["ok"]
 
 
+def _eps(ts, n=35):
+    return [{"symbol": f"C{i}", "ts_ms": ts(i), "source": "t", "oos": True, "outcome": 5.0 + (i % 3)}
+            for i in range(n)]
+
+
+def test_single_day_oos_has_no_day_clustered_t_and_is_not_eligible():
+    d = db()
+    R.register(d, pat())
+    R.add_episodes(d, "script.discount_squeeze", _eps(lambda i: NOW - i * 60_000))   # 35 coins, one day
+    c = R.card(d, "script.discount_squeeze", NOW)
+    assert c["oos"]["n_coins"] == 35 and c["oos"]["ci95"][0] > 0 and c["oos"]["t"] >= R.PROMOTE_MIN_T
+    assert c["oos"]["t_day"] is None and c["oos"]["n_days"] == 1
+    assert c["verdict"] == "keep shadow: no day-clustered t (all OOS episodes on one day)"
+    res = R.set_status(d, "script.discount_squeeze", "live", "hope")
+    assert not res["ok"] and "one day" in res["error"]
+    assert R.latest(d, "script.discount_squeeze")["status"] == "shadow"
+
+
+def test_multi_day_oos_with_a_good_day_clustered_t_is_still_eligible():
+    d = db()
+    R.register(d, pat(status="draft"))
+    R.add_episodes(d, "script.discount_squeeze", _eps(lambda i: NOW - (i % 7) * DAY))   # 5 coins a day, 7 days
+    c = R.card(d, "script.discount_squeeze", NOW)
+    assert c["oos"]["n_days"] == 7 and c["oos"]["t_day"] >= R.PROMOTE_MIN_T
+    assert c["verdict"] == "eligible for live"
+    assert R.set_status(d, "script.discount_squeeze", "live", "evidence")["ok"]
+
+
 def test_decay_puts_a_live_pattern_on_probation():
     d = db()
     R.register(d, pat())
