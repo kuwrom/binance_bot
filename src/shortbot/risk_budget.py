@@ -26,7 +26,7 @@ from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from . import reconcile
-from .book import book_guard, diversity_mult, pending_book, slot_cap
+from .book import book_guard, diversity_mult, measured_corr, n_eff, pending_book, slot_cap
 from .config import RiskLimits
 from .governor import REGIME_MULT, GovInputs, govern
 from .signals.core import MAJORS
@@ -59,6 +59,7 @@ class BudgetInputs:
     setup: str | None = None                                     # the new trade's setup and sector
     sector: str | None = None
     pause: list[str] = field(default_factory=list)               # market-map pause (BTC/ETH impulse, squeeze)
+    book_rho: float | None = None                                # measured mean pairwise corr (informational)
 
 
 def clip(x: float, lo: float, hi: float) -> float:
@@ -126,10 +127,20 @@ def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, convictio
         "slot_cap_usd": round(slot_cap(eq, limits, cl), 2),
         "heat_pct": round(heat / eq * 100, 3) if eq else None,
         "pending_heat_pct": round(sum(inp.pending_risks.values()) / eq * 100, 3) if eq else None,
+        "book": _book_view(inp, symbol),
         "cluster": cl, "cluster_heat_pct": round(cluster_heat / eq * 100, 3) if eq else None,
         "halted_until": gov.get("until") if gov["halt"] else None,
         "blocked": capped <= 0, "reasons": reasons,
     }
+
+
+def _book_view(inp: BudgetInputs, symbol: str) -> dict[str, Any]:
+    """The book this trade would join: positions incl. the new one, measured correlation, effective independent
+    bets. Information only (learning #30: measure rho from our own book before letting it size anything)."""
+    n = len({b["symbol"] for b in inp.book} | {symbol})
+    ne = n_eff(n, inp.book_rho)
+    return {"n": n, "rho": round(inp.book_rho, 3) if inp.book_rho is not None else None,
+            "n_eff": round(ne, 2) if ne is not None else None}
 
 
 def realized_vol(closes: list[float]) -> float | None:
@@ -210,12 +221,14 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     book = [{"symbol": p["symbol"], "setup": p.get("setup"), "kind": "open"} for p in pos] + pbook
     for b in book:
         b["sector"] = sector_of(b["symbol"])
+    syms = sorted({b["symbol"] for b in book} | ({symbol} if symbol else set()))
+    rho = await measured_corr(trader.ex.public, syms) if len(syms) >= 2 else None
     return BudgetInputs(eq, peak, regime, vnow, tgt, risks, govern(trader.ex.limits, gin), cell,
                         [r["r_multiple"] for r in s_rows],
                         [r["r_multiple"] for r in s_rows if cell and r["regime_cell"] == cell],
                         sum(r["pnl"] for r in rows if r["conviction"] == "M" and r["closed_at"] >= qs),
                         pend, book, setup, sector_of(symbol) if symbol else None,
-                        list((m.get("vetoes") or {}).get("pause") or []))
+                        list((m.get("vetoes") or {}).get("pause") or []), rho)
 
 
 async def governor_status(trader, regime: str) -> dict[str, Any]:

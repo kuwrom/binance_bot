@@ -75,3 +75,44 @@ def test_pending_book_counts_each_group_once_at_its_worst_unit():
 
 def test_pending_book_tolerates_a_missing_table():
     assert pending_book(sqlite3.connect(":memory:"), SYM) == ({}, [])
+
+
+def test_effective_bets_shrink_with_correlation():
+    from shortbot.book import n_eff
+    assert n_eff(5, 0.0) == 5 and abs(n_eff(5, 0.5) - 5 / 3) < 1e-9 and n_eff(5, 1.0) == 1
+    assert n_eff(3, None) is None and n_eff(4, -0.2) == 4          # negative rho is not credited
+
+
+def test_avg_corr_on_aligned_returns():
+    from shortbot.book import avg_corr
+    a = [0.01 * ((i % 7) - 3) for i in range(60)]
+    assert abs(avg_corr({"A": a, "B": [2 * x for x in a]}) - 1.0) < 1e-9
+    assert abs(avg_corr({"A": a, "B": [-x for x in a]}) + 1.0) < 1e-9
+    assert avg_corr({"A": a}) is None and avg_corr({"A": a, "B": a[:10]}) is None   # too short
+
+
+async def test_measured_corr_fetches_once_and_never_raises():
+    from shortbot.book import _corr_cache, measured_corr
+
+    class Pub:
+        calls = 0
+
+        async def fetch_ohlcv(self, s, tf, limit=0):
+            Pub.calls += 1
+            if s.startswith("BAD"):
+                raise RuntimeError("no data")
+            return [[i, 0, 0, 0, 100 + (i % 5) * (2 if s.startswith("X") else 1)] for i in range(limit)]
+    _corr_cache.clear()
+    p = Pub()
+    rho = await measured_corr(p, ["X/USDT:USDT", "Y/USDT:USDT", "BAD/USDT:USDT"])
+    assert rho is not None and rho > 0.9 and Pub.calls == 3
+    assert await measured_corr(p, ["Y/USDT:USDT", "BAD/USDT:USDT", "X/USDT:USDT"]) == rho and Pub.calls == 3
+    assert await measured_corr(p, ["X/USDT:USDT"]) is None
+
+
+def test_budget_reports_the_book_it_would_join():
+    book = [{"symbol": "A/USDT:USDT", "setup": "pump_fade", "sector": "AI"},
+            {"symbol": "B/USDT:USDT", "setup": "breakdown", "sector": "DeFi"}]
+    r = b(book=book, book_rho=0.5)
+    assert r["book"] == {"n": 3, "rho": 0.5, "n_eff": 1.5}
+    assert b()["book"] == {"n": 1, "rho": None, "n_eff": None}

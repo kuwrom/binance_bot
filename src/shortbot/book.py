@@ -14,9 +14,15 @@ All pure except pending_book, which reads the entries table and tolerates its ab
 
 from __future__ import annotations
 
+import math
+import statistics
+import time
 from typing import Any
 
 PENDING_STATUSES = ("pending", "placing", "unknown")
+CORR_BARS = 168                 # 7 days of 1h returns for the book's measured correlation (informational)
+CORR_TTL_S = 1800
+_corr_cache: dict[tuple[str, ...], tuple[float, float | None]] = {}
 DIVERSITY_MAX_SAME = 2          # this many open/pending trades with the same setup and sector -> half size
 BOOK_GUARD_MIN_OPEN = 3         # open alt shorts that make a market pause a book-level block
 
@@ -66,6 +72,53 @@ def diversity_mult(book: list[dict[str, Any]], symbol: str, setup: str | None,
         return 0.5, (f"driver overlap: {len(same)} open/pending {setup} trades in {sector} -> half size "
                      "(same bet, learning #30)")
     return 1.0, ""
+
+
+def log_returns(closes: list[float]) -> list[float]:
+    return [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+
+
+def avg_corr(returns: dict[str, list[float]], min_len: int = 48) -> float | None:
+    """Mean pairwise Pearson correlation of aligned (tail-trimmed) return series; None with < 2 usable series."""
+    series = [r for r in returns.values() if len(r) >= min_len]
+    if len(series) < 2:
+        return None
+    n = min(len(s) for s in series)
+    series = [s[-n:] for s in series]
+    cs = []
+    for i in range(len(series)):
+        for j in range(i + 1, len(series)):
+            try:
+                cs.append(statistics.correlation(series[i], series[j]))
+            except statistics.StatisticsError:   # a flat series
+                continue
+    return sum(cs) / len(cs) if cs else None
+
+
+async def measured_corr(public, symbols: list[str]) -> float | None:
+    """Mean pairwise correlation of the last 7 days of 1h returns of `symbols` (cached 30 min). Never raises."""
+    key = tuple(sorted(set(symbols)))
+    if len(key) < 2:
+        return None
+    hit = _corr_cache.get(key)
+    if hit and time.time() - hit[0] < CORR_TTL_S:
+        return hit[1]
+    rets = {}
+    for s in key:
+        try:
+            rets[s] = log_returns([c[4] for c in await public.fetch_ohlcv(s, "1h", limit=CORR_BARS + 1)])
+        except Exception:  # noqa: BLE001 - a missing series only narrows the estimate
+            continue
+    rho = avg_corr(rets)
+    _corr_cache[key] = (time.time(), rho)
+    return rho
+
+
+def n_eff(n: int, rho: float | None) -> float | None:
+    """Effective number of independent bets N/(1+(N-1)rho) (Clarke-de Silva-Thorley; learning #30)."""
+    if n <= 0 or rho is None:
+        return None
+    return n / (1 + (n - 1) * max(0.0, rho))
 
 
 def book_guard(open_alts: int, pause: list[str]) -> str | None:
