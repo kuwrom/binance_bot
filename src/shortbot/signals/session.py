@@ -1,6 +1,6 @@
 """Session clock + macro calendar (docs/SESSIONS.md). Time predicts volatility, not direction: this signal
 scores nothing. It vetoes new entries inside scheduled macro windows and exposes the clock as features
-(research: does any of it matter for OUR fills?). `execution_guard` blocks market orders only (trading.py)."""
+(research: does any of it matter for OUR fills?). `execution_guard` blocks market orders only (trading_open.py)."""
 
 from __future__ import annotations
 
