@@ -44,7 +44,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | 7 | ctrend_technical_aggregate, carry_momo_breakout_blend | long / both | strongest long ranking signals |
 | 8 | hack_exploit_short | short | NY Fed: -27% 24h CAR |
 | 9 | premium_index_reversion, funding_interval_switch | both | same code path as premium_hi / squeeze_exhaustion |
-| 10 | ls_ratio_taker_contrarian, oi_price_funding_regime | both | **log now**: the API keeps only 30 days |
+| 10 | ls_ratio_taker_contrarian, oi_price_funding_regime | both | testable now: history from data.binance.vision metrics (`histdata_vision.py`) |
 
 ## New evidence for existing setups
 - **listing_fade / exchange_listing_pump:** 2025 listings held from day-1 close to 11-Mar-2026 lost about 70% (Binance n=92 -71.7%, Upbit n=59 -69.5%, Bithumb n=144 -69.1%). H2-2025 cohorts decayed less (https://www.odaily.news/en/post/5209720). Listing-day abnormal return was +5.7% across 327 listings, +17.5% on Binance (BRL 2019). The cause is that MM inventory hedges, discount buyers and unlocks all sit on the sell side (supply_overhang_short).

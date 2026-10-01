@@ -76,7 +76,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - family: microstructure
 - mechanism: over-levered longs pay funding and sit on liquidation clusters; a shock forces sales that feed on themselves (10 Oct: 87% of $19.3bn liquidated were longs, $7bn in < 1h)
 - rules: *(proposed)* funding > 0.05%/8h for >= 3 prints AND OI +20% in 7d AND price stalls (4h lower high); enter on a break of the 4h swing low; stop above the swing high; target the prior volume node; time stop 3 days; bank 50% on the first > 2 ATR move (ADL risk)
-- data needed: funding, OI hist, long/short ratios, taker ratio: Binance public (30d history only, so log it)
+- data needed: funding, OI hist, long/short ratios, taker ratio: Binance public (archive via data.binance.vision metrics)
 - evidence: 10-Oct structure (https://insights4vc.substack.com/p/inside-the-19b-flash-crash); BIS WP 1087 (carry_crash_regime); no trade-level stats
 - grade: Anecdote
 - risks: crowded longs stay crowded for weeks; squeezes on low float; the winning short gets ADL'd in the very cascade it predicted
@@ -136,7 +136,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - data needed: openInterestHist (30d), funding, klines: Binance public
 - evidence: framework only (https://coinunited.io/en/research/crypto/crypto-open-interest-divergence-signals-guide-2026); BTC OI +12% in a month with negative funding preceded a squeeze attempt, Feb-2026 (CoinDesk)
 - grade: Anecdote
-- risks: unvalidated; OI history only 30d via the API
+- risks: unvalidated (OI history: REST 30d, full archive via data.binance.vision metrics)
 - fit: Med — inputs are in the DataHub; test as a tape.py feature, not a setup
 
 ### ls_ratio_taker_contrarian — Retail long/short ratio and taker-flow contrarian filter
@@ -144,11 +144,11 @@ Most are features or vetoes for existing setups rather than new setups.
 - family: microstructure
 - mechanism: the global account ratio counts retail heads; the top-trader position ratio tracks large accounts; retail heavily short while top traders are long and taker buys dominate tends to squeeze up (mirror for shorts)
 - rules: *(proposed)* 1h; long when globalLongShortAccountRatio < 0.8 (or 7d z < -2), topLongShortPositionRatio rising and takerlongshortRatio > 1.1 for 3 bars above the 1h VWAP; mirror as a short confirmation; exit when the ratio normalises
-- data needed: /futures/data/globalLongShortAccountRatio, topLongShortPositionRatio, takerlongshortRatio: Binance public, 30 days only
+- data needed: /futures/data/globalLongShortAccountRatio, topLongShortPositionRatio, takerlongshortRatio: Binance public (REST keeps 30 days; full history in data.binance.vision daily `metrics`, parsed by histdata_vision.py)
 - evidence: no published backtest; used descriptively by CoinGlass and CoinDesk
 - grade: Anecdote
 - risks: noisy and venue-specific; account ratio is not notional
-- fit: Med — free hourly data; start logging it now so it can be tested in 2-3 months
+- fit: Med — free hourly data with archived history; backtestable now
 
 ### cross_exchange_premium_sentiment — Korea premium as a froth gauge
 - direction: short

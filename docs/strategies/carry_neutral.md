@@ -57,7 +57,7 @@ Sygnum's institutional BTC carry fund targets 8-10%. The premium has moved to Tr
 - family: carry
 - mechanism: when a symbol's funding hits the cap, Binance moves it to hourly funding within ~15 min and back only after 16 consecutive hourly prints with |rate| < 0.025%; the per-interval cap stays, so daily carry can jump 8x and trapped longs pay shorts hourly
 - rules: flag symbols whose interval drops below 8h with funding at the cap; a hedged short collects up to 8x per day; unhedged, enter only with a squeeze_exhaustion trigger; exit as the 16-print revert nears or funding < 0.03%. F = [P + clamp(0.01% - P, +-0.05%)] / (8/N)
-- data needed: /fapi/v1/fundingInfo (interval, caps), premiumIndex (predicted rate): Binance public; interval history only via our own logging
+- data needed: /fapi/v1/fundingInfo (interval, caps), premiumIndex (predicted rate): Binance public; past intervals inferable from the spacing of fundingRate timestamps
 - evidence: rules from the Binance funding FAQ (https://www.binance.com/en/support/faq/introduction-to-binance-futures-funding-rates-360033525031); no published backtest of the trade
 - grade: Single-source
 - risks: these symbols are mid-squeeze; funding can flip deeply negative after the squeeze
