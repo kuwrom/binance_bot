@@ -1,0 +1,149 @@
+"""The exchange side of the fake (mixed into FakeCcxt, fakes.py): prices that move, resting orders that fill or
+trigger on their own, GTD expiry, isolated margin, fills and income. Short-only: the book only ever holds SELL
+limits above the market and BUY stops above the market, so only an upward move can fill or trigger anything.
+Also ProdView: the separate keyless prod client (`ex.public`), whose prices can diverge from the demo book."""
+
+from __future__ import annotations
+
+import time
+
+from tests import fake_errors as err
+
+SYM = "PUMP/USDT:USDT"
+FEE = 0.0005
+# ccxt 4.5.84 parse_order_status() for algoStatus (Query-Algo-Order doc / ALGO_UPDATE statuses)
+ALGO_STATUS = {"NEW": "open", "TRIGGERING": "open", "TRIGGERED": "closed", "FINISHED": "closed",
+               "CANCELED": "canceled", "REJECTED": "rejected", "EXPIRED": "expired"}
+
+
+def raw(symbol: str) -> str:
+    return symbol.split(":")[0].replace("/", "")
+
+
+class Engine:
+    """State set up by FakeCcxt.__init__: sym[s] = {price, qty, entry, lev, tick, step, min, qv}; limits; stops and
+    prearms (open conditional orders: id -> trigger); algo (every conditional order's meta); fills; income."""
+
+    # ------------------------------------------------------------ clock
+    def now_ms(self) -> int:
+        return int((time.time() + self.clock_s) * 1000)
+
+    def advance(self, seconds: float) -> None:
+        """Move the exchange clock: GTD limits past their goodTillDate expire on the exchange, keeping what filled
+        (New-Order doc: GTD auto-cancels at goodTillDate). Only the exchange's clock moves, not the desk's."""
+        self.clock_s += seconds
+        for o in self.limits.values():
+            if o["status"] == "open" and o["gtd"] and o["gtd"] <= self.now_ms():
+                o["status"] = "expired"
+
+    # ------------------------------------------------------------ prices
+    def set_price(self, s: str, p: float) -> None:
+        """Walk the last (= mark) price of `s` to p. On the way up, in price order, a SELL limit fills at its price
+        and a BUY STOP_MARKET triggers at price >= triggerPrice (New-Algo-Order doc) and fills at its trigger.
+        At one level the limit fills before the stop, so a pre-armed stop sees the position it protects."""
+        b = self.sym[s]
+        old = b["price"]
+        if p > old:
+            hits = [(o["price"], 0, i) for i, o in self.limits.items()
+                    if o["symbol"] == s and o["status"] == "open" and o["side"] == "sell" and o["price"] <= p]
+            hits += [(t, 1, i) for i, t in [*self.stops.items(), *self.prearms.items()]
+                     if self._algo_sym(i) == s and t <= p]
+            for level, kind, i in sorted(hits):
+                b["price"] = max(level, old)
+                if kind == 0 and self.limits[i]["status"] == "open":
+                    self._exec_limit(i, self.limits[i]["amount"] - self.limits[i]["filled"])
+                elif kind == 1 and (i in self.stops or i in self.prearms):
+                    self._trigger(i)
+        b["price"] = p
+
+    def _trigger(self, i: str) -> None:
+        """closePosition: buys back the WHOLE short (New-Algo-Order doc). Pre-armed reduce-only stop: buys back its
+        own quantity, capped at the position; with no position it is REJECTED and nothing fills (ALGO_UPDATE
+        `rm`: "Reduce Only reject"; change log 2025-11-06: no check before the conditional order triggers)."""
+        s = self._algo_sym(i)
+        b = self.sym[s]
+        close = i in self.stops
+        qty = b["qty"] if close else min(self.algo.get(i, {}).get("qty") or b["qty"], b["qty"])
+        self._retire(i, "FINISHED" if qty > 0 else "REJECTED")
+        if qty > 0:
+            self._fill(s, "buy", qty, i)
+
+    def _algo_sym(self, i: str) -> str:
+        return self.algo.get(i, {}).get("symbol", SYM)   # a stop a test planted directly sits on SYM
+
+    def _retire(self, i: str, status: str) -> None:
+        """A conditional order leaves the open list; its meta stays queryable (GET /fapi/v1/algoOrder)."""
+        close = i in self.stops
+        trig = self.stops.pop(i, None) if close else self.prearms.pop(i, None)
+        a = self.algo.setdefault(i, {"symbol": SYM, "qty": None, "cid": None, "trigger": trig})
+        a.update(status=status, close=close)
+
+    # ------------------------------------------------------------ fills
+    def _exec_limit(self, i: str, q: float) -> None:
+        o = self.limits[i]
+        px = self.sym[o["symbol"]]["price"]
+        self._fill(o["symbol"], o["side"], q, i)
+        o["avg"] = ((o["avg"] or 0.0) * o["filled"] + px * q) / (o["filled"] + q)
+        o["filled"] += q
+        o["status"] = "closed" if o["filled"] >= o["amount"] - 1e-12 else "open"
+
+    def _fill(self, s: str, side: str, amount: float, order: str | None = None) -> None:
+        """A trade at the current price, with its income rows (Get-Income-History doc: symbol, incomeType, income)."""
+        b = self.sym[s]
+        px, ms = b["price"], int(time.time() * 1000)
+        self.fills.append({"symbol": s, "order": order, "side": side, "price": px, "amount": amount, "timestamp": ms})
+        self.income.append({"symbol": raw(s), "incomeType": "COMMISSION", "income": str(-px * amount * FEE),
+                            "asset": "USDT", "time": ms})
+        if side == "sell":
+            b["entry"] = (b["entry"] * b["qty"] + px * amount) / (b["qty"] + amount)
+            b["qty"] += amount
+            return
+        self.income.append({"symbol": raw(s), "incomeType": "REALIZED_PNL", "income": str((b["entry"] - px) * amount),
+                            "asset": "USDT", "time": ms})
+        b["qty"] = round(max(0.0, b["qty"] - amount), 8)
+        if not b["qty"]:
+            # a closePosition stop goes with the position. SECONDARY source: testnet probes 2026-09-24
+            # (github.com/bcup02/trade-alerts PR #65); a reduce-only stop stays and is rejected if it triggers
+            for i in [i for i in self.stops if self._algo_sym(i) == s]:
+                self._retire(i, "EXPIRED")
+
+    # ------------------------------------------------------------ margin
+    def available(self) -> float:
+        """Equity minus the isolated initial margin (notional / leverage) held by positions and resting opening
+        orders. Simplified: no fees or open loss. Conditional orders hold none until they trigger."""
+        used = sum(b["qty"] * b["entry"] / b["lev"] for b in self.sym.values())
+        used += sum((o["amount"] - o["filled"]) * o["price"] / self.sym[o["symbol"]]["lev"]
+                    for o in self.limits.values() if o["status"] == "open" and not o["reduce"])
+        return self.equity - used
+
+    def _check_margin(self, s: str, notional: float) -> None:
+        if notional / self.sym[s]["lev"] > self.available() + 1e-9:
+            raise err.margin_insufficient()
+
+
+class ProdView:
+    """`ex.public`: the keyless prod client. Market data follows the demo book unless a prod price is set
+    (`fake.prod.price = x`, `fake.prod.prices[sym] = x`); private calls fail as ccxt fails without keys."""
+    PRIVATE = {"create_order", "cancel_order", "cancel_all_orders", "edit_order", "fetch_order", "fetch_open_orders",
+               "fetch_positions", "fetch_balance", "fetch_my_trades", "fetch_position_mode", "set_position_mode",
+               "set_margin_mode", "set_leverage"}
+
+    def __init__(self, fake):
+        self._fake, self.prices = fake, {}
+
+    price = property(lambda self: self.prices.get(SYM, self._fake.price),
+                     lambda self, p: self.prices.__setitem__(SYM, p))
+
+    async def fetch_ticker(self, s):
+        return {**await self._fake.fetch_ticker(s), "last": self.prices.get(s, self._fake.sym[s]["price"])}
+
+    async def fetch_ohlcv(self, s, tf="1h", since=None, limit=30):
+        px = self.prices.get(s, self._fake.sym[s]["price"])
+        return [[k, px, px * 1.02, px * 0.98, px, 1] for k in range(limit)]
+
+    def __getattr__(self, name):
+        if name in self.PRIVATE or name.startswith(("fapiPrivate", "private")):
+            async def denied(*a, **k):
+                raise err.no_api_key()
+            return denied
+        return getattr(self._fake, name)
