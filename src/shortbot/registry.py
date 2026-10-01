@@ -4,8 +4,8 @@ is a versioned record with a status, its episodes (as-of features + outcome) and
     status: draft -> shadow -> live -> probation -> retired   (retired rows stay: they still count as trials)
 
 - a changed definition / detector / metric = a NEW version (old episodes stay with the old version)
-- promotion to live needs out-of-sample evidence (>= 30 OOS episodes on distinct coins, CI above 0, coin- and
-  day-clustered t >= 3; no day-clustered t, e.g. all on one day, fails); the code refuses otherwise.
+- promotion to live needs out-of-sample evidence (>= 30 OOS episodes on distinct coins over >= 10 days, CI above
+  0, coin- and day-clustered t >= 3; no day-clustered t fails); the code refuses otherwise.
   Probation / retirement when the last-90-day CI crosses zero (decay alarm)
 - a new pattern whose episodes mostly coincide with an existing one's is flagged as a duplicate
 Evidence cards summarise a node for `read_coin`; lessons are full-text searchable (FTS5)."""
@@ -23,6 +23,7 @@ from typing import Any
 STATUSES = ("draft", "shadow", "live", "probation", "retired")
 LEVELS = ("regime", "lifecycle", "tape", "controller", "script", "setup", "detector", "strategy", "filter", "veto")
 PROMOTE_MIN_OOS, PROMOTE_MIN_T = 30, 3.0
+PROMOTE_MIN_DAYS = 10              # distinct OOS calendar days: fewer day clusters make t_day meaningless
 DUP_OVERLAP = 0.7
 DAY_MS = 86_400_000
 
@@ -187,10 +188,12 @@ def _recent(rows: list[tuple], now_ms: int) -> list[tuple]:
 
 
 def verdict(status: str, rows: list[tuple], now_ms: int) -> str:
-    """What the evidence allows (the human/analyst still makes the call through set_status). A missing day-clustered
-    t fails the gate: one day's episodes are one market move, however many coins they span."""
+    """What the evidence allows (the human/analyst still makes the call through set_status). Fewer than
+    PROMOTE_MIN_DAYS OOS days, or no day-clustered t, fails the gate: one day's episodes are one market move however
+    many coins they span, and a t over a handful of day clusters means little."""
     oos, recent = _stats(_oos(rows)), _stats(_recent(rows, now_ms))
-    eligible = bool(oos and oos["n_coins"] >= PROMOTE_MIN_OOS and oos["ci95"] and oos["ci95"][0] > 0
+    eligible = bool(oos and oos["n_coins"] >= PROMOTE_MIN_OOS and oos["n_days"] >= PROMOTE_MIN_DAYS
+                    and oos["ci95"] and oos["ci95"][0] > 0
                     and oos["t_day"] is not None and min(oos["t"] or 0, oos["t_day"]) >= PROMOTE_MIN_T)
     decayed = bool(recent and recent["n_coins"] >= 10 and recent["ci95"] and recent["ci95"][0] <= 0)
     if status == "live" and decayed:
@@ -199,9 +202,11 @@ def verdict(status: str, rows: list[tuple], now_ms: int) -> str:
         return "retire: edge gone"
     if status in ("draft", "shadow") and eligible:
         return "eligible for live"
+    if status in ("draft", "shadow") and oos and oos["n_days"] < PROMOTE_MIN_DAYS:
+        nd = oos["n_days"]
+        return f"keep {status}: only {nd} OOS day{'' if nd == 1 else 's'} (need {PROMOTE_MIN_DAYS})"
     if status in ("draft", "shadow") and oos and oos["t_day"] is None:
-        why = "all OOS episodes on one day" if oos["n_days"] < 2 else "no day-to-day variance"
-        return f"keep {status}: no day-clustered t ({why})"
+        return f"keep {status}: no day-clustered t (no day-to-day variance)"
     return "keep " + status
 
 
@@ -215,7 +220,8 @@ def set_status(db, pid: str, status: str, reason: str) -> dict[str, Any]:
         c = card(db, pid)
         if not c or c["verdict"] != "eligible for live":
             return {"ok": False, "error": f"not eligible for live ({c and c['verdict']}): {c and c['oos']} (needs >= "
-                                          f"{PROMOTE_MIN_OOS} OOS coins, CI above 0, coin- and day-clustered t >= "
+                                          f"{PROMOTE_MIN_OOS} OOS coins over >= {PROMOTE_MIN_DAYS} days, CI above 0,"
+                                          f" coin- and day-clustered t >= "
                                           f"{PROMOTE_MIN_T}; a missing day-clustered t fails)"}
         dup = [d for d in duplicates(db, pid) if (latest(db, d["id"]) or {}).get("level") == p["level"]]
         if dup:

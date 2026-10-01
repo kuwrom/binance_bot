@@ -20,9 +20,10 @@ This is how the library of tapes, scripts and strategies stays honest as it grow
 - **A new version** is created when the definition, detector or metric changes. Old episodes stay with the old version.
 - **Status flow:** draft → shadow → **live** → probation → retired.
 - **Promotion to live is refused** unless the out-of-sample evidence clears all three:
-  - at least 30 distinct coins;
+  - at least 30 distinct coins, on at least 10 distinct calendar days (`PROMOTE_MIN_DAYS`);
   - a 95% CI above 0 (coin-clustered);
-  - t ≥ 3, both coin-clustered and day-clustered. If there is no day-clustered t (every OOS episode on one day), the pattern is not eligible, and the verdict says why.
+  - t ≥ 3, both coin-clustered and day-clustered. If there is no day-clustered t, the pattern is not eligible.
+  - When the day gates fail, the verdict says why (e.g. "keep shadow: only 3 OOS days (need 10)").
 - **Decay alarm:** the guardian checks after each labelling pass.
   - live → *probation* when the last-90-day CI crosses 0 (n_coins ≥ 10);
   - probation → *retire* when the last-90-day mean is below 0 (n_coins ≥ 30).
