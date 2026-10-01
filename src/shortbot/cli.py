@@ -271,7 +271,8 @@ def main() -> None:
     a.add_argument("--reason", required=True)
     pr = sub.add_parser("propose", help="limit-entry group: first fill cancels the rest")
     pr.add_argument("proposals", help='JSON list of {symbol, limit_price, stop_price, setup, thesis, plan?, '
-                    'leverage?, level_type, level_reason, cancel_below?, conviction?, tranches? [{limit_price, share}] = split entry, veto_override?}')
+                    'leverage?, level_type, level_reason, cancel_below?, conviction?, size_mult? (0.1-1, only shrinks: pass '
+                    "the read's size_mult), tranches? [{limit_price, share}] = split entry (all-or-nothing), veto_override?}")
     pr.add_argument("--ttl-hours", type=float, default=6.0)
     pr.add_argument("--no-prearm", action="store_true")
     pr.add_argument("--warmup-override", help="reason to skip the cold-desk warm-up")

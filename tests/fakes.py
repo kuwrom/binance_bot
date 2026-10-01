@@ -56,6 +56,11 @@ class FakeCcxt:
         self.hedged = hedged
 
     async def set_margin_mode(self, m, s):
+        # live demo 2026-10-01 (MOVR split entry): with an open order on the symbol Binance answers -4067 before
+        # it would say "no need to change" (-4046)
+        if any(o["status"] == "open" for o in self.limits.values()):
+            raise ccxt.ExchangeError('binanceusdm {"code":-4067,"msg":"Position side cannot be changed if there '
+                                     'exists open orders."}')
         raise ccxt.ExchangeError('binanceusdm {"code":-4046,"msg":"No need to change margin type."}')
 
     async def set_leverage(self, lev, s):
@@ -139,11 +144,16 @@ class FakeCcxt:
             raise drift
         self.stops.pop(i, None)
         self.prearms.pop(i, None)
-        if i in self.limits and self.limits[i]["status"] == "open":
+        if i in self.limits and self.limits[i]["status"] != "open":
+            # Binance: a filled (or already cancelled) order is unknown to cancel (MOVR 2026-10-01)
+            raise ccxt.OrderNotFound('binanceusdm {"code":-2011,"msg":"Unknown order sent."}')
+        if i in self.limits:
             self.limits[i]["status"] = "canceled"
         if self.drift_on_cancel:
             self.drift_on_cancel -= 1
             raise drift
+        if i in self.limits:   # the cancel response carries what had already filled (executedQty)
+            return {"id": i, "status": "canceled", "filled": self.limits[i]["filled"]}
 
     async def fetch_order(self, i, s):
         o = self.limits[i]

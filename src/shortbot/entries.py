@@ -100,7 +100,15 @@ class EntryDesk:
                 if p.get("tranches"):
                     from . import tranches
                     _, legs = tranches.expand(p)
-                    got = [await self._place_one(gid, leg, regime, expires_ms, prearm_stop) for leg in legs]
+                    # far leg first: the near leg can fill the moment it is placed (MOVR 2026-10-01)
+                    legs = sorted(legs, key=lambda leg: -float(leg["limit_price"]))
+                    got: list[dict] = []
+                    try:
+                        for leg in legs:
+                            got.append(await self._place_one(gid, leg, regime, expires_ms, prearm_stop))
+                    except Exception:
+                        await self._rollback(got)   # a split entry is one unit (0G 2026-10-01)
+                        raise
                     pinned = tranches.finalize(self.j.db, got)
                     placed += [{**x, **pinned} for x in got]
                 else:
@@ -235,6 +243,31 @@ class EntryDesk:
         return {**odds, "entry_id": cur.lastrowid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
                 "risk_usdt": round(amount * (stop - px), 2), "leverage": lev, "prearmed_stop": bool(prearm_id),
                 "expires": datetime.fromtimestamp(expires_ms / 1000, timezone.utc).isoformat(timespec="minutes")}
+
+    async def _rollback(self, got: list[dict]) -> None:
+        """Undo a split entry's placed legs after a later leg failed. Cancel each limit FIRST: only a leg cancelled
+        unfilled loses its pre-armed stop. A leg that (partly) filled keeps its stop and stays pending, pinned to its
+        own size, so the poll adopts and protects it (MOVR 2026-10-01: a stripped stop left a naked short)."""
+        t, kept = self.tr.t, []
+        for x in got:
+            row = self._rows("id=?", (x["entry_id"],))[0]
+            try:
+                o = await t.cancel_order(row["order_id"], row["symbol"]) or {}
+            except Exception:  # noqa: BLE001 - filled or unknown: keep its stop, the poll reconciles
+                kept.append(x)
+                continue
+            if float(o.get("filled") or 0) > 0:
+                kept.append(x)
+                continue
+            if row["prearm_id"]:
+                try:
+                    await t.cancel_order(row["prearm_id"], row["symbol"], params={"trigger": True})
+                except Exception:  # noqa: BLE001
+                    pass
+            self._update(row["id"], status="cancelled", reason="split entry rejected: sibling leg failed")
+        if kept:
+            from . import tranches
+            tranches.finalize(self.j.db, kept)
 
     # ------------------------------------------------------------ cancel / amend
     async def _cancel_entry(self, e: dict, status: str, reason: str) -> None:

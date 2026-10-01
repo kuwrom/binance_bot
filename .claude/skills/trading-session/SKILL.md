@@ -70,6 +70,8 @@ Unless the trigger needs an immediate market entry, propose a **group of 3-5 lim
 - **Stop:** beyond the sweep extreme plus a buffer. Set `cancel_below` where the move would have happened without us.
 - **Expiry and fills:** GTD expiry on the exchange. The first fill cancels the rest, and the guardian protects the fill within 5 s.
 - **Adverse selection:** limits fill more often when you're wrong. Size comes from the current risk budget (`shortbot budget <coin>`).
+- **Size cuts:** pass the read's `size_mult` (e.g. 0.25 for thin float / squeeze-prone). The tier and funding cuts apply on top; it only ever shrinks.
+- **Pump fades (learning #29):** single limits 4-5% above the market got 0 fills while the fades happened. Prefer a split entry (`tranches`): leg 1 just above the market once the read says short_setup, leg 2 at the structure level. A split is all-or-nothing at placement.
 - **Repricing:** move a pending limit at most once (`amend`). Never chase.
 - **No resting bounce-sell limits in breakdowns** (learning #20). They fill on exactly the breakdowns that fail. The breakdown short itself is unproven; if taken, enter on resumption below the breakdown low, not on a hoped-for bounce.
 

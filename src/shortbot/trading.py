@@ -147,7 +147,9 @@ class Trader:
         try:
             await self.t.set_margin_mode("isolated", symbol)
         except ccxt.ExchangeError as e:
-            if "-4046" not in str(e) and "No need to change margin type" not in str(e):
+            # -4046 already isolated; -4067/-4047 "cannot be changed if there exists open orders": every order we
+            # place went through this call first, so an open order means the symbol is already isolated
+            if not any(c in str(e) for c in ("-4046", "-4047", "-4067", "No need to change margin type")):
                 raise
         await self.t.set_leverage(leverage, symbol)
 

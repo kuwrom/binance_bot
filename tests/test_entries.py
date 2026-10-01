@@ -195,6 +195,49 @@ async def test_split_entry_legs_count_together_as_exposure_for_other_groups():
     assert not r2["ok"] and "total notional" in str(r2["rejected"])
 
 
+async def test_split_entry_is_all_or_nothing_when_a_later_leg_is_vetoed():
+    calls = {"n": 0}
+
+    async def veto_second(ex, symbol, ticker):     # the read changes between legs (0G 2026-10-01)
+        calls["n"] += 1
+        return {"vetoes": ["breakout accepted above prior_high"] if calls["n"] > 1 else [],
+                "regime": "favorable", "features": {}}
+    d, t, fake = desk()
+    fake.price = 1.035
+    t.prechecks = veto_second
+    r = await d.propose_group([prop(1.04, tranches=[{"limit_price": 1.04}, {"limit_price": 1.07}])])
+    assert not r["ok"] and "vetoed at placement" in r["rejected"][0]["error"]
+    assert d.pending() == [] and all(o["status"] != "open" for o in fake.limits.values())
+    assert fake.stops == {}                                          # leg 1's pre-armed stop is gone too
+    assert [x["status"] for x in d._rows("1=1")] == ["cancelled"]
+
+
+async def test_split_rollback_never_strips_the_stop_of_a_leg_that_already_filled():
+    d, t, fake = desk()
+    fake.price = 1.035
+    calls = {"n": 0}
+
+    async def fill_then_veto(ex, symbol, ticker):  # leg 1 fills before leg 2 is validated (MOVR 2026-10-01)
+        calls["n"] += 1
+        if calls["n"] == 2:
+            fake.fill_limit(next(iter(fake.limits)))
+            return {"vetoes": ["already short"], "regime": "favorable", "features": {}}
+        return {"vetoes": [], "regime": "favorable", "features": {}}
+    t.prechecks = fill_then_veto
+    r = await d.propose_group([prop(1.04, tranches=[{"limit_price": 1.04}, {"limit_price": 1.07}])])
+    assert not r["ok"] and fake.position > 0
+    assert len(fake.prearms) == 1 and [x["status"] for x in d._rows("1=1")] == ["pending"]
+    ev = await d.poll()                                              # the poll adopts and protects it
+    assert [e["event"] for e in ev] == ["filled"] and list(fake.stops.values()) == [1.10]
+
+
+async def test_split_places_the_far_leg_first_so_the_near_leg_cannot_fill_mid_placement():
+    d, t, fake = desk()
+    fake.price = 1.035
+    await d.propose_group([prop(1.04, tranches=[{"limit_price": 1.04}, {"limit_price": 1.07}])])
+    assert [o["price"] for o in fake.limits.values()] == [1.07, 1.04]
+
+
 async def test_limit_entry_refuses_a_vetoed_read_unless_overridden():
     async def vetoed(ex, symbol, ticker):
         return {"vetoes": ["sweep closed back below, but time/volume stayed above: a painted rejection"],
