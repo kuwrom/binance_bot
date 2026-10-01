@@ -20,6 +20,16 @@ def alerted(t, text):
     return any(text in a["message"] for a in t.j.alerts())
 
 
+def recorder(t):
+    """Capture (kind, message, symbol, urgent) as the guardian's notifier gets them (the journal drops `urgent`)."""
+    sent = []
+
+    async def notify(kind, msg, symbol, urgent):
+        sent.append((kind, msg, symbol, urgent))
+    t._alert = notify
+    return sent
+
+
 def fill_during_cancel(fake, oid, qty=None):
     """The limit fills between the poll's fetch_order and its cancel (price racing to the level)."""
     real = fake.cancel_order
@@ -104,14 +114,26 @@ async def test_a_sibling_whose_cancel_fails_stays_live_and_is_retried_until_it_d
     assert fake.limits[oid_at(fake, 1.06)]["status"] == "canceled" and fake.prearms == {}
 
 
+async def test_a_stuck_sibling_cancel_alerts_once_per_streak_of_three_failures():
+    d, t, fake = desk()
+    fake.price = 1.035
+    sent = recorder(t)
+    r = await d.propose_group([prop(1.04), prop(1.06, stop=1.12)])
+    first, sib = (x["entry_id"] for x in r["placed"])
+    fail_cancel(fake, oid_at(fake, 1.06), times=5)               # the fill's cancel_group, then 4 retries
+    fake.price = 1.05
+    stuck = [(f"entry #{sib}: cancel failing (sibling #{first} filled), order still live", SYM, True)]
+    for n in range(4):                                             # retries 1-4, one per pass; the 3rd alerts
+        await d.poll()
+        assert [(m, s, u) for k, m, s, u in sent if k == "entry_cancel_failing"] == (stuck if n >= 2 else [])
+    ev = await d.poll()
+    assert ev == [{"entry_id": sib, "event": "cancelled", "why": f"sibling #{first} filled"}] and d._cancel_fails == {}
+
+
 async def test_siblings_on_two_symbols_that_both_fill_are_two_protected_trades_flagged_over_budget():
     d, t, fake = desk()
     fake.add_symbol(SYM2, 2.0, tick=0.001)
-    sent = []
-
-    async def notify(kind, msg, symbol, urgent):
-        sent.append((kind, msg, symbol, urgent))
-    t._alert = notify
+    sent = recorder(t)
     await d.propose_group([prop(1.04), prop(2.08, stop=2.2, symbol=SYM2)])
     fake.price = 1.05
     fake.set_price(SYM2, 2.09)                                     # both fill inside one poll interval
@@ -150,17 +172,22 @@ async def test_split_legs_that_fill_within_one_poll_are_counted_once():
     assert abs(tr["amount"] - fake.position) < 1e-9                # not leg 1 + leg 2 + leg 2 again
 
 
-async def test_closing_the_trade_never_relabels_a_leg_that_filled_meanwhile():
+async def test_a_leg_that_fills_while_its_trade_closes_is_kept_and_adopted_as_an_urgent_new_trade():
     d, t, fake = desk()
     fake.price = 1.035
     await d.propose_group([prop(1.04, tranches=[{"limit_price": 1.04}, {"limit_price": 1.07}])])
     fake.price = 1.05
-    await d.poll()
+    old = (await d.poll())[0]["trade_id"]
     far = oid_at(fake, 1.07)
     fill_during_cancel(fake, far, fake.limits[far]["amount"] / 2)  # leg 2 half-fills while close() cancels it
     fake.price = 1.0
     await t.close(SYM, "target", "lesson")
     leg2 = d._rows("leg=2")[0]
     assert leg2["status"] == "pending" and fake.position > 0       # not 'cancelled': the poll adopts it
+    sent = recorder(t)
     ev = await d.poll()
     assert [e["event"] for e in ev] == ["filled"] and list(fake.stops.values()) == [1.10]
+    new = ev[0]["trade_id"]
+    assert new != old and t.j.get_trade(old)["status"] == "closed" and t.j.get_trade(new)["status"] == "open"
+    ((kind, msg, symbol, urgent),) = sent
+    assert kind == "action_fill" and urgent and msg.startswith(f"leg filled after its trade closed: new trade #{new}.")

@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS entries (
 """
 FAST_APPROACH_WINDOW_MS = 15 * 60 * 1000
 DEAD = ("canceled", "expired", "rejected")
+CANCEL_FAILS_ALERT = 3   # sibling-retry cancels failed in a row before a human is told (once per streak)
 
 
 async def withdraw(t, e: dict[str, Any]) -> str:
@@ -83,6 +84,7 @@ class EntryDesk(EntryPlacement):
             if col not in have:
                 self.j.db.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
         self._regime_fn = regime_fn
+        self._cancel_fails: dict[int, int] = {}   # entry id -> sibling-retry cancels failed in a row (guardian memory)
 
     async def _regime(self) -> str:
         if self._regime_fn:
@@ -175,9 +177,22 @@ class EntryDesk(EntryPlacement):
                     events.append({"entry_id": e["id"], "event": "expired"})
             else:
                 why = await self._should_cancel(e, now_ms)
-                if why and await self._cancel_entry(e, "cancelled", why) == "unfilled":
+                if why and await self._cancel_by_rule(e, why) == "unfilled":
                     events.append({"entry_id": e["id"], "event": "cancelled", "why": why})
         return events
+
+    async def _cancel_by_rule(self, e: dict, why: str) -> str:
+        """A cancel rule fired. When the OCO retry keeps failing, a second order stays live in a group that already
+        filled: tell a human once per streak of CANCEL_FAILS_ALERT failures in a row."""
+        got = await self._cancel_entry(e, "cancelled", why)
+        if got != "unknown" or not why.startswith("sibling #"):
+            self._cancel_fails.pop(e["id"], None)
+            return got
+        n = self._cancel_fails[e["id"]] = self._cancel_fails.get(e["id"], 0) + 1
+        if n == CANCEL_FAILS_ALERT:
+            await self.tr.alert("entry_cancel_failing", f"entry #{e['id']}: cancel failing ({why}), order still live",
+                                e["symbol"], True)
+        return got
 
     async def _should_cancel(self, e: dict, now_ms: int) -> str | None:
         sib = self._filled_sibling(e)
@@ -221,6 +236,7 @@ class EntryDesk(EntryPlacement):
         if tid:
             return await tranches.join(self, e, pos, tid)
         sib = self._filled_sibling(e)            # a sibling on another symbol filled too: two positions, one budget
+        orphan = bool(e.get("tranche")) and tranches.parent_closed(self, e)   # a fresh position nobody asked for
         fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
         tid = self.j.create_trade(sym, e["setup"], e["thesis"], e["stop_price"], e["leverage"], e["plan"],
                                   {"entry_type": "limit", "level_type": e["level_type"], "level_reason": e["level_reason"],
@@ -236,7 +252,8 @@ class EntryDesk(EntryPlacement):
                                          keep_tranche=e.get("tranche"))
         late = "".join([f"; #{i} filled before its cancel (adopted next poll)" for i in others["filled_first"]] +
                        [f"; #{i} cancel failed (retried next poll)" for i in others["cancel_failed"]])
-        await tr.alert("action_fill", (f"sibling #{sib} also filled: group over its single-bet budget. " if sib else "")
-                       + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed; "
-                       f"{others['cancelled']} sibling order(s) cancelled{late}", sym, bool(sib))
+        head = ((f"sibling #{sib} also filled: group over its single-bet budget. " if sib else "")
+                + (f"leg filled after its trade closed: new trade #{tid}. " if orphan else ""))
+        await tr.alert("action_fill", head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed; "
+                       f"{others['cancelled']} sibling order(s) cancelled{late}", sym, bool(head))
         return {"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill, "qty": qty}

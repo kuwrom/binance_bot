@@ -207,7 +207,8 @@ async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.
 
 @tool
 async def pending_entries() -> list[dict[str, Any]]:
-    """Resting limit entries (group, level, limit, stop, expiry)."""
+    """Resting limit entries (group, level, limit, stop, expiry). May also list rows awaiting the guardian: one that
+    filled before its cancel landed (adopted as a trade within 5 s) or one whose cancel failed (retried each poll)."""
     return EntryDesk(get_app().trader).pending()
 
 
