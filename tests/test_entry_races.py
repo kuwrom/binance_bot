@@ -44,7 +44,6 @@ async def test_7_siblings_on_two_symbols_filling_in_one_poll_stay_protected_and_
     assert d.pending() == []
 
 
-@pytest.mark.xfail(strict=True, reason="#8: _on_fill finds no position and never journals the round trip")
 async def test_8_a_fill_stopped_out_before_the_poll_is_journaled_as_a_round_trip(monkeypatch):
     d, t, fake = desk()
     await d.propose_group([prop(1.04)])
@@ -61,7 +60,7 @@ async def test_8_a_fill_stopped_out_before_the_poll_is_journaled_as_a_round_trip
 
 
 async def test_8_a_fill_stopped_out_before_the_poll_still_cancels_its_oco_siblings():
-    # the 'no position' branch still returns before cancel_group; the OCO rule in _should_cancel (#7) retires the
+    # the round trip cancels its OCO siblings like any fill; the OCO rule in _should_cancel (#7) also retires the
     # siblings of any 'filled' or 'error' row on the next look at them
     d, t, fake = desk()
     await d.propose_group([prop(1.04), prop(2.08, stop=2.2, symbol=SYM2)])

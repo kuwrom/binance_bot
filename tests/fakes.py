@@ -5,7 +5,8 @@
   cancelled only with params trigger=True; ONE closePosition stop per symbol and side (-4130); -2021 for a stop
   that would trigger at once
 - moving a price (`fake.price = x`, `set_price(sym, x)`) fills resting limits and triggers stops on the way, with
-  closePosition semantics (fake_engine.py); `advance(s)` expires GTD limits; `fill_limit` / `trigger_stop` force one
+  closePosition semantics (fake_engine.py); `advance(s)` expires GTD limits and forgets orders that died unfilled
+  3 days ago (-2013); `fill_limit` / `trigger_stop` force one
 - rejections: reduce-only without a position (-2022), tick size (-4014), min notional (-4164), margin (-2019),
   GTD under 10 min (-5040), a client id that an OPEN order already uses (-4116)
 - fault injection: answers lost after the order ran (-1007 / 503), 503 before it ran, -1021 around cancels
@@ -134,10 +135,13 @@ class FakeCcxt(Engine):
     # --- order views (the fields ccxt's parse_order fills)
     def _order_view(self, i):
         o = self.limits.get(i) or self.market_orders[i]
+        # ccxt 4.5.84 parse_order: lastTradeTimestamp = updateTime only for 'closed', or 'open' with a fill; None for
+        # canceled/expired orders, even (partly) filled ones
+        last = o["last_ts"] if o["status"] == "closed" or (o["status"] == "open" and o["filled"]) else None
         return {"id": i, "clientOrderId": o["cid"], "symbol": o["symbol"], "type": o["type"], "side": o["side"],
                 "price": o["price"], "amount": o["amount"], "filled": o["filled"], "average": o["avg"],
                 "remaining": o["amount"] - o["filled"], "status": o["status"], "reduceOnly": o["reduce"],
-                "timestamp": o["ts"], "lastTradeTimestamp": o["last_ts"]}
+                "timestamp": o["ts"], "lastTradeTimestamp": last}
 
     def _algo_view(self, i):
         a = self.algo.get(i, {})
@@ -209,7 +213,7 @@ class FakeCcxt(Engine):
         # placed without a margin or position check (change log 2025-11-06); reduce-only is enforced at trigger
         (self.stops if close else self.prearms)[i] = trig
         self.algo[i] = {"symbol": s, "qty": None if close else amount, "trigger": trig, "cid": cid,
-                        "status": "NEW", "close": close}
+                        "status": "NEW", "close": close, "ts": self.now_ms()}
         return self._algo_view(i)
 
     def _new_limit(self, s, side, amount, price, params, cid):

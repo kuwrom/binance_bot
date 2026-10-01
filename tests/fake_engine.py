@@ -11,6 +11,7 @@ from tests import fake_errors as err
 
 SYM = "PUMP/USDT:USDT"
 FEE = 0.0005
+FORGET_MS = 3 * 86_400_000   # Query-Order: an unfilled CANCELED/EXPIRED order is not found once 3 days old
 # ccxt 4.5.84 parse_order_status() for algoStatus (Query-Algo-Order doc / ALGO_UPDATE statuses)
 ALGO_STATUS = {"NEW": "open", "TRIGGERING": "open", "TRIGGERED": "closed", "FINISHED": "closed",
                "CANCELED": "canceled", "REJECTED": "rejected", "EXPIRED": "expired"}
@@ -30,11 +31,20 @@ class Engine:
 
     def advance(self, seconds: float) -> None:
         """Move the exchange clock: GTD limits past their goodTillDate expire on the exchange, keeping what filled
-        (New-Order doc: GTD auto-cancels at goodTillDate). Only the exchange's clock moves, not the desk's."""
+        (New-Order doc: GTD auto-cancels at goodTillDate). Orders that died unfilled are forgotten 3 days after their
+        creation (Query-Order and Query-Algo-Order docs: "will not be found" when CANCELED or EXPIRED, NO filled
+        trade, and created time + 3 days < current time; -2013). Only the exchange's clock moves, not the desk's."""
         self.clock_s += seconds
         for o in self.limits.values():
             if o["status"] == "open" and o["gtd"] and o["gtd"] <= self.now_ms():
                 o["status"] = "expired"
+        old = self.now_ms() - FORGET_MS
+        for i in [i for i, o in self.limits.items() if o["status"] in ("canceled", "expired") and not o["filled"]
+                  and o["ts"] < old]:
+            del self.limits[i]
+        for i in [i for i, a in self.algo.items() if a.get("status") in ("CANCELED", "EXPIRED") and not a.get("actual")
+                  and a.get("ts", old) < old]:
+            del self.algo[i]
 
     # ------------------------------------------------------------ prices
     def set_price(self, s: str, p: float) -> None:

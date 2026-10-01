@@ -103,17 +103,20 @@ def parent_closed(desk, e: dict[str, Any]) -> bool:
     return False
 
 
-async def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int) -> dict[str, Any]:
+async def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int,
+               filled_at: str | None = None) -> dict[str, Any]:
     """A later fill on this group's open trade is an add (the closePosition stop already covers the whole size): a
-    split entry's next leg, or an OCO sibling whose cancel came too late (then the group is over its budget)."""
+    split entry's next leg, or an OCO sibling whose cancel came too late (then the group is over its budget).
+    filled_at: when it filled on the exchange (entries_fills.first_fill_ms), not when the poll saw it."""
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
     # amount = peak size; a fill that landed before the first one was adopted is already in it (count it once)
     peak = max(float((desk.j.get_trade(tid) or {}).get("amount") or 0), qty)
     owners = desk._rows("trade_id=?", (tid,))
     leg = e.get("tranche") and any(r["tranche"] == e["tranche"] for r in owners)
+    if not desk._settle(e["id"], "pending", status="filled", trade_id=tid, filled_at=filled_at or _now(),
+                        fill_price=e["limit_price"], filled_qty=e["amount"]):
+        return {"entry_id": e["id"], "event": "resolved_elsewhere"}
     desk.j.update_trade(tid, entry_price=fill, amount=peak, notional=round(fill * qty, 2))
-    desk._update(e["id"], status="filled", trade_id=tid, filled_at=_now(), fill_price=e["limit_price"],
-                 filled_qty=e["amount"])
     if not leg:
         desk.j.log_decision("sibling_fill", f"entry #{e['id']} filled before its cancel landed: joined trade #{tid}",
                             e["symbol"], snapshot={"trade_id": tid, "avg_entry": fill, "contracts": qty})

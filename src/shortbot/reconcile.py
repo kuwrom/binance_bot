@@ -54,22 +54,26 @@ def summarize_income(rows: list[dict[str, Any]]) -> dict[str, float]:
     return {k: round(v, 6) if isinstance(v, float) else v for k, v in s.items()}
 
 
-async def exit_fills(t, symbol: str, since_ms: int) -> tuple[float | None, float]:
-    """Volume-weighted buy (cover) price and quantity since the trade opened."""
+async def exit_fills(t, symbol: str, since_ms: int, until_ms: int | None = None) -> tuple[float | None, float]:
+    """Volume-weighted buy (cover) price and quantity since the trade opened (up to until_ms, if given)."""
     trades = await t.fetch_my_trades(symbol, since=since_ms, limit=500)
-    buys = [x for x in trades if x.get("side") == "buy"]
+    buys = [x for x in trades if x.get("side") == "buy" and (until_ms is None or int(x["timestamp"]) <= until_ms)]
     qty = sum(float(x["amount"]) for x in buys)
     if not qty:
         return None, 0.0
     return sum(float(x["price"]) * float(x["amount"]) for x in buys) / qty, qty
 
 
-async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "") -> dict[str, Any]:
-    """Close a journal trade with exchange-truth PnL. Safe to call when the position is already flat."""
+async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
+                   until_ms: int | None = None) -> dict[str, Any]:
+    """Close a journal trade with exchange-truth PnL. Safe to call when the position is already flat.
+    until_ms: the trade's end when it is known (a round trip rebuilt from trade history), so income and fills of
+    later activity on the symbol are not counted in it."""
     t, j = trader.t, trader.j
     since = iso_to_ms(trade["opened_at"])
-    inc = summarize_income(await income_since(t, since, trade["symbol"]))
-    exit_px, _ = await exit_fills(t, trade["symbol"], since)
+    rows = await income_since(t, since, trade["symbol"])
+    inc = summarize_income([r for r in rows if until_ms is None or int(r["time"]) <= until_ms])
+    exit_px, _ = await exit_fills(t, trade["symbol"], since, until_ms)
     if inc["liquidated"] and "liquidat" not in reason:
         reason = f"LIQUIDATED ({reason})"
     j.close_trade(trade["id"], exit_px, inc["net"], reason, lesson,

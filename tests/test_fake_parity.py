@@ -145,6 +145,36 @@ async def test_gtd_needs_ten_minutes_and_expires_on_the_exchange():
     assert fake.position == 30
 
 
+async def test_binance_forgets_dead_unfilled_orders_three_days_after_creation():
+    fake = FakeCcxt()
+    dead = await fake.create_order(SYM, "limit", "sell", 100, 1.04, gtd())
+    await fake.cancel_order(dead["id"], SYM)
+    part = await fake.create_order(SYM, "limit", "sell", 100, 1.05, gtd(hours=1))
+    fake.fill_limit(part["id"], qty=30)
+    pre = await stop(fake, 1.2, qty=100)
+    await fake.cancel_order(pre["id"], SYM, params=TRIG)
+    fake.advance(3 * 86400 - 60)
+    assert (await fake.fetch_order(dead["id"], SYM))["status"] == "canceled"
+    fake.advance(120)                                                        # created + 3 days < now
+    with pytest.raises(ccxt.OrderNotFound, match="-2013"):
+        await fake.fetch_order(dead["id"], SYM)
+    with pytest.raises(ccxt.OrderNotFound, match="-2013"):
+        await fake.fetch_order(pre["id"], SYM, params=TRIG)
+    got = await fake.fetch_order(part["id"], SYM)                            # a fill keeps it (90 days)
+    assert got["status"] == "expired" and got["filled"] == 30
+
+
+async def test_last_trade_timestamp_only_for_closed_or_partly_filled_open_orders():
+    fake = FakeCcxt()
+    o = await fake.create_order(SYM, "limit", "sell", 100, 1.04, gtd(hours=1))
+    assert (await fake.fetch_order(o["id"], SYM))["lastTradeTimestamp"] is None
+    fake.fill_limit(o["id"], qty=30)
+    assert (await fake.fetch_order(o["id"], SYM))["lastTradeTimestamp"] == fake.fills[-1]["timestamp"]
+    fake.advance(3700)
+    got = await fake.fetch_order(o["id"], SYM)
+    assert got["status"] == "expired" and got["filled"] == 30 and got["lastTradeTimestamp"] is None
+
+
 async def test_placement_rejections_tick_min_notional_and_margin():
     fake = FakeCcxt(equity=100)
     with pytest.raises(ccxt.BadRequest, match="-4014"):
