@@ -96,12 +96,13 @@ def match_coins(m: Market, coin: Coin, i: int, need_bars: int, per: int, rng: ra
 
 def placebo_plan(c: Coin, i: int, d: dict[str, Any], meta: dict[str, Any], **extra: Any) -> Plan:
     """The donor's exits on coin c at bar i (market entry at the close): stop in ATR, targets in R, same time stop,
-    breakeven, trail and funding budget."""
+    breakeven, trail and funding budget. A long donor (meta side "long", strategies_long) gets the mirrored plan."""
     px = c.rows[i]["c"]
-    stop = px + meta["stop_atr"] * atr_abs(c, i)
-    risk = stop - px
-    tg = tuple((px - r * risk, f) for r, f in meta["targets_r"])
-    return Plan(stop=stop, targets=tg, time_stop=d["time_stop"], be_r=d.get("be_r"),
+    s = -1 if meta.get("side") == "long" else 1
+    stop = px + s * meta["stop_atr"] * atr_abs(c, i)
+    risk = s * (stop - px)
+    tg = tuple((px - s * r * risk, f) for r, f in meta["targets_r"])
+    return Plan(stop=stop, targets=tg, time_stop=d["time_stop"], be_r=d.get("be_r"), side=meta.get("side", "short"),
                 trail_act_r=d.get("trail_act_r"), trail_dist_r=d.get("trail_dist_r") or 1.0,
                 fund_budget_r=d.get("fund_budget_r"), fund_follow_r=d.get("fund_follow_r") or 0.5,
                 meta=dict(meta, donor=(d["symbol"], d["signal_i"]), **extra))

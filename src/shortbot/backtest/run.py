@@ -3,6 +3,7 @@
     .venv/bin/python -m shortbot.backtest.run                 # 10-day cache (data/shortbot.db study_coins)
     .venv/bin/python -m shortbot.backtest.run --days60        # 60-day history (shortbot.histdata.load60)
     .venv/bin/python -m shortbot.backtest.run --days60 --round1   # + round-1 variants (strategies_v2)
+    .venv/bin/python -m shortbot.backtest.run --days60 --long     # the long sleeve only (strategies_long, research)
     .venv/bin/python -m shortbot.backtest.run --days60 --round2   # + round-2 variants (strategies_v3, report_v3)
     .venv/bin/python -m shortbot.backtest.run --days60 --round3   # + round-3 veto tests (strategies_v4, report_v4)
     ... --round3 --round4      # + round-4 corrections table (report_v5); defaults --placebo=matched --dsr=clustered
@@ -138,6 +139,7 @@ def main(argv: list[str] | None = None) -> None:
                     help="Deflated Sharpe: legacy (raw N, all-trial V[SR]) or clustered (round 4 effective N)")
     ap.add_argument("--round4", action="store_true", help="add the round-4 corrections section (report_v5)")
     ap.add_argument("--compare", type=Path, help="--round4: an earlier results.json to diff every verdict against")
+    ap.add_argument("--long", action="store_true", help="ledger = the long sleeve (strategies_long; research)")
     a = ap.parse_args(argv)
     raw = load_coins(a.days60)
     m = Market(raw)
@@ -153,6 +155,9 @@ def main(argv: list[str] | None = None) -> None:
         from .strategies_v4 import ledger as ledger4
         attach_spot(m, raw)
         led = ledger4()
+    if a.long:
+        from .strategies_long import trials_long
+        led = trials_long()
     res = run_all(m, ledger=led, placebo=a.placebo)
     rep = build(res, m, stress=run_all(m, STRESS, controls=False, ledger=led), dsr_mode=a.dsr)
     md = markdown(rep)
