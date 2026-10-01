@@ -157,8 +157,14 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
     stopped = await _drop_prearm(desk, e, rt["exit_orders"])
     reason = (f"pre-armed stop {e['stop_price']} filled before the poll" if stopped
               else "closed on the exchange before the poll (liquidation / manual / ADL)")
+    ours = {str(r["order_id"]) for r in desk._rows("symbol=? AND order_id IS NOT NULL AND status NOT LIKE "
+                                                   "'external%'", (sym,))}
+    foreign = [x for x in rt["orders"] if x not in ours]
+    if foreign:   # the position's PnL is exact, but it is not one clean bet: research must be able to tell
+        reason += f"; NOT one bet: includes orders that aren't this desk's limit entries ({', '.join(foreign)})"
     tid = new_trade(desk, e, rt["opened_ms"], round_trip={"orders": rt["orders"], "exit_orders": rt["exit_orders"],
-                                                          "exit": "prearm_stop" if stopped else "exchange"})
+                                                          "exit": "prearm_stop" if stopped else "exchange",
+                                                          "foreign_orders": foreign})
     if not _claim(desk, e, own(rt["sells"], e["order_id"]), tid):
         j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}
@@ -178,7 +184,8 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
     net = f"net {res['net']:+.2f} USDT" if res else "PnL pending (reconcile closes it within a minute)"
     await desk.tr.alert("action_fill", f"limit short #{e['id']} filled {rt['qty']:g} @ {rt['entry']:.6g} and was "
                         f"closed @ {rt['exit']:.6g} ({reason}): trade #{tid} journalled closed, {net}. "
-                        f"{others['cancelled']} sibling order(s) cancelled{late_note(others)}. Add the lesson.",
+                        f"{others['cancelled']} sibling order(s) cancelled{late_note(others)}. No position to "
+                        "manage; record any lesson with add_learning.",
                         sym, True)
     return {"entry_id": e["id"], "event": "round_trip", "trade_id": tid, "fill": rt["entry"], "qty": rt["qty"],
             "exit": rt["exit"], "net": res["net"] if res else None}

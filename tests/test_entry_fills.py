@@ -97,6 +97,23 @@ async def test_same_symbol_siblings_filled_and_stopped_out_between_polls_are_one
     assert {(x["status"], x["trade_id"]) for x in d._rows("1=1")} == {("filled", tr["id"])}
 
 
+async def test_a_round_trip_that_took_in_an_order_the_desk_didnt_place_says_it_isnt_one_bet():
+    d, t, fake = desk()
+    sent = recorder(t)
+    fake.price = 1.035
+    await d.propose_group([prop(1.04)])
+    ext = await fake.create_order(SYM, "limit", "sell", 20, 1.05)            # placed on Binance by hand
+    fake.price = 1.06                                                       # both fill
+    await fake.create_order(SYM, "market", "buy", fake.position, None, {"reduceOnly": True})   # closed in the app
+    (ev,) = await d.poll()
+    tr = t.j.get_trade(ev["trade_id"])
+    assert ev["event"] == "round_trip" and tr["entry_features"]["round_trip"]["foreign_orders"] == [ext["id"]]
+    assert tr["pnl"] == pytest.approx(net_income(fake)) and ext["id"] in tr["exit_reason"]
+    assert fake.prearms == {}                                               # its unused pre-armed stop went too
+    ((msg, urgent),) = [(m, u) for k, m, s, u in sent if k == "action_fill"]
+    assert urgent and "NOT one bet" in msg and ext["id"] in msg and "pre-armed stop" not in msg
+
+
 async def test_a_fill_into_a_journalled_position_that_closed_before_the_poll_is_counted_once():
     d, t, fake = desk()
     fake.price = 1.035
