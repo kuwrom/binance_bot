@@ -31,7 +31,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 | New setup | Trade as `exp_<name>`, then register it in `setups.py` and add `.claude/skills/<name>/SKILL.md` | `journal.stats.by_setup`, `research_report.by_setup` |
 | Management rule for one trade | `update_plan` | MAE/MFE and R on that trade |
 | Default management of a setup | `Setup.default_plan` in `setups.py` | `by_setup` avg R, MAE/MFE |
-| Guardian alert thresholds | Constants at the top of `guardian.py` | alert usefulness (journal alerts) |
+| Guardian alert thresholds | Constants at the top of `guardian_positions.py` (job cadence and timeouts: `guardian.py`) | alert usefulness (journal alerts) |
 | New data source (paid API later, etc.) | New module, then add it to `build_metrics`/`news` behind `data_missing` so failures fail closed | as above |
 
 ## Rules of evidence
