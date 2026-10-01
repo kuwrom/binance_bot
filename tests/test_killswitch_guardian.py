@@ -20,6 +20,11 @@ def guardian():
     return g, fake
 
 
+def protective_pass(g, i):
+    """What the protective lane writes after a good pass (Guardian._heartbeat), one distinct value per pass."""
+    g.j.set(ks.HEARTBEAT_KEY, str(time.time() - 10 + i))
+
+
 async def two_entries(g, fake):
     await EntryDesk(g.app.trader, regime_fn=favorable).propose_group([prop(1.04), prop(1.06, stop=1.12)])
     return {o["price"]: i for i, o in fake.limits.items()}
@@ -102,8 +107,11 @@ async def test_governor_drawdown_stop_trips_reducing(monkeypatch):
 async def test_guardian_lifts_a_stale_halt_and_flags_a_clear_that_bypassed_admin():
     g, fake = guardian()
     await ks.trip(g.j, SETTINGS, HALTED, "session watchdog", "heartbeat 12 min old", cause=STALE)
+    protective_pass(g, 1)
     await g.check_entries()
-    assert ks.read(g.j)["state"] == HALTED and "kill_switch_state" in kinds(g)   # 1st fresh check
+    await g.check_entries()                                   # no new pass in between: no count
+    assert ks.read(g.j)["state"] == HALTED and "kill_switch_state" in kinds(g)
+    protective_pass(g, 2)
     await g.check_entries()
     assert ks.read(g.j)["state"] == ACTIVE and g.j.alerts(1)[0]["kind"] == "kill_switch_loosened"
     await ks.trip(g.j, SETTINGS, HALTED, "agent (MCP)", "manual halt")
@@ -118,7 +126,8 @@ async def test_a_stale_halt_lifting_back_to_a_sticky_trip_is_not_a_tamper_alarm(
     g, fake = guardian()
     await ks.trip_on_daily_loss(g.j, SETTINGS, 9_600, -400)
     await ks.trip(g.j, SETTINGS, HALTED, "session watchdog", "laptop slept", cause=STALE)
-    for _ in range(2):
+    for i in (1, 2):
+        protective_pass(g, i)
         await g.check_entries()
     a = g.j.alerts(1)[0]
     assert ks.read(g.j)["cause"] == "daily_loss" and a["kind"] == "kill_switch_loosened"

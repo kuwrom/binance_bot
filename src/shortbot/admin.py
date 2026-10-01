@@ -52,6 +52,7 @@ async def run(args: argparse.Namespace, settings: Settings | None = None,
     j = journal or Journal(s.db_path)
     if args.cmd == "status":
         return ks.status(j)
+    shown = j.get(ks.KV_KEY)   # the exact row the human confirms; the clear swaps only that row
     st = ks.read(j)
     if ks.LEVEL[args.to] >= st["level"]:
         return {"ok": False, "error": f"the desk is {st['state']}: {args.to} is not a loosening (to trip it, use "
@@ -59,7 +60,7 @@ async def run(args: argparse.Namespace, settings: Settings | None = None,
     why = confirm(args.to, st)
     if why:
         return {"ok": False, "error": why}
-    return await ks.clear(j, s, args.to, f"human:{getpass.getuser()} (tty)", args.reason)
+    return await ks.clear(j, s, args.to, f"human:{getpass.getuser()} (tty)", args.reason, shown)
 
 
 def main() -> None:

@@ -82,9 +82,11 @@ async def test_stale_heartbeat_halts_withdraws_entries_then_lifts_itself_when_th
     st = ks.read(t.j)
     assert not r["ok"] and st["state"] == HALTED and st["cause"] == STALE and st["by"] == "session watchdog"
     assert d.pending() == [] and fake.prearms == {} and fake.orders[-1][0] != "market"
-    t.j.set(ks.HEARTBEAT_KEY, str(time.time()))
-    assert (await ks.gate(t, "x"))["kill_switch"] == HALTED                    # 1st fresh check
-    assert await ks.gate(t, "x") is None and ks.read(t.j)["state"] == ACTIVE   # 2nd: lifted
+    t.j.set(ks.HEARTBEAT_KEY, str(time.time() - 1))                            # guardian pass 1
+    assert (await ks.gate(t, "x"))["kill_switch"] == HALTED
+    assert (await ks.gate(t, "x"))["kill_switch"] == HALTED                    # same pass, re-read: no count
+    t.j.set(ks.HEARTBEAT_KEY, str(time.time()))                                # guardian pass 2
+    assert await ks.gate(t, "x") is None and ks.read(t.j)["state"] == ACTIVE   # lifted
     assert t.j.decisions()[0]["action"] == "kill_switch_auto_clear" and d.pending() == []
 
 
@@ -100,15 +102,28 @@ async def test_a_sticky_trip_during_a_stale_halt_outlives_the_auto_clear():
             assert not (await ks.trip_on_daily_loss(j, SETTINGS, 9_600, -400))["changed"]
             assert ks.read(j)["state"] == HALTED
         await ks.auto_clear_stale(j, SETTINGS, now)
+        j.set(ks.HEARTBEAT_KEY, str(now - 1))   # the next guardian pass
         back = await ks.auto_clear_stale(j, SETTINGS, now)
         assert back["state"] == REDUCING and back["cause"] == "daily_loss" and ks.read(j)["by"] == "guardian"
 
 
-async def test_auto_clear_needs_consecutive_fresh_checks_and_never_lifts_other_causes():
+async def test_auto_clear_counts_distinct_guardian_passes_not_checks_from_any_process():
     now = time.time()
     j = Journal(":memory:")
     await ks.trip(j, SETTINGS, HALTED, "session watchdog", "stale", cause=STALE)
-    for age, expect in ((5, HALTED), (100, HALTED), (5, HALTED), (5, ACTIVE)):   # 100 s old resets the count
+    j.set(ks.HEARTBEAT_KEY, str(now - 5))
+    for _ in range(4):   # one good pass, read by the guardian, the MCP server, the brief, a CLI call...
+        await ks.auto_clear_stale(j, SETTINGS, now)
+    assert ks.read(j)["state"] == HALTED
+    j.set(ks.HEARTBEAT_KEY, str(now - 1))   # a second, different pass
+    assert (await ks.auto_clear_stale(j, SETTINGS, now))["state"] == ACTIVE
+
+
+async def test_auto_clear_needs_consecutive_fresh_passes_and_never_lifts_other_causes():
+    now = time.time()
+    j = Journal(":memory:")
+    await ks.trip(j, SETTINGS, HALTED, "session watchdog", "stale", cause=STALE)
+    for age, expect in ((5, HALTED), (100, HALTED), (4, HALTED), (3, ACTIVE)):   # 100 s old resets the count
         j.set(ks.HEARTBEAT_KEY, str(now - age))
         await ks.auto_clear_stale(j, SETTINGS, now)
         assert ks.read(j)["state"] == expect

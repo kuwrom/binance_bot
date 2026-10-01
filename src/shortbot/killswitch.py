@@ -33,7 +33,7 @@ HEARTBEAT_KEY = "guardian_heartbeat"   # "protection last worked": written after
 STALE_HEARTBEAT_S = 600                # 240 s job timeout + retry stays under it; Mac sleep counts as downtime
 SLOW_HEARTBEAT_S = 180                 # brief warning only
 FRESH_HEARTBEAT_S = 60
-AUTO_CLEAR_CHECKS = 2                  # consecutive fresh checks before a stale-heartbeat halt lifts itself
+AUTO_CLEAR_CHECKS = 2                  # distinct fresh heartbeats (guardian passes) before a stale halt lifts
 STALE = "stale_heartbeat"
 ALLOWED = "close, partial close, move_stop (tighten), cancel entries, flatten"
 CLEAR_HINT = "only a human clears it: `.venv/bin/shortbot-admin clear --reason '...'` from a real terminal"
@@ -110,7 +110,7 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
     else:
         raise RuntimeError("kill switch state kept changing under us; trip again")
     if cause == STALE:
-        j.set(FRESH_KEY, "0")
+        j.set(FRESH_KEY, "{}")
     j.log_decision("kill_switch", f"{cur['state']} -> {state} by {by}: {reason}", None,
                    snapshot={**new, "evidence": evidence})
     await notify(j, settings, "kill_switch", f"{state} (was {cur['state']}) by {by}: {reason}. Allowed now: "
@@ -118,33 +118,54 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
     return {"ok": True, "changed": True, **new}
 
 
-async def clear(j, settings, state: str, by: str, reason: str) -> dict[str, Any]:
+async def clear(j, settings, state: str, by: str, reason: str, shown: str | None) -> dict[str, Any]:
     """Loosen (or set) the state. Human-only: called by shortbot-admin after its terminal confirmation, never by an
-    MCP tool or a `shortbot` subcommand (the agent's allowlist covers those)."""
+    MCP tool or a `shortbot` subcommand (the agent's allowlist covers those). `shown` is the raw row the human
+    confirmed: if a trip landed meanwhile, nothing changes and they re-run against the new state."""
     if state not in LEVEL or not (reason or "").strip():
         raise ValueError("clear needs a state (ACTIVE/REDUCING/HALTED) and a reason")
     prev = read(j)
     row = {"state": state, "level": LEVEL[state], "by": by, "reason": reason.strip(), "at": _now_iso(),
            "cause": "human", "prev": prev["state"]}
-    j.set(KV_KEY, json.dumps(row))
+    if not _cas(j, shown, row):
+        return {"ok": False, "error": f"the kill-switch state changed while you were confirming (now {prev['state']} "
+                                      f"by {prev.get('by')}: {prev.get('reason')}): nothing changed, re-run"}
     j.log_decision("kill_switch_clear", f"{prev['state']} -> {state} by {by}: {reason}", None,
                    snapshot={**row, "cleared": {k: prev.get(k) for k in (*_KEEP, "since")}})
     await notify(j, settings, "kill_switch_clear", f"{prev['state']} -> {state} by {by}: {reason}", urgent=False)
     return {"ok": True, **row}
 
 
+def _fresh_passes(j, now: float | None) -> int:
+    """Consecutive DISTINCT fresh heartbeats seen (each one = a guardian protective pass that worked); a stale or
+    missing one resets the count. Re-reading the same heartbeat from another process doesn't count again."""
+    hb, age = j.get(HEARTBEAT_KEY), heartbeat_age(j, now)
+    try:
+        seen = json.loads(j.get(FRESH_KEY) or "{}")
+        n, last = (int(seen.get("n", 0)), seen.get("hb")) if isinstance(seen, dict) else (0, None)
+    except ValueError:
+        n, last = 0, None
+    if age is None or age >= FRESH_HEARTBEAT_S:
+        n, last = 0, None
+    elif hb != last:
+        n, last = n + 1, hb
+    else:
+        return n
+    j.set(FRESH_KEY, json.dumps({"n": n, "hb": last}))
+    return n
+
+
 async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, Any] | None:
-    """Lift a stale-heartbeat halt after AUTO_CLEAR_CHECKS consecutive fresh heartbeats: back to the row it replaced,
-    or to a sticky trip that landed meanwhile (the most severe, latest first). Withdrawn entries stay withdrawn."""
+    """Lift a stale-heartbeat halt after AUTO_CLEAR_CHECKS distinct fresh heartbeats (guardian passes): back to the row
+    it replaced, or to a sticky trip that landed meanwhile (the most severe, latest first). Withdrawn entries stay
+    withdrawn."""
     raw = j.get(KV_KEY)
     st = _parse(raw)
     if not st or st.get("cause") != STALE:
         return None
-    age = heartbeat_age(j, now)
-    n = int(j.get(FRESH_KEY) or 0) + 1 if age is not None and age < FRESH_HEARTBEAT_S else 0
-    j.set(FRESH_KEY, str(n))
-    if n < AUTO_CLEAR_CHECKS:
+    if _fresh_passes(j, now) < AUTO_CLEAR_CHECKS:
         return None
+    age = heartbeat_age(j, now) or 0.0
     back = max(reversed([st.get("prev_row") or {"state": ACTIVE}, *st.get("since", [])]),
                key=lambda r: LEVEL.get(r.get("state"), 0))
     if back["state"] == ACTIVE:
@@ -155,7 +176,7 @@ async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, A
     new = {**new, "level": LEVEL[new["state"]], "prev": HALTED}
     if not _cas(j, raw, new):
         return None
-    j.set(FRESH_KEY, "0")
+    j.set(FRESH_KEY, "{}")
     j.log_decision("kill_switch_auto_clear", f"HALTED (stale heartbeat) -> {new['state']}", None,
                    snapshot={"restored": new, "cleared": {k: st.get(k) for k in _KEEP}})
     await notify(j, settings, "kill_switch_clear", f"stale-heartbeat halt lifted: guardian is back. Now {new['state']}"

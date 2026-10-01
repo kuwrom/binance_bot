@@ -1,6 +1,7 @@
 """Kill switch: the persisted state, the gate on every opening path, and the human-only clear (shortbot-admin)."""
 
 import io
+import json
 import re
 import time
 from types import SimpleNamespace
@@ -81,7 +82,9 @@ async def test_an_unreadable_row_fails_closed_and_the_next_trip_repairs_it():
 async def test_clear_loosens_and_keeps_what_it_cleared():
     j = Journal(":memory:")
     await ks.trip(j, SETTINGS, HALTED, "guardian", "drawdown 12.4%")
-    await ks.clear(j, SETTINGS, ACTIVE, "human:kibrom (tty)", "reviewed the week")
+    shown = j.get(ks.KV_KEY)
+    await ks.trip(j, SETTINGS, HALTED, "agent", "a second cause")   # no-op: the row is unchanged
+    await ks.clear(j, SETTINGS, ACTIVE, "human:kibrom (tty)", "reviewed the week", shown)
     assert ks.read(j)["state"] == ACTIVE and ks.read(j)["prev"] == HALTED
     d = j.decisions()[0]
     assert d["action"] == "kill_switch_clear" and "drawdown 12.4%" in d["snapshot"]
@@ -226,3 +229,20 @@ async def test_admin_clear_needs_a_human_at_a_real_terminal(monkeypatch):
     r = await admin.run(clear_args(REDUCING), SETTINGS, j)
     assert r["ok"] and ks.read(j)["state"] == REDUCING and ks.read(j)["by"].startswith("human:")
     assert "not a loosening" in (await admin.run(clear_args(REDUCING), SETTINGS, j))["error"]
+
+
+async def test_admin_clear_fails_if_a_trip_lands_while_the_human_types(monkeypatch):
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    j = Journal(":memory:")
+    await ks.trip(j, SETTINGS, REDUCING, "guardian", "daily loss -3.1%", cause="daily_loss")
+
+    class Busy(Tty):   # another process escalates between the prompt and the answer
+        def readline(self, *a):
+            j.set(ks.KV_KEY, json.dumps({"state": HALTED, "by": "agent (MCP)", "reason": "squeeze", "at": "t",
+                                         "cause": "manual"}))
+            return super().readline()
+    monkeypatch.setattr(admin, "_tty", lambda: Busy())
+    r = await admin.run(clear_args(), SETTINGS, j)
+    assert not r["ok"] and "re-run" in r["error"] and ks.read(j)["reason"] == "squeeze"
+    monkeypatch.setattr(admin, "_tty", lambda: Tty())   # the re-run shows (and clears) the new state
+    assert (await admin.run(clear_args(), SETTINGS, j))["ok"] and ks.read(j)["state"] == ACTIVE
