@@ -53,6 +53,16 @@ async def test_reducing_leaves_entries_resting_and_a_fill_is_protected_and_alert
     assert ks.read(g.j)["state"] == REDUCING   # never auto-closed, never cleared
 
 
+async def test_every_fill_while_reducing_is_alerted_including_a_late_oco_sibling():
+    g, fake = guardian()
+    fake.price = 1.035
+    await two_entries(g, fake)
+    await ks.trip(g.j, SETTINGS, REDUCING, "guardian", "daily loss")
+    fake.price = 1.07                                       # a spike through both levels between two polls
+    await g.check_entries()
+    assert kinds(g).count("fill_while_reducing") == 2 and list(fake.stops.values()) == [1.10]
+
+
 async def test_daily_loss_breach_trips_reducing_and_records_the_limit_used():
     g, fake = guardian()
     fake.income.append({"symbol": "PUMPUSDT", "incomeType": "REALIZED_PNL", "income": "-400", "asset": "USDT",

@@ -8,38 +8,23 @@ from __future__ import annotations
 from typing import Any
 
 from . import killswitch as ks
+from .entries import EntryDesk, withdraw
 from .killswitch import HALTED, REDUCING
 
 CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who typed it; shortbot-admin can
 
 
-async def _withdraw(t, e: dict[str, Any]) -> str:
-    """Cancel one resting limit, the limit FIRST; its pre-armed stop goes only when the cancel confirms nothing filled
-    ("unfilled"). "filled" / "unknown" keep the stop and the pending row, so the guardian's fill poll protects and
-    journals the position (same rule as EntryDesk._rollback)."""
-    try:
-        o = await t.cancel_order(e["order_id"], e["symbol"]) or {}
-    except Exception:  # noqa: BLE001 - filled, expired or unreachable: unfilled is not confirmed
-        return "unknown"
-    if float(o.get("filled") or 0) > 0:
-        return "filled"
-    if e.get("prearm_id"):
-        try:
-            await t.cancel_order(e["prearm_id"], e["symbol"], params={"trigger": True})
-        except Exception:  # noqa: BLE001 - gone already; a reduce-only stop can't open anything
-            pass
-    return "unfilled"
-
-
 async def cancel_resting(desk, reason: str) -> dict[str, list[int]]:
-    """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED)."""
+    """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED). Only an
+    "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
+    "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position."""
     out: dict[str, list[int]] = {"cancelled": [], "left_for_fill_poll": []}
     rows = desk.pending()
     if not rows:
         return out
     t = desk.tr.t
     for e in rows:
-        if await _withdraw(t, e) == "unfilled":
+        if await withdraw(t, e) == "unfilled":
             desk._update(e["id"], status="cancelled", reason=reason)
             out["cancelled"].append(e["id"])
         else:
@@ -52,7 +37,6 @@ async def halt(tr, state: str, by: str, reason: str, evidence: dict | None = Non
     """Trip to `state`; when the desk is (now) HALTED, withdraw the resting entries right away."""
     res = await ks.trip(tr.j, tr.ex.settings, state, by, reason, evidence, cause)
     if ks.read(tr.j)["state"] == HALTED:
-        from .entries import EntryDesk
         try:
             res["resting"] = await cancel_resting(EntryDesk(tr), f"kill switch HALTED: {reason}")
         except Exception as e:  # noqa: BLE001 - the guardian's sweep retries
