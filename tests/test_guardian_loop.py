@@ -182,18 +182,30 @@ async def test_timeout_counts_as_a_failure():
     assert ln.streak.fails == {"positions": 1}
 
 
-async def test_slow_jobs_remember_their_last_run_across_restarts():
+async def test_slow_jobs_remember_their_last_successful_run_across_restarts():
     j, runs = Journal(":memory:"), []
 
     async def daily():
-        runs.append("daily")
+        runs.append("sweeps")
+
+    async def flaky_daily():
+        runs.append("supply")
+        if runs.count("supply") == 1:
+            raise RuntimeError("coingecko down")
 
     async def fast():
         runs.append("fast")
-    for _ in range(2):   # a restart = a new lane on the same journal
-        await lane_with(Job("sweeps", daily, 86400, 5), Job("market_map", fast, 600, 5), journal=j).tick()
-    assert runs == ["daily", "fast", "fast"]
-    assert j.get(KV_LAST_RUN + "sweeps") and j.get(KV_LAST_RUN + "market_map") is None
+
+    def lane():   # a restart = a new lane on the same journal
+        return lane_with(Job("sweeps", daily, 86400, 5), Job("supply", flaky_daily, 86400, 5),
+                         Job("market_map", fast, 600, 5), journal=j)
+    first = lane()
+    await first.tick()
+    await first.tick()   # in process, the failed daily job waits its full period: no spinning
+    await lane().tick()  # after a restart only the failed one is retried (fills the research gap)
+    assert runs == ["sweeps", "supply", "fast", "supply", "fast"]
+    assert j.get(KV_LAST_RUN + "sweeps") and j.get(KV_LAST_RUN + "supply")
+    assert j.get(KV_LAST_RUN + "market_map") is None
 
 
 async def test_trigger_runs_a_job_now():
@@ -235,6 +247,43 @@ async def test_a_dying_task_is_alerted_and_restarted():
     await asyncio.sleep(0.05)
     task.cancel()
     assert len(runs) == 3 and [a["kind"] for a in j.alerts(10)] == ["guardian_task_failed:protective"]
+
+
+async def test_a_stray_cancelled_error_restarts_the_task_but_a_real_cancel_stops_it():
+    j = Journal(":memory:")
+    runs = []
+
+    async def body():
+        runs.append(1)
+        if len(runs) == 1:
+            raise asyncio.CancelledError()   # e.g. awaiting an inner task someone else cancelled
+        await asyncio.Event().wait()
+    task = asyncio.create_task(supervised("watch", body, Notifier(SETTINGS, j), restart_s=0))
+    await asyncio.sleep(0.02)
+    assert len(runs) == 2 and [a["kind"] for a in j.alerts(10)] == ["guardian_task_failed:watch"]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled() and len(runs) == 2
+
+
+async def test_watch_lane_escalates_silent_squeeze_checks_without_touching_the_heartbeat(monkeypatch):
+    monkeypatch.setattr(gmod, "WATCH", {"watch": (0, 5)})
+    g = guardian_with(FakeCcxt())
+
+    async def boom():
+        raise RuntimeError("RequestTimeout")
+    g.watch_positions = boom
+    watch = g._lanes()["watch"]
+    for _ in range(4):
+        await watch.tick()
+    watch.jobs[0].fn = noop
+    await watch.tick()
+    rows = [(a["kind"], a["message"]) for a in g.j.alerts(100)]
+    failing = [m for k, m in rows if k == "guardian_failing:watch"]
+    assert len(failing) == 1 and "squeeze" in failing[0].lower()
+    assert [k for k, _ in rows].count("guardian_recovered:watch") == 1
+    assert g.j.get("guardian_heartbeat") is None   # only the protective lane beats
 
 
 async def test_social_task_failure_is_alerted_not_lost():

@@ -1,7 +1,7 @@
 """Guardian scheduling. Jobs are grouped in lanes: jobs in one lane run one after another, each time-boxed; lanes
 run concurrently, so a hung job only ever delays its own lane (never the protective one). Failures are alerted per
-job; on the protective lane a streak escalates (urgent) and its end is announced. Slow jobs remember their last run
-in kv, so a restart doesn't re-run the daily studies.
+job; on lanes that escalate (protective, watch) a streak sends one urgent alert and its end is announced. Slow jobs
+remember their last successful run in kv, so a restart doesn't re-run the daily studies (but retries failed ones).
 
 asyncio can't pre-empt synchronous work (CPU-heavy steps, a SQLite busy-wait): that still stalls every lane, which
 is why a lane logs when it wakes late."""
@@ -74,10 +74,12 @@ class Streak:
 
 class Lane:
     def __init__(self, name: str, jobs: list[Job], notifier, ex, journal, tick_s: float = 1.0,
-                 escalate_after: int | None = None, on_pass: Callable[[], Any] | None = None):
+                 escalate_after: int | None = None, escalate_note: str = "",
+                 on_pass: Callable[[], Any] | None = None):
         self.name, self.jobs, self.n, self.ex, self.j = name, jobs, notifier, ex, journal
         self.tick_s = tick_s
         self.streak = Streak(escalate_after)
+        self.escalate_note = escalate_note   # what is NOT happening while this lane's jobs keep failing
         self.on_pass = on_pass   # after a tick in which every job's last run succeeded (the heartbeat)
         self.last = {job.name: self._seed(job) for job in jobs}
         self._wake = asyncio.Event()
@@ -134,11 +136,11 @@ class Lane:
             if r:
                 await send_safe(self.n, f"guardian_recovered:{job.name}", f"{job.name} OK again after {r[0]} "
                                 f"failures ({r[1] / 60:.0f} min)", cooldown_s=0)
-        if job.every_s >= PERSIST_EVERY_S and self.last[job.name]:
-            try:
-                self.j.set(KV_LAST_RUN + job.name, str(self.last[job.name]))
-            except Exception:  # noqa: BLE001
-                log.exception("could not store the last run of %s", job.name)
+            if job.every_s >= PERSIST_EVERY_S:   # successes only: a restart retries a failed daily job
+                try:
+                    self.j.set(KV_LAST_RUN + job.name, str(self.last[job.name]))
+                except Exception:  # noqa: BLE001
+                    log.exception("could not store the last run of %s", job.name)
 
     async def _failed(self, job: Job, e: Exception) -> None:
         escalate = self.streak.fail(job.name)
@@ -155,8 +157,8 @@ class Lane:
             await send_safe(self.n, f"guardian_error:{job.name}", why, cooldown_s=ERROR_COOLDOWN_S)
         if escalate:
             await send_safe(self.n, f"guardian_failing:{job.name}", f"{job.name} failed {self.streak.after}x in a "
-                            f"row since {self.streak.started(job.name)} (last: {why}). Protection is NOT running: "
-                            "check positions and stops on the exchange.", urgent=True, cooldown_s=0)
+                            f"row since {self.streak.started(job.name)} (last: {why}). {self.escalate_note}".strip(),
+                            urgent=True, cooldown_s=0)
 
 
 async def supervised(name: str, run: Callable[[], Awaitable[Any]], notifier, restart_s: float = RESTART_S) -> None:
@@ -165,7 +167,10 @@ async def supervised(name: str, run: Callable[[], Awaitable[Any]], notifier, res
         try:
             await run()
             log.error("%s task returned; restarting", name)
-        except Exception as e:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001
+            current = asyncio.current_task()
+            if isinstance(e, asyncio.CancelledError) and current and current.cancelling():
+                raise   # a real cancel (shutdown); a stray one (e.g. from an inner task) is a death like any other
             log.exception("%s task died", name)
             await send_safe(notifier, f"guardian_task_failed:{name}", f"{type(e).__name__}: {e}; restarting in "
                             f"{restart_s:g}s", urgent=True, cooldown_s=ERROR_COOLDOWN_S)

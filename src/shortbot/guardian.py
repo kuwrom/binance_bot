@@ -28,7 +28,7 @@ from .notify import Notifier
 log = logging.getLogger("shortbot.guardian")
 # job: (every_s, timeout_s). Jobs of one lane run one after another; the lanes run side by side.
 PROTECTIVE = {"entries": (5, 240), "positions": (60, 240)}   # streaks escalate; the heartbeat comes from here
-WATCH = {"watch": (60, 240)}
+WATCH = {"watch": (60, 240)}   # streaks escalate too (silent squeeze checks matter on a short book); no heartbeat
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
            "housekeeping": (86400, 240)}
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
@@ -69,9 +69,12 @@ class Guardian(PositionChecks, MarketJobs):
         def lane(name: str, table: dict, **kw) -> Lane:
             return Lane(name, [Job(k, fns[k], *v) for k, v in table.items()], self.n, self.ex, self.j, TICK_S, **kw)
         return {"protective": lane("protective", PROTECTIVE, escalate_after=ESCALATE_AFTER_FAILS,
-                                   on_pass=self._heartbeat),
-                "watch": lane("watch", WATCH), "monitor": lane("monitor", MONITOR),
-                "research": lane("research", RESEARCH)}
+                                   escalate_note="Fills and stops are NOT being checked: check positions and stops "
+                                                 "on the exchange.", on_pass=self._heartbeat),
+                "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS,
+                              escalate_note="Squeeze, funding and news alerts on open shorts are NOT running: "
+                                            "watch the positions yourself."),
+                "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH)}
 
     def _heartbeat(self) -> None:
         """Only after a protective pass in which fills and stops were both last checked OK: its age = time since
