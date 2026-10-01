@@ -25,7 +25,7 @@ from typing import Any
 
 from datetime import datetime, timedelta, timezone
 
-from . import reconcile
+from . import equity_marks, reconcile
 from .book import book_guard, diversity_mult, measured_corr, n_eff, pending_book, slot_cap
 from .config import RiskLimits
 from .entry_intents import external_orders
@@ -189,8 +189,6 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     pos = positions if positions is not None else await trader.positions()
     acct = await trader.account()
     eq = acct["equity"]
-    peak = max(float(trader.j.get("equity_peak") or 0), eq)
-    trader.j.set("equity_peak", str(peak))
     if not _vol_cache or time.time() - _vol_cache[0] > 3600:
         try:
             candles = await trader.ex.public.fetch_ohlcv("BTC/USDT:USDT", "1d", limit=400)
@@ -214,8 +212,10 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     except Exception:  # noqa: BLE001 - fall back to today only; the daily cap still binds
         wk = acct.get("realized_today", 0.0)
     rows = trader.j.closed_results()
-    week_pnl = wk + acct.get("unrealized", 0.0)
-    gin = GovInputs(eq, peak, acct["day_pnl"], track_day_peak(trader.j, acct["day_pnl"], now), week_pnl,
+    # day/week P&L from equity marks net of transfers, peak moved by transfers (#16, equity_marks.py)
+    per = await equity_marks.gather(trader.t, trader.j, eq, acct["day_pnl"], wk + acct.get("unrealized", 0.0))
+    peak, day_pnl, week_pnl = per["peak"], per["day_pnl"], per["week_pnl"]
+    gin = GovInputs(eq, peak, day_pnl, track_day_peak(trader.j, day_pnl, now), week_pnl,
                     [(r["closed_at"], r["pnl"]) for r in rows], regime, vnow, tgt, now)
     s_rows = [r for r in rows if setup and r["setup"] == setup and r["r_multiple"] is not None]
     qs = quarter_start(now)
