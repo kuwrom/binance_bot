@@ -58,6 +58,11 @@ def _manifest(tmp_path: Path, name: str) -> dict:
     return json.loads(R.manifest_of(tmp_path / "backups" / name).read_text())
 
 
+def _alerts() -> tuple[list[tuple[str, str]], object]:
+    sent: list[tuple[str, str]] = []
+    return sent, lambda kind, message: sent.append((kind, message))
+
+
 def test_restore_drill_while_other_connections_write(tmp_path, monkeypatch):
     db = _desk(tmp_path)
     before = B._counts(sqlite3.connect(db))
@@ -107,12 +112,12 @@ def test_run_while_a_writer_commits_nonstop(tmp_path):
     try:
         while _count(db, "decisions") < n0 + 20:
             time.sleep(0.01)
-        alerts: list[str] = []
-        res = B.run([db], _cfg(tmp_path), now=NOW, alert=alerts.append)
+        alerts, alert = _alerts()
+        res = B.run([db], _cfg(tmp_path), now=NOW, alert=alert)
     finally:
         stop.set()
         t.join()
-    assert res["ok"] and not alerts, res
+    assert res["ok"] and not alerts and res["warnings"] == [], res
     copy = res["copies"][0]
     assert n0 + 20 <= copy["rows"]["decisions"] <= _count(db, "decisions") and copy["offbox_ok"] is None
     assert json.loads(Journal(db).get("backup_last_ok")) == {"ts": "2026-10-01T03:17:00+00:00",
@@ -193,10 +198,10 @@ def test_offbox_copies_both_files_and_records_it(tmp_path):
 
 def test_offbox_failure_keeps_the_verified_copy_and_alerts(tmp_path):
     db = _desk(tmp_path)
-    alerts: list[str] = []
-    res = B.run([db], _cfg(tmp_path, offbox="false {file}"), now=NOW, alert=alerts.append)
+    alerts, alert = _alerts()
+    res = B.run([db], _cfg(tmp_path, offbox="false {file}"), now=NOW, alert=alert)
     name = res["copies"][0]["name"]
-    assert not res["ok"] and "off-box copy failed" in res["errors"][0] and len(alerts) == 1
+    assert not res["ok"] and "off-box copy failed" in res["errors"][0] and [k for k, _ in alerts] == ["backup_failed"]
     assert (tmp_path / "backups" / name).exists() and _manifest(tmp_path, name)["offbox_ok"] is False
     assert json.loads(Journal(db).get("backup_last_ok"))["offbox_ok"] is False
 
@@ -204,18 +209,18 @@ def test_offbox_failure_keeps_the_verified_copy_and_alerts(tmp_path):
 def test_second_run_is_refused_while_the_lock_is_held(tmp_path):
     db, cfg = _desk(tmp_path), _cfg(tmp_path)
     cfg.dir.mkdir()
-    alerts: list[str] = []
+    alerts, alert = _alerts()
     with B._lock(cfg.dir):
-        res = B.run([db], cfg, now=NOW, alert=alerts.append)
+        res = B.run([db], cfg, now=NOW, alert=alert)
     assert not res["ok"] and "another backup is running" in res["errors"][0] and res["copies"] == [] and alerts
 
 
 def test_refuses_when_the_disk_would_fill(tmp_path, monkeypatch):
     db, cfg = _desk(tmp_path), _cfg(tmp_path)
     monkeypatch.setattr(B.shutil, "disk_usage", lambda _p: types.SimpleNamespace(free=10 * 2**20))
-    res = B.run([db], cfg, now=NOW, alert=lambda _m: None)
+    res = B.run([db], cfg, now=NOW, alert=lambda *_: None)
     assert not res["ok"] and "MB free" in res["errors"][0]
-    assert [p.name for p in cfg.dir.iterdir()] == [".lock"] and Journal(db).get("backup_last_ok") is None
+    assert [p.name for p in cfg.dir.iterdir()] == [B.LOCK_FILE] and Journal(db).get("backup_last_ok") is None
 
 
 def test_research_dbs_closed_wal_and_rollback_side_by_side(tmp_path):
@@ -230,10 +235,15 @@ def test_research_dbs_closed_wal_and_rollback_side_by_side(tmp_path):
         c.commit()
         c.close()
     assert not Path(f"{hist}-wal").exists()          # nobody has it open: the read-only source must still work
-    res = B.run([hist, life], _cfg(tmp_path, keep_daily=0, keep_weekly=2), now=NOW)
+    cfg = _cfg(tmp_path, keep_daily=0, keep_weekly=2)
+    (cfg.dir / B.TMP_DIR).mkdir(parents=True)
+    (cfg.dir / B.TMP_DIR / "hist.db").write_text("left by a killed run")
+    (cfg.dir / ".tmp-not-ours").write_text("someone else's")
+    res = B.run([hist, life], cfg, now=NOW)
     assert res["ok"] and [c["name"] for c in res["copies"]] == ["hist-20261001T031700Z.db.gz",
                                                                  "lifecycle-20261001T031700Z.db.gz"]
     assert all(c["rows"] == {"bars": 500} for c in res["copies"])
+    assert (cfg.dir / ".tmp-not-ours").exists() and list((cfg.dir / B.TMP_DIR).iterdir()) == []
     assert Journal(tmp_path / "data" / "shortbot.db").get("backup_last_ok") is None   # only the desk DB marks it
 
 
@@ -249,6 +259,11 @@ def test_copytruncate_keeps_the_appending_writer_at_offset_zero(tmp_path):
     assert gzip.decompress((tmp_path / "guardian.log.1.gz").read_bytes()).startswith(b"gen3")
     assert gzip.decompress((tmp_path / "guardian.log.2.gz").read_bytes()).startswith(b"gen2")
     assert not (tmp_path / "guardian.log.3.gz").exists() and R.rotate_log(log, max_bytes=1000) == "skipped"
+    live = tmp_path / "shortbot.db"
+    live.write_bytes(b"SQLite format 3\x00" + b"x" * 5000)
+    with pytest.raises(ValueError, match="not a \\*.log"):
+        R.rotate_log(live, max_bytes=1000)
+    assert live.stat().st_size == 5016
 
 
 def test_cli_backup_never_builds_the_exchange_app(tmp_path, monkeypatch, capsys):
@@ -269,5 +284,44 @@ def test_cli_backup_never_builds_the_exchange_app(tmp_path, monkeypatch, capsys)
 
 def test_default_alert_lands_in_the_journal(tmp_path):
     db = _desk(tmp_path)
-    B._alert("disk full")
+    B._alert("backup_failed", "disk full")
     assert Journal(db).alerts(1)[0]["kind"] == "backup_failed"
+
+
+def test_busy_journal_kv_mark_is_retried_then_only_a_warning(tmp_path, monkeypatch):
+    db = _desk(tmp_path)
+    monkeypatch.setattr(B, "KV_BACKOFF_S", 0)
+    real, tries = Journal.set, []
+
+    def locked_twice(self, k, v):
+        tries.append(k)
+        if len(tries) <= 2:
+            raise sqlite3.OperationalError("database is locked")
+        real(self, k, v)
+    monkeypatch.setattr(Journal, "set", locked_twice)
+    alerts, alert = _alerts()
+    res = B.run([db], _cfg(tmp_path), now=NOW, alert=alert)
+    assert res["ok"] and res["warnings"] == [] and not alerts and len(tries) == 3
+    assert json.loads(Journal(db).get("backup_last_ok"))["name"] == res["copies"][0]["name"]
+
+    def always_locked(self, k, v):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(Journal, "set", always_locked)
+    res = B.run([db], _cfg(tmp_path), now=NOW + timedelta(minutes=1), alert=alert)
+    assert res["ok"] and res["errors"] == [] and len(res["copies"]) == 1 and "not recorded" in res["warnings"][0]
+    assert [k for k, _ in alerts] == ["backup_warning"]
+
+
+def test_rotation_failure_still_lists_the_new_copy(tmp_path, monkeypatch):
+    db = _desk(tmp_path)
+
+    def broken(*_a):
+        raise PermissionError("read-only folder")
+    monkeypatch.setattr(B, "rotate", broken)
+    alerts, alert = _alerts()
+    res = B.run([db], _cfg(tmp_path), now=NOW, alert=alert)
+    name = res["copies"][0]["name"]
+    assert not res["ok"] and res["errors"] == [f"rotating shortbot copies failed ({name} is fine): "
+                                               "PermissionError: read-only folder"]
+    assert (tmp_path / "backups" / name).exists() and [k for k, _ in alerts] == ["backup_failed"]
+    assert json.loads(Journal(db).get("backup_last_ok"))["name"] == name

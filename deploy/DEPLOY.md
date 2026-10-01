@@ -58,7 +58,7 @@ Then say "run a trading session". Claude loads the `trading-session` skill. `ope
 - Copies the live journal with SQLite's online backup API, in one step inside the read transaction that counts every table's rows. The guardian and the MCP server keep writing meanwhile (in WAL mode readers don't block writers), and the copy is exactly the counted snapshot. It never copies the raw file, which would miss the `-wal`.
 - Checks the copy: `PRAGMA integrity_check`, and every table's row count must equal the snapshot's. Then it gzips it, checks that the gzip decompresses to the same bytes, and writes `shortbot-<UTC>.db.gz` plus a `shortbot-<UTC>.json` manifest (counts, sha256s, `offbox_ok`) to `SHORTBOT_BACKUP_DIR` (default `data/backups`).
 - Runs the off-box command if one is set, then rotates: it keeps the newest copy of each of the last 7 days and of the last 4 ISO weeks (`SHORTBOT_BACKUP_KEEP_DAILY` / `_WEEKLY`). Rotation only deletes names it generated, so renaming a copy pins it. No journal table is ever pruned.
-- On success it writes kv `backup_last_ok` (time, copy name, `offbox_ok`). On any failure it exits 1 and raises a `backup_failed` alert: in the journal (so `shortbot brief` shows it) and on Telegram.
+- On success it writes kv `backup_last_ok` (time, copy name, `offbox_ok`), retrying if the journal is busy; if that still fails, the run counts as ok and raises a `backup_warning` alert. On any failure it exits 1 and raises a `backup_failed` alert: in the journal (so `shortbot brief` shows it) and on Telegram. A verified copy is listed in the output even when rotation or the off-box step failed.
 
 ```bash
 .venv/bin/shortbot backup             # daily: the journal (same as: .venv/bin/python -m shortbot.backup)
@@ -69,9 +69,9 @@ The second line is the weekly job for the research DBs. They can only partly be 
 **Off-box** (`SHORTBOT_BACKUP_OFFBOX` in `.env`). Copies on the same disk only protect against corruption and mistakes, so set one of these. The command runs once per new file (the copy, then its manifest) without a shell: `{file}` is the absolute path and `{name}` the file name. Credentials stay in the tool's own config, never in the template.
 - **S3:** `aws s3 cp {file} s3://<bucket>/shortbot/{name}`. On EC2, attach an instance role whose policy allows only `s3:PutObject` on `arn:aws:s3:::<bucket>/shortbot/*`, so a compromised box can't delete backups. Use a bucket in another region, turn on versioning, and add a lifecycle rule that expires old copies.
 - **rclone** (Backblaze B2, Google Drive...): `rclone copyto {file} <remote>:shortbot/{name}`.
-- **Another disk:** `cp {file} /Volumes/<disk>/shortbot/{name}`.
+- **Another disk:** `cp {file} /Volumes/<disk>/shortbot/{name}`. Reach external or network disks this way, and keep `SHORTBOT_BACKUP_DIR` on the local disk. The copy is written while the journal's read snapshot is open, so a sleeping or stalled disk there would keep the snapshot open and the WAL growing. The off-box command only runs after the journal is closed.
 
-**Schedule.** Nothing is installed for you.
+**Schedule.** Nothing is installed for you. Run the job as the same user as the guardian, never with `sudo`: a root process that opens the journal first can leave root-owned `-wal`/`-shm` files the guardian can't write.
 
 *Mac (launchd).* Run this from the repo directory; `$PWD` fills in the absolute paths. launchd runs a job that was missed during sleep when the Mac wakes.
 ```bash

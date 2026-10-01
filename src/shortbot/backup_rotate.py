@@ -68,7 +68,10 @@ def rotate_log(path: Path, max_bytes: int = LOG_MAX_BYTES, keep: int = LOG_KEEP)
     <log>.1.gz (older archives shift up to .<keep>.gz). The writer keeps its O_APPEND descriptor (`>>`), so its next
     line lands at offset 0. Lines written between the copy and the truncate are lost (same window as logrotate's
     copytruncate); the copy is a plain file copy, so that window is tiny. If gzipping fails, the plain copy stays
-    behind as .<log>.rotating and later runs refuse to rotate until a human has looked at it."""
+    behind as .<log>.rotating and later runs refuse to rotate until a human has looked at it.
+    Only *.log files: truncating anything else (a live .db!) would destroy it."""
+    if path.suffix != ".log":
+        raise ValueError(f"{path} is not a *.log file; refusing to truncate it")
     raw, gz = path.with_name(f".{path.name}.rotating"), path.with_name(f".{path.name}.rotating.gz")
     if raw.exists():
         raise FileExistsError(f"{raw} is left from a failed rotation; keep or delete it by hand")
