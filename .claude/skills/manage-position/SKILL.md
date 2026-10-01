@@ -1,7 +1,7 @@
 ---
 name: manage-position
 description: Manage an open short according to its own trade plan - re-check thesis, invalidation, kill conditions, targets, time stop, trailing; decide hold / tighten / partial / exit / update plan.
-when_to_use: Reviewing open positions, a guardian alert (squeeze_risk, stop_near, time stop, review due, target reached, funding_negative, news_on_position), or the user asks "how is my QNT short".
+when_to_use: Reviewing open positions, a guardian alert (squeeze_risk, stop_near, time stop, review due, target reached, funding_negative, news_on_position, close_incomplete), or the user asks "how is my QNT short".
 ---
 
 # Manage a position (per its plan)
@@ -27,6 +27,7 @@ ideal size for today's risk budget, and ranked actions. Rules: docs/POSITION_MAN
 
 ## Decision checklist (in order)
 1. **Protection**: is `UNPROTECTED` false and the stop where the plan says? If not, fix it first (`move_stop`, or ask the human to close).
+   - `close_incomplete` (urgent): a full close left a remainder, because the close filled short or a resting entry filled mid-close. The alert names the stop that protects it now (kept, pre-armed, or just placed). Check `positions` and the stop on Binance before acting; don't re-close blindly. If the close filled short, the trade stays open: close it again if the exit reason still holds. If an entry filled mid-close, the fill poll adopts it as its own trade (urgent `action_fill`): manage it per its plan. If `NAKED_POSITION` comes with it, no stop could be placed: set one or close now. The guardian's 60 s pass is only the backstop.
 2. **Invalidation / kill conditions**: has anything in `plan.invalidation` or `plan.kill_conditions` happened? If so, propose an exit now.
 3. **Squeeze signs**:
    - price rising with OI rising

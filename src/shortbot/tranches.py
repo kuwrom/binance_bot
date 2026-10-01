@@ -5,7 +5,8 @@ limit legs (e.g. 50% at the level, 50% at the deeper sweep level). Resting limit
 - sizing: leg i risks share_i x budget, so the loss at the shared stop is <= 1R even if both legs fill
 - first leg to fill creates the trade (plan pinned: ladder_live, full_size = both legs, r1_usdt = both risks)
 - the other leg stays live (NOT cancelled like an OCO sibling); when it fills it joins the trade as an add
-- the other leg is cancelled when the trade closes, or by the normal rules (TTL, cancel_below, fast approach)
+- the other leg is cancelled when the trade closes (only this trade's legs: `cancel_legs`), or by the normal rules
+  (TTL, cancel_below, fast approach)
 """
 
 from __future__ import annotations
@@ -44,25 +45,42 @@ def finalize(db, placed: list[dict[str, Any]]) -> dict[str, Any]:
     return {"full_size": full, "r1_usdt": r1}
 
 
-def pending_legs(journal, symbol: str) -> list[dict[str, Any]]:
+def _entries(journal, where: str, args: tuple) -> list[dict[str, Any]]:
     try:
-        return journal._rows("SELECT * FROM entries WHERE status='pending' AND tranche IS NOT NULL AND symbol=?",
-                             (symbol,))
+        return journal._rows(f"SELECT * FROM entries WHERE {where} ORDER BY id", args)
     except Exception:  # noqa: BLE001 - no entries table yet
         return []
 
 
-async def cancel_legs(trader, symbol: str, reason: str) -> int:
-    """Called when a trade is closed: resting legs of its split entry must not open a fresh, planless position."""
+def pending_legs(journal, symbol: str) -> list[dict[str, Any]]:
+    return _entries(journal, "status='pending' AND tranche IS NOT NULL AND symbol=?", (symbol,))
+
+
+def own_entries(journal, trade_id: int) -> list[dict[str, Any]]:
+    """The entry rows that filled into this trade (its first fill, later legs, a sibling that joined it)."""
+    return _entries(journal, "trade_id=?", (trade_id,))
+
+
+def own_legs(journal, trade_id: int) -> list[dict[str, Any]]:
+    """Resting legs of the split entry that opened this trade. A pending leg has no trade_id until it fills: its
+    tranche ties it to the trade. Another group's legs on the same symbol are not this trade's."""
+    return _entries(journal, "status='pending' AND tranche IN (SELECT tranche FROM entries WHERE trade_id=? AND "
+                             "tranche IS NOT NULL)", (trade_id,))
+
+
+async def cancel_legs(trader, trade_id: int, reason: str) -> dict[str, list[dict[str, Any]]]:
+    """Called when a trade is closed: ITS resting legs must not open a fresh, planless position. Returns the legs by
+    withdraw's outcome: unfilled (cancelled), filled (dead, but (partly) filled first: the entry poll adopts it) and
+    unknown (the cancel failed: the limit may still rest, so its pre-armed stop must stay)."""
     from .entries import withdraw
-    n = 0
-    for e in pending_legs(trader.j, symbol):
-        if await withdraw(trader.t, e) != "unfilled":
-            continue   # (partly) filled meanwhile, or the cancel failed: the entry poll adopts or retries it
-        trader.j.db.execute("UPDATE entries SET status='cancelled', reason=? WHERE id=?", (reason, e["id"]))
-        n += 1
+    got: dict[str, list[dict[str, Any]]] = {"unfilled": [], "filled": [], "unknown": []}
+    for e in own_legs(trader.j, trade_id):
+        out = await withdraw(trader.t, e)
+        got[out].append(e)
+        if out == "unfilled":
+            trader.j.db.execute("UPDATE entries SET status='cancelled', reason=? WHERE id=?", (reason, e["id"]))
     trader.j.db.commit()
-    return n
+    return got
 
 
 def open_trade_id(desk, e: dict[str, Any]) -> int | None:
