@@ -105,6 +105,11 @@ class MarketContext:
         return await self._get(("candles", tf, limit), f"candles_{tf}",
                                lambda: self.ex.public.fetch_ohlcv(self.symbol, tf, limit=limit), [])
 
+    async def order_book(self, limit: int = 500) -> dict:
+        """Perp order book (Binance limits 5/10/20/50/100/500/1000; 500 covers +-1% on alts). Not a critical input."""
+        return await self._get(("order_book", limit), "order_book",
+                               lambda: self.ex.public.fetch_order_book(self.symbol, limit=limit), {})
+
     async def oi_history(self, period: str = "1h", limit: int = 25) -> list[dict]:
         name = "open_interest" if period == "1h" else f"open_interest_{period}"
         return await self._get(("oi", period, limit), name, lambda: self.ex.oi_history(self.symbol, period, limit), [])
