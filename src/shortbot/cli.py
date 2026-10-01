@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 
-from . import news, research, scanner, setups
+from . import backup, news, research, scanner, setups
 from .app import close_app, get_app
 from .exchange import to_symbol
 from .entries import EntryDesk
@@ -359,7 +359,10 @@ def main() -> None:
     m.add_argument("symbol")
     m.add_argument("price", type=float)
     m.add_argument("--reason", required=True)
+    backup.add_args(sub.add_parser("backup", help="verified journal backup (no exchange) | restore FILE --to NEW_PATH"))
     args = p.parse_args()
+    if args.cmd == "backup":
+        raise SystemExit(backup.run_cli(args))
     out = asyncio.run(_run(args))
     print(out if isinstance(out, str) else json.dumps(out, indent=2, default=str))
 
