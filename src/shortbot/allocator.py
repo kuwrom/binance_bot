@@ -97,12 +97,24 @@ async def book_plan(app, top: int = 6, min_change: float = 5.0, direction: str =
     return out
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(prog="python -m shortbot.allocator")
+def _args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     p.add_argument("--top", type=int, default=6)
     p.add_argument("--min-change", type=float, default=5.0)
     p.add_argument("--direction", default="both", choices=("gainers", "losers", "both", "now"))
-    a = p.parse_args()
+    return p
+
+
+def add_cli(sub) -> None:
+    """`shortbot book-plan`: registered by cli.py (parsing stays here)."""
+    _args(sub.add_parser("book-plan", help="which scan candidates to work next, given the open + resting book"))
+
+
+async def run_cli(app, args) -> dict[str, Any]:
+    return await book_plan(app, args.top, args.min_change, args.direction)
+
+
+def main() -> None:
+    a = _args(argparse.ArgumentParser(prog="python -m shortbot.allocator")).parse_args()
 
     async def run() -> dict[str, Any]:
         from .app import close_app, get_app

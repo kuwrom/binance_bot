@@ -360,7 +360,7 @@ async def start_session(notes: str = "") -> dict[str, Any]:
             "experiment": app.ex.experiment}
 
 
-from . import mcp_desk, mcp_kill  # noqa: E402,F401  (registers the governor / clock / warm-up / kill-switch tools)
+from . import mcp_book, mcp_desk, mcp_kill  # noqa: E402,F401  (registers book plan / governor / clock / warm-up / kill-switch tools)
 
 
 def main() -> None:

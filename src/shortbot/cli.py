@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 
-from . import backup, killswitch, killswitch_ops, news, research, scanner, setups
+from . import allocator, backup, killswitch, killswitch_ops, news, research, scanner, setups
 from .app import close_app, get_app
 from .exchange import to_symbol
 from .entries import EntryDesk
@@ -126,6 +126,8 @@ async def _run(args: argparse.Namespace) -> object:
                                                    args.leverage, args.veto_override, args.conviction)
             case "close":
                 return await app.trader.close(args.symbol, args.reason, args.lesson, args.fraction)
+            case "book-plan":
+                return await allocator.run_cli(app, args)
             case "kill-switch" | "flatten":
                 return await killswitch_ops.run_cli(app, args)
             case "move-stop":
@@ -262,6 +264,7 @@ def main() -> None:
     c.add_argument("--lesson", default="")
     c.add_argument("--fraction", type=float, default=1.0)
     killswitch_ops.add_cli(sub)
+    allocator.add_cli(sub)
     sub.add_parser("reassess", help="re-plan a position from its current state").add_argument("symbol")
     bu = sub.add_parser("budget", help="current dynamic risk budget for a new short")
     bu.add_argument("symbol")
