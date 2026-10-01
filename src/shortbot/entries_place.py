@@ -24,7 +24,7 @@ def _now_iso() -> str:
 
 
 class EntryPlacement:
-    """Uses EntryDesk's trader, journal, regime and entry-row storage."""
+    """Uses EntryDesk's trader, journal, regime, entry-row storage and cancel (_cancel_entry)."""
 
     async def propose_group(self, proposals: list[dict[str, Any]], ttl_hours: float = 6.0,
                             prearm_stop: bool = True, warmup_override: str | None = None) -> dict[str, Any]:
@@ -196,23 +196,11 @@ class EntryPlacement:
         """Undo a split entry's placed legs after a later leg failed. Cancel each limit FIRST: only a leg cancelled
         unfilled loses its pre-armed stop. A leg that (partly) filled keeps its stop and stays pending, pinned to its
         own size, so the poll adopts and protects it (MOVR 2026-10-01: a stripped stop left a naked short)."""
-        t, kept = self.tr.t, []
+        kept = []
         for x in got:
             row = self._rows("id=?", (x["entry_id"],))[0]
-            try:
-                o = await t.cancel_order(row["order_id"], row["symbol"]) or {}
-            except Exception:  # noqa: BLE001 - filled or unknown: keep its stop, the poll reconciles
-                kept.append(x)
-                continue
-            if float(o.get("filled") or 0) > 0:
-                kept.append(x)
-                continue
-            if row["prearm_id"]:
-                try:
-                    await t.cancel_order(row["prearm_id"], row["symbol"], params={"trigger": True})
-                except Exception:  # noqa: BLE001
-                    pass
-            self._update(row["id"], status="cancelled", reason="split entry rejected: sibling leg failed")
+            if await self._cancel_entry(row, "cancelled", "split entry rejected: sibling leg failed") != "unfilled":
+                kept.append(x)   # (partly) filled, or the cancel failed: keeps its stop, the poll reconciles
         if kept:
             from . import tranches
             tranches.finalize(self.j.db, kept)

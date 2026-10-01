@@ -29,7 +29,6 @@ def prop(limit, stop=1.10, symbol=SYM, **kw):
             "level_type": "prior_high", "level_reason": "swing high", "leverage": 3, **kw}
 
 
-@pytest.mark.xfail(strict=True, reason="#7: a filled sibling is cancelled as unfilled, its pre-armed stop stripped")
 async def test_7_siblings_on_two_symbols_filling_in_one_poll_stay_protected_and_journaled():
     d, t, fake = desk()
     r = await d.propose_group([prop(1.04), prop(2.08, stop=2.2, symbol=SYM2)])
@@ -61,8 +60,9 @@ async def test_8_a_fill_stopped_out_before_the_poll_is_journaled_as_a_round_trip
     assert d.pending() == []
 
 
-@pytest.mark.xfail(strict=True, reason="#8: the 'no position' branch returns before cancelling the OCO siblings")
 async def test_8_a_fill_stopped_out_before_the_poll_still_cancels_its_oco_siblings():
+    # the 'no position' branch still returns before cancel_group; the OCO rule in _should_cancel (#7) retires the
+    # siblings of any 'filled' or 'error' row on the next look at them
     d, t, fake = desk()
     await d.propose_group([prop(1.04), prop(2.08, stop=2.2, symbol=SYM2)])
     fake.price = 1.12

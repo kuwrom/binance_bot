@@ -8,6 +8,8 @@ Mechanics (Binance USDⓈ-M, verified in docs/ccxt 2026-09):
   pre-armed at placement so protection exists from the first fill instant (demo-verify: `prearm_stop`)
 - cancel rules: TTL, price ran away below `cancel_below` (move happened without us), price approaching faster
   than 1·ATR(1h) within 15 min (cascade, not a tap), or the analyst cancels. Replace at most once.
+- a cancel pulls the limit first and believes only what filled (`withdraw`): an order that filled before its cancel
+  landed keeps its stop and is adopted by the poll; a failed cancel is retried, never relabelled
 - risk: every pending order is sized from the CURRENT risk budget; a group counts once (only one may fill)
 Every entry row is research data: fill rate, time-to-fill, level type, and unfilled counterfactuals.
 
@@ -21,6 +23,8 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Any
+
+import ccxt.async_support as ccxt
 
 from .entries_place import MIN_TTL_S, EntryPlacement, _now_iso  # noqa: F401 (MIN_TTL_S re-export)
 from .market.market_map import cached
@@ -36,6 +40,37 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 """
 FAST_APPROACH_WINDOW_MS = 15 * 60 * 1000
+DEAD = ("canceled", "expired", "rejected")
+
+
+async def withdraw(t, e: dict[str, Any]) -> str:
+    """Cancel a pending entry's limit FIRST, then decide from what actually filled:
+    - "unfilled": the limit is dead with nothing filled, so its pre-armed stop is cancelled too
+    - "filled": it (partly) filled before the cancel landed: the stop and the pending row stay, the poll adopts it
+    - "unknown": the cancel failed (network, clock, no order id): nothing changes, a later pass retries
+    Binance answers -2011 (ccxt OrderNotFound) for ANY order no longer in the book, filled or dead, so fetch_order
+    decides (MOVR 2026-10-01: a swallowed -2011 stripped a filled order's stop and left a naked short)."""
+    if not e.get("order_id"):
+        return "unknown"
+    try:
+        o = await t.cancel_order(e["order_id"], e["symbol"]) or {}
+    except ccxt.OrderNotFound:
+        try:
+            o = await t.fetch_order(e["order_id"], e["symbol"])
+        except Exception:  # noqa: BLE001
+            return "unknown"
+        if not float(o.get("filled") or 0) and o.get("status") not in DEAD:
+            return "unknown"
+    except Exception:  # noqa: BLE001 - not sent, or sent with the outcome unknown: the order may still rest
+        return "unknown"
+    if float(o.get("filled") or 0) > 0:
+        return "filled"
+    if e.get("prearm_id"):
+        try:
+            await t.cancel_order(e["prearm_id"], e["symbol"], params={"trigger": True})
+        except Exception:  # noqa: BLE001 - best effort: with no position a reduce-only stop has nothing to close
+            pass
+    return "unfilled"
 
 
 class EntryDesk(EntryPlacement):
@@ -72,24 +107,30 @@ class EntryDesk(EntryPlacement):
         return self._rows("status='pending'")
 
     # ------------------------------------------------------------ cancel / amend
-    async def _cancel_entry(self, e: dict, status: str, reason: str) -> None:
-        t = self.tr.t
-        for oid, params in ((e["order_id"], {}), (e["prearm_id"], {"trigger": True})):
-            if oid:
-                try:
-                    await t.cancel_order(oid, e["symbol"], params=params)
-                except Exception:  # noqa: BLE001 - already gone (filled/expired) is fine
-                    pass
-        self._update(e["id"], status=status, reason=reason)
+    async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:
+        """Relabel the row only when its limit died unfilled; returns withdraw's outcome."""
+        got = await withdraw(self.tr.t, e)
+        if got == "unfilled":
+            self._update(e["id"], status=status, reason=reason)
+        return got
+
+    def _filled_sibling(self, e: dict) -> int | None:
+        """Another order of this OCO group that already filled ('error' = a fill was reported); a split entry's own
+        legs don't count, they are one unit."""
+        rows = self._rows("group_id=? AND id!=? AND status IN ('filled','error')"
+                          " AND (tranche IS NULL OR tranche IS NOT ?)", (e["group_id"], e["id"], e.get("tranche")))
+        return rows[0]["id"] if rows else None
 
     async def cancel_group(self, group_id: str, reason: str, keep: int | None = None,
                            keep_tranche: str | None = None) -> dict[str, Any]:
-        n = 0
+        """filled_first: filled before the cancel landed, so they keep their stops and the guardian's poll adopts them.
+        cancel_failed: still live and pending; call again."""
+        got: dict[str, list[int]] = {"unfilled": [], "filled": [], "unknown": []}
         for e in self.pending(group_id):
             if e["id"] != keep and not (keep_tranche and e.get("tranche") == keep_tranche):
-                await self._cancel_entry(e, "cancelled", reason)
-                n += 1
-        return {"ok": True, "cancelled": n}
+                got[await self._cancel_entry(e, "cancelled", reason)].append(e["id"])
+        return {"ok": not got["unknown"], "cancelled": len(got["unfilled"]), "filled_first": got["filled"],
+                "cancel_failed": got["unknown"]}
 
     async def amend(self, entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
         rows = self._rows("id=? AND status='pending'", (entry_id,))
@@ -108,7 +149,8 @@ class EntryDesk(EntryPlacement):
 
     # ------------------------------------------------------------ the 5 s loop (guardian)
     async def poll(self) -> list[dict[str, Any]]:
-        """Detect fills (protect + journal + cancel siblings), expiries, and cancel conditions."""
+        """Detect fills (protect + journal + cancel siblings), expiries, and cancel conditions. A cancel that doesn't
+        kill the order unfilled leaves the row pending: the next pass adopts the fill or retries the cancel."""
         events: list[dict[str, Any]] = []
         now_ms = int(time.time() * 1000)
         for e in self.pending():
@@ -118,8 +160,8 @@ class EntryDesk(EntryPlacement):
                 from .tranches import parent_closed
                 o = await self.tr.t.fetch_order(e["order_id"], e["symbol"])
                 if parent_closed(self, e) and not float(o.get("filled") or 0):
-                    await self._cancel_entry(e, "cancelled", "tranche trade already closed")
-                    events.append({"entry_id": e["id"], "event": "cancelled", "why": "tranche trade closed"})
+                    if await self._cancel_entry(e, "cancelled", "tranche trade already closed") == "unfilled":
+                        events.append({"entry_id": e["id"], "event": "cancelled", "why": "tranche trade closed"})
                     continue
             try:
                 o = await self.tr.t.fetch_order(e["order_id"], e["symbol"])
@@ -128,17 +170,19 @@ class EntryDesk(EntryPlacement):
             filled = float(o.get("filled") or 0)
             if filled > 0:
                 events.append(await self._on_fill(e, o))
-            elif o.get("status") in ("canceled", "expired", "rejected") or now_ms > e["expires_ms"]:
-                await self._cancel_entry(e, "expired", f"exchange status {o.get('status')}")
-                events.append({"entry_id": e["id"], "event": "expired"})
+            elif o.get("status") in DEAD or now_ms > e["expires_ms"]:
+                if await self._cancel_entry(e, "expired", f"exchange status {o.get('status')}") == "unfilled":
+                    events.append({"entry_id": e["id"], "event": "expired"})
             else:
                 why = await self._should_cancel(e, now_ms)
-                if why:
-                    await self._cancel_entry(e, "cancelled", why)
+                if why and await self._cancel_entry(e, "cancelled", why) == "unfilled":
                     events.append({"entry_id": e["id"], "event": "cancelled", "why": why})
         return events
 
     async def _should_cancel(self, e: dict, now_ms: int) -> str | None:
+        sib = self._filled_sibling(e)
+        if sib:   # OCO: the cancel sent when the sibling filled failed (network), so retry it on every pass
+            return f"sibling #{sib} filled"
         last = float((await self.tr.ex.public.fetch_ticker(e["symbol"]))["last"])
         if e["cancel_below"] and last <= e["cancel_below"]:
             return f"price {last} fell below {e['cancel_below']} without filling: the move happened without us"
@@ -172,11 +216,11 @@ class EntryDesk(EntryPlacement):
         if cps and min(c["trigger"] for c in cps) > e["stop_price"] * 1.0001:
             # e.g. the guardian's +10% fallback stop landed first: tighten it to this entry's plan stop
             await tr.move_stop(sym, e["stop_price"], f"entry #{e['id']} filled: plan stop")
-        if e.get("tranche"):
-            from . import tranches
-            tid = tranches.open_trade_id(self, e)
-            if tid:
-                return await tranches.join(self, e, pos, tid)
+        from . import tranches
+        tid = tranches.open_trade_id(self, e)   # a split entry's later leg, or a same-symbol sibling that filled too
+        if tid:
+            return await tranches.join(self, e, pos, tid)
+        sib = self._filled_sibling(e)            # a sibling on another symbol filled too: two positions, one budget
         fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
         tid = self.j.create_trade(sym, e["setup"], e["thesis"], e["stop_price"], e["leverage"], e["plan"],
                                   {"entry_type": "limit", "level_type": e["level_type"], "level_reason": e["level_reason"],
@@ -190,6 +234,9 @@ class EntryDesk(EntryPlacement):
         self._update(e["id"], status="filled", trade_id=tid, filled_at=_now_iso(), fill_price=fill, filled_qty=qty)
         others = await self.cancel_group(e["group_id"], f"sibling #{e['id']} filled", keep=e["id"],
                                          keep_tranche=e.get("tranche"))
-        await tr.alert("action_fill", f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed; "
-                       f"{others['cancelled']} sibling order(s) cancelled", sym, False)
+        late = "".join([f"; #{i} filled before its cancel (adopted next poll)" for i in others["filled_first"]] +
+                       [f"; #{i} cancel failed (retried next poll)" for i in others["cancel_failed"]])
+        await tr.alert("action_fill", (f"sibling #{sib} also filled: group over its single-bet budget. " if sib else "")
+                       + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed; "
+                       f"{others['cancelled']} sibling order(s) cancelled{late}", sym, bool(sib))
         return {"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill, "qty": qty}

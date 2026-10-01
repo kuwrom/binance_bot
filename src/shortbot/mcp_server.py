@@ -213,7 +213,9 @@ async def pending_entries() -> list[dict[str, Any]]:
 
 @tool
 async def cancel_entry_group(group_id: str, reason: str) -> dict[str, Any]:
-    """Cancel all pending entries of a group (always allowed: removes risk)."""
+    """Cancel all pending entries of a group (always allowed: removes risk). filled_first = filled before the cancel
+    landed: they keep their stops and the guardian journals them within 5 s. cancel_failed (ok false) = still live:
+    call again."""
     return await EntryDesk(get_app().trader).cancel_group(group_id, reason)
 
 

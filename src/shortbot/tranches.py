@@ -46,20 +46,19 @@ def finalize(db, placed: list[dict[str, Any]]) -> dict[str, Any]:
 
 def pending_legs(journal, symbol: str) -> list[dict[str, Any]]:
     try:
-        return journal._rows("SELECT id, order_id, symbol FROM entries WHERE status='pending' AND tranche IS NOT NULL"
-                             " AND symbol=?", (symbol,))
+        return journal._rows("SELECT * FROM entries WHERE status='pending' AND tranche IS NOT NULL AND symbol=?",
+                             (symbol,))
     except Exception:  # noqa: BLE001 - no entries table yet
         return []
 
 
 async def cancel_legs(trader, symbol: str, reason: str) -> int:
     """Called when a trade is closed: resting legs of its split entry must not open a fresh, planless position."""
+    from .entries import withdraw
     n = 0
     for e in pending_legs(trader.j, symbol):
-        try:
-            await trader.t.cancel_order(e["order_id"], symbol)
-        except Exception:  # noqa: BLE001 - already filled/expired: the entry poll handles it
-            continue
+        if await withdraw(trader.t, e) != "unfilled":
+            continue   # (partly) filled meanwhile, or the cancel failed: the entry poll adopts or retries it
         trader.j.db.execute("UPDATE entries SET status='cancelled', reason=? WHERE id=?", (reason, e["id"]))
         n += 1
     trader.j.db.commit()
@@ -67,8 +66,10 @@ async def cancel_legs(trader, symbol: str, reason: str) -> int:
 
 
 def open_trade_id(desk, e: dict[str, Any]) -> int | None:
-    """The trade an earlier leg of this tranche opened, if it is still open."""
-    for r in desk._rows("tranche=? AND status='filled' AND trade_id IS NOT NULL", (e["tranche"],)):
+    """The open trade this fill adds to: one an earlier leg of its split entry opened, or one a same-symbol OCO
+    sibling opened (both filled before the cancel landed: one position, one stop, one journal row)."""
+    for r in desk._rows("group_id=? AND symbol=? AND status='filled' AND trade_id IS NOT NULL",
+                        (e["group_id"], e["symbol"])):
         t = desk.j.get_trade(r["trade_id"])
         if t and t.get("status") == "open":
             return r["trade_id"]
@@ -85,12 +86,23 @@ def parent_closed(desk, e: dict[str, Any]) -> bool:
 
 
 async def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int) -> dict[str, Any]:
-    """A later leg filled: it is an add to the open trade (the closePosition stop already covers the whole size)."""
+    """A later fill on this group's open trade is an add (the closePosition stop already covers the whole size): a
+    split entry's next leg, or an OCO sibling whose cancel came too late (then the group is over its budget)."""
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
-    peak = max(float((desk.j.get_trade(tid) or {}).get("amount") or 0) + float(e["amount"]), qty)
+    # amount = peak size; a fill that landed before the first one was adopted is already in it (count it once)
+    peak = max(float((desk.j.get_trade(tid) or {}).get("amount") or 0), qty)
+    owners = desk._rows("trade_id=?", (tid,))
+    leg = e.get("tranche") and any(r["tranche"] == e["tranche"] for r in owners)
     desk.j.update_trade(tid, entry_price=fill, amount=peak, notional=round(fill * qty, 2))
     desk._update(e["id"], status="filled", trade_id=tid, filled_at=_now(), fill_price=e["limit_price"],
                  filled_qty=e["amount"])
+    if not leg:
+        desk.j.log_decision("sibling_fill", f"entry #{e['id']} filled before its cancel landed: joined trade #{tid}",
+                            e["symbol"], snapshot={"trade_id": tid, "avg_entry": fill, "contracts": qty})
+        await desk.tr.alert("action_fill", f"sibling #{owners[0]['id']} also filled: group over its single-bet budget. "
+                            f"Entry #{e['id']} filled {e['amount']} @ {e['limit_price']}: position {qty} avg {fill}, "
+                            "one stop", e["symbol"], True)
+        return {"entry_id": e["id"], "event": "sibling_joined", "trade_id": tid, "avg": fill, "qty": qty}
     desk.j.log_decision("tranche_fill", f"leg {e['leg']} of tranche {e['tranche']} joined trade #{tid}",
                         e["symbol"], snapshot={"trade_id": tid, "avg_entry": fill, "contracts": qty})
     await desk.tr.alert("action_fill", f"tranche leg {e['leg']} filled {e['amount']} @ {e['limit_price']}: position "
