@@ -38,7 +38,8 @@ TICK_S = 1.0
 
 
 class Guardian(PositionChecks, MarketJobs):
-    """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides."""
+    """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
+    the kill-switch loss trips (daily loss, dd_stop) follow an active experiment's limits (killswitch.py)."""
 
     def __init__(self, app=None):
         self.app = app or get_app(research=False)
@@ -48,6 +49,8 @@ class Guardian(PositionChecks, MarketJobs):
         self.j = self.app.journal
         self.stop_fails: dict[str, int] = {}
         self.pos_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed checks per symbol
+        self.untracked_since: dict[str, float] = {}       # symbol -> first seen without a journal trade
+        self.kill_seen: dict | None = None                # last kill-switch state seen (loosening tripwire)
         self._last_resync = 0.0
         self.entries = EntryDesk(self.app.trader)
         self.liq_store = LiquidationStore(self.app.settings.db_path)

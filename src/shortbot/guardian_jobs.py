@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+from . import killswitch as ks
 from . import news, research
 from .guardian_loop import guarded
 from .market.regime import market_regime
@@ -45,6 +46,7 @@ class MarketJobs:
             return
         reg = (await market_regime(self.ex))["verdict_for_shorts"]
         g = await governor_status(self.app.trader, reg)
+        await guarded("kill_switch", ks.trip_on_drawdown(self.j, self.app.settings, g.get("drawdown_pct")), self.n)
         if g.get("halt"):
             await self.n.send("governor_halt", f"New entries halted until {g.get('until') or 'human review'}: "
                               + "; ".join(g["reasons"]), urgent=True, cooldown_s=4 * 3600)

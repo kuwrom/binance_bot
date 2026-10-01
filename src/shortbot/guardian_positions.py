@@ -10,9 +10,12 @@ import time
 from datetime import datetime
 
 from . import indicators as ind
+from . import killswitch as ks
 from . import news, reconcile
 from .exchange import to_raw
-from .guardian_loop import send_safe
+from .guardian_loop import guarded, send_safe
+from .killswitch import ACTIVE, HALTED, REDUCING
+from .killswitch_ops import cancel_resting
 from .manager import excursions, plan_actions
 from .risk_budget import track_day_peak
 from .stops import is_clock_drift
@@ -24,10 +27,13 @@ STOP_NEAR_PCT = 1.0
 RESYNC_EVERY_S = 600
 FALLBACK_STOP_PCT = 10.0
 MAX_STOP_RESTORE_FAILS = 3
+UNTRACKED_GRACE_S = 120     # untracked this long (and no limit of ours resting on it) = reconciliation trip
+HALT_SWEEP_TIMEOUT_S = 60   # a hung cancel must not hold up the fill poll behind it
 
 
 class PositionChecks:
-    """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts."""
+    """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
+    kill_seen."""
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:
@@ -47,6 +53,8 @@ class PositionChecks:
         if acct["equity"] and acct["day_pnl"] / acct["equity"] * 100 <= -lim.daily_loss_limit_pct:
             await self.n.send("daily_loss_limit", f"Day PnL {acct['day_pnl']} USDT. New shorts are blocked until "
                               "00:00 UTC. Review open positions.", urgent=True, cooldown_s=6 * 3600)
+        await guarded("kill_switch", ks.trip_on_daily_loss(self.j, self.app.settings, acct["equity"],
+                                                           acct["day_pnl"]), self.n)   # effective limit, sticky
         held = await tr.positions()
         for p in held:
             sym = p["symbol"]
@@ -60,6 +68,7 @@ class PositionChecks:
                     await send_safe(self.n, "guardian_recovered:position", f"position check OK again after {r[0]} "
                                     f"failures ({r[1] / 60:.0f} min)", sym, cooldown_s=0)
         self.pos_streak.forget(set(self.pos_streak.fails) - {p["symbol"] for p in held})   # closed meanwhile
+        self.untracked_since = {s: t for s, t in self.untracked_since.items() if s in {p["symbol"] for p in held}}
 
     async def _position_failed(self, sym: str, e: Exception) -> None:
         """One symbol's failure stays out of the pass result, but a streak of them escalates (ONDO, -1021)."""
@@ -81,6 +90,9 @@ class PositionChecks:
         if p["side"] != "short":
             await self.n.send("unexpected_long", f"A LONG position exists ({p['contracts']}). This desk is "
                               "short-only; close it manually.", sym, urgent=True)
+            await guarded("kill_switch", ks.trip(self.j, self.app.settings, REDUCING, "guardian", f"a {p['side']} "
+                          f"position ({p['contracts']}) in {sym} on a short-only desk", {"symbol": sym},
+                          cause="long_position"), self.n)
             return
         if p["UNPROTECTED"]:
             await self._restore_stop(sym)
@@ -88,6 +100,7 @@ class PositionChecks:
         if p["journal_status"] == "NOT IN JOURNAL":
             await self.n.send("untracked_position", "Position not opened via shortbot: stop is enforced but no "
                               "plan/thesis. Journal it or close it.", sym, cooldown_s=86400)
+        await self._untracked_trip(p)
         if p["stop_distance_pct"] is not None and p["stop_distance_pct"] < STOP_NEAR_PCT:
             await self.n.send("stop_near", f"Mark {p['mark']} is {p['stop_distance_pct']}% from stop "
                               f"{p['exchange_stop']}. PnL {p['unrealized_pnl']} USDT.", sym, cooldown_s=1800)
@@ -98,6 +111,23 @@ class PositionChecks:
             await self._track_funding(sym)
         except Exception as e:  # noqa: BLE001 - tracking must never fail the stop checks
             log.warning("funding tracking %s: %s", sym, e)
+
+    async def _untracked_trip(self, p: dict) -> None:
+        """A position the journal doesn't know is a reconciliation mismatch: trip REDUCING once it has stayed untracked
+        for UNTRACKED_GRACE_S with none of our limits resting on the symbol (a fill the 5 s poll is about to journal)."""
+        sym = p["symbol"]
+        try:
+            if p["journal_status"] != "NOT IN JOURNAL" or any(e["symbol"] == sym for e in self.entries.pending()):
+                self.untracked_since.pop(sym, None)
+                return
+            age = time.time() - self.untracked_since.setdefault(sym, time.time())
+            if age >= UNTRACKED_GRACE_S:
+                await ks.trip(self.j, self.app.settings, REDUCING, "guardian", f"reconciliation: {sym} position "
+                              f"({p['contracts']}) not in the journal for {age / 60:.0f} min",
+                              {"symbol": sym, "contracts": p["contracts"]}, cause="reconciliation")
+        except Exception as e:  # noqa: BLE001 - a kill-switch hook never costs the stop/plan checks below
+            log.exception("untracked trip %s failed", sym)
+            await send_safe(self.n, "guardian_error:kill_switch", f"{type(e).__name__}: {e}", sym, cooldown_s=1800)
 
     async def _restore_stop(self, sym: str) -> None:
         tr = self.app.trader
@@ -163,12 +193,55 @@ class PositionChecks:
 
     # ------------------------------------------------------------ limit entries (protective, 5 s)
     async def check_entries(self) -> None:
+        state = await self._kill_watch()
         if not self.ex.trade or not self.entries.pending():
             return
+        if state == HALTED:   # every pass: catches entries a session placed before it saw the trip
+            await self._halt_sweep()
         for ev in await self.entries.poll():
             if ev["event"] in ("cancelled", "expired"):
                 await self.n.send(f"entry_{ev['event']}", f"entry #{ev['entry_id']}: {ev.get('why', '')}",
                                   cooldown_s=0)
+            elif ev["event"] in ("filled", "tranche_joined") and state not in (None, ACTIVE):
+                await send_safe(self.n, "fill_while_" + state.lower(), f"entry #{ev['entry_id']} filled while the "
+                                f"kill switch is {state}: protected and journalled as trade #{ev.get('trade_id')}. "
+                                "Manage it under its plan or close it; it is never auto-closed.", urgent=True,
+                                cooldown_s=0)
+
+    async def _kill_watch(self) -> str | None:
+        """Each 5 s tick: lift a stale-heartbeat halt once protection works again (this guardian's own heartbeat),
+        and announce every loosening. That is the tripwire: a clear that bypassed shortbot-admin still reaches the
+        human. Returns the state, or None if it can't be read (the fill poll runs regardless)."""
+        try:
+            await ks.auto_clear_stale(self.j, self.app.settings)
+            st, seen = ks.read(self.j), self.kill_seen
+            self.kill_seen = st
+            if seen is None and st["state"] != ACTIVE:
+                await send_safe(self.n, "kill_switch_state", f"guardian started with the kill switch {st['state']} "
+                                f"since {st.get('at')} ({st.get('by')}: {st.get('reason')})", cooldown_s=0)
+            elif seen and st["level"] < seen["level"]:
+                sanctioned = st.get("cause") == "auto_clear" or str(st.get("by")).startswith("human:")
+                await send_safe(self.n, "kill_switch_loosened", f"{seen['state']} -> {st['state']} by {st.get('by')}: "
+                                f"{st.get('reason')}" + ("" if sanctioned else ". NOT via shortbot-admin: check who "
+                                                         "changed it"), urgent=not sanctioned, cooldown_s=0)
+            return st["state"]
+        except Exception as e:  # noqa: BLE001 - never fail the protective pass (it would stall the heartbeat)
+            log.exception("kill-switch watch failed")
+            await send_safe(self.n, "guardian_error:kill_switch", f"{type(e).__name__}: {e}", cooldown_s=1800)
+            return None
+
+    async def _halt_sweep(self) -> None:
+        try:
+            r = await asyncio.wait_for(cancel_resting(self.entries, "kill switch HALTED (guardian sweep)"),
+                                       HALT_SWEEP_TIMEOUT_S)
+            if r["cancelled"]:
+                await send_safe(self.n, "kill_switch_sweep", f"HALTED: withdrew resting entries {r['cancelled']}"
+                                + (f"; left for the fill poll {r['left_for_fill_poll']}" if r["left_for_fill_poll"]
+                                   else ""), cooldown_s=0)
+        except Exception as e:  # noqa: BLE001 (incl. TimeoutError) - the fill poll below must still run
+            log.exception("HALTED sweep failed")
+            await send_safe(self.n, "guardian_error:kill_switch", f"HALTED sweep: {type(e).__name__}: {e}",
+                            urgent=True, cooldown_s=1800)
 
     # ------------------------------------------------------------ watch (alert-only, 60 s, own lane)
     async def watch_positions(self) -> None:
