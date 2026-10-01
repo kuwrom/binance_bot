@@ -5,7 +5,9 @@ exchange-side stop-market (closePosition, mark price). Safety properties:
   the position is closed (with retries) and an urgent alert fires if even that fails
 - stop swaps roll back to the old stop on failure; stops only ever tighten
 - scanner vetoes + market regime are re-checked server-side; overriding them needs a logged reason
-- one asyncio lock serialises all order-changing calls in this process
+- every order-changing sequence on a symbol holds that symbol's lock (symlock.py): one at a time across the
+  guardian, the MCP servers and CLI calls on this host. Opening also holds `lock`, this process's one asyncio lock
+  (its portfolio checks), and always takes it first
 
 This module: account, positions and the order primitives. The flows are mixed in from trading_open.py (open_short)
 and trading_manage.py (close, move_stop, ensure_stop).
@@ -24,6 +26,7 @@ from .exchange import Exchanges
 from .journal import Journal
 from .risk import AccountState
 from .stops import STOP_TYPES, is_clock_drift, is_protective_stop, swap_stop  # noqa: F401 (re-export)
+from .symlock import SymbolLocks, lock_dir_for
 from .trading_manage import ManageFlow
 from .trading_open import OpenFlow
 
@@ -62,8 +65,14 @@ class Trader(OpenFlow, ManageFlow):
         self._alert = alert
         self.prechecks = prechecks
         self.budget = budget  # dynamic risk budget (risk_budget.py)
-        self.lock = asyncio.Lock()
+        self.lock = asyncio.Lock()   # open_short only (portfolio checks); per-symbol sequences use symbol_lock
+        self.symlocks = SymbolLocks(lock_dir_for(journal.db))
         self._one_way_ok = False
+
+    def symbol_lock(self, symbol: str, action: str = "", wait_s: float | None = None):
+        """`async with tr.symbol_lock(sym, "close"):` around an order-changing sequence (symlock.py). Reentrant in
+        one task; raises SymbolBusy (nothing sent) after `wait_s` (default LOCK_WAIT_S)."""
+        return self.symlocks.hold(symbol, action, wait_s)
 
     @property
     def t(self) -> ccxt.binanceusdm:

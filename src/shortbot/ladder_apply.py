@@ -109,7 +109,7 @@ async def apply(trader, symbol: str, dry_run: bool = False) -> dict[str, Any]:
             if a["kind"] == "move_stop":
                 results.append(await trader.move_stop(sym, a["price"], reason))
             elif a["kind"] == "close":
-                results.append(await trader.close(sym, reason, "", a["fraction"]))
+                results.append(await trader.close(sym, reason, "", a["fraction"], expect_contracts=cur))
             elif a["kind"] == "add":
                 results.append(await PositionOps(trader).add_to_winner(sym, a["notional"], a["stop"], reason))
         trader.j.log_decision("ladder_apply", f"{base['action']} (score {base['score']:+g})", sym, snapshot={

@@ -20,6 +20,7 @@ from .killswitch_ops import cancel_resting
 from .manager import excursions, plan_actions
 from .risk_budget import track_day_peak
 from .stops import is_clock_drift
+from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.guardian")
 SQUEEZE_PRICE_1H_PCT = 5.0
@@ -61,6 +62,8 @@ class PositionChecks:
             sym = p["symbol"]
             try:
                 await self._one_position(p)
+            except SymbolBusy as e:   # another process is acting on it: skip this pass, retry next pass
+                await self._position_busy(sym, e)
             except Exception as e:  # noqa: BLE001 - isolate: other positions still get checked
                 await self._position_failed(sym, e)
             else:
@@ -85,6 +88,15 @@ class PositionChecks:
             await send_safe(self.n, "guardian_failing:position", f"check failed {self.pos_streak.after}x in a row "
                             f"since {self.pos_streak.started(sym)} (last: {type(e).__name__}: {e}). Its stop and plan "
                             "are NOT being verified: check it on the exchange.", sym, urgent=True, cooldown_s=0)
+
+    async def _position_busy(self, sym: str, e: SymbolBusy) -> None:
+        """A session holds the symbol's lock (symlock.py; the guardian waits GUARDIAN_WAIT_S at most, so one busy
+        symbol never stalls the others). Not a failure: only a symbol that stays busy pass after pass escalates."""
+        log.info("position %s skipped this pass: %s", sym, e)
+        if self.pos_streak.fail(sym):
+            await send_safe(self.n, "guardian_failing:position", f"busy {self.pos_streak.after} passes in a row since "
+                            f"{self.pos_streak.started(sym)} ({e}). Its stop and plan are NOT being verified: check "
+                            "what holds it (a hung or suspended session?).", sym, urgent=True, cooldown_s=0)
 
     async def _one_position(self, p: dict) -> None:
         sym = p["symbol"]
@@ -137,14 +149,19 @@ class PositionChecks:
             res = await tr.ensure_stop(sym, FALLBACK_STOP_PCT)
             self.stop_fails.pop(sym, None)
             await self.n.send("stop_missing", f"No exchange stop found. Action: {res}", sym, urgent=True, cooldown_s=300)
+        except SymbolBusy:
+            raise   # someone else is acting on it: not a failed restore (check_positions skips it this pass)
         except Exception as e:  # noqa: BLE001
             n = self.stop_fails[sym] = self.stop_fails.get(sym, 0) + 1
             if n >= MAX_STOP_RESTORE_FAILS:
-                pos = await tr.position(sym)
-                if pos:
-                    await tr._market_close(sym, float(pos["contracts"]))
+                async with tr.symbol_lock(sym, "guardian: forced close (no stop)"):
+                    pos = await tr.position(sym)   # still due? another process may have protected or closed it
+                    covered = bool(pos) and bool(await tr.stop_orders(sym, close_position_only=True))
+                    if pos and not covered:
+                        await tr._market_close(sym, float(pos["contracts"]))
                 self.stop_fails.pop(sym, None)
-                await self.n.send("forced_close", f"Could not restore a stop {n}x ({e}); position CLOSED.", sym,
+                await self.n.send("forced_close", f"Could not restore a stop {n}x ({e}); " + (
+                    "a stop is in place now (set elsewhere): NOT closed." if covered else "position CLOSED."), sym,
                                   urgent=True, cooldown_s=0)
             else:
                 await self.n.send("stop_restore_failed", f"attempt {n}/{MAX_STOP_RESTORE_FAILS}: {e}", sym,
@@ -156,8 +173,24 @@ class PositionChecks:
                             low_since_entry=ex["low_since_entry"])
         trade = {**trade, **ex}
         tr, sym = self.app.trader, trade["symbol"]
-        hits = list(trade.get("targets_hit") or [])
-        for a in plan_actions(trade, p):
+        acts = plan_actions(trade, p)
+        if all(a.kind == "alert" for a in acts):
+            return await self._apply_plan(trade, p, acts)
+        async with tr.symbol_lock(sym, "guardian plan"):
+            # decide again on what is true NOW: a session may have closed, added or moved the stop since the snapshot
+            pos = await tr.position(sym)
+            fresh = self.j.get_trade(trade["id"])
+            if not pos or not fresh or fresh["status"] != "open":
+                return
+            stop = min((s["trigger"] for s in await tr.stop_orders(sym)), default=None)
+            p = {"mark": float(pos["markPrice"]), "contracts": float(pos["contracts"]), "exchange_stop": stop}
+            trade = {**fresh, **excursions(fresh, p["mark"])}
+            await self._apply_plan(trade, p, plan_actions(trade, p))
+
+    async def _apply_plan(self, trade: dict, p: dict, acts: list) -> None:
+        tr, sym = self.app.trader, trade["symbol"]
+        hits, cur = list(trade.get("targets_hit") or []), p["contracts"]
+        for a in acts:
             if a.kind == "alert":
                 await self.n.send(f"plan:{a.reason.split(':')[0][:30]}", a.reason, sym, cooldown_s=a.cooldown_s,
                                   urgent=a.urgent)
@@ -172,7 +205,8 @@ class PositionChecks:
                 self.j.update_trade(trade["id"], targets_hit=list(hits))
                 await self.n.send("plan_target_done", a.reason, sym, cooldown_s=0)
             elif a.kind == "close":
-                r = await tr.close(sym, f"plan/{a.reason}", fraction=a.fraction or 1.0)
+                r = await tr.close(sym, f"plan/{a.reason}", fraction=a.fraction or 1.0, expect_contracts=cur)
+                cur = r.get("remaining", cur)   # T1 and T2 in one pass: the second sees what the first left
                 if a.target_price is not None and r.get("ok"):
                     hits.append(a.target_price)
                     self.j.update_trade(trade["id"], targets_hit=list(hits))

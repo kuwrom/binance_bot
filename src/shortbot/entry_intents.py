@@ -117,7 +117,7 @@ async def _resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
         r = {**r, "status": "unknown", "abandon": 1}
         if r.get("tranche"):   # a split entry is one unit: the dead call's acked, never-pinned legs go too
             legs = desk._rows("tranche=? AND status='pending'", (r["tranche"],))
-            async with desk.tr.lock:
+            async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: roll back a dead call's split"):
                 await desk._rollback([_unit(x) for x in legs if "ladder_live" not in x["plan"]])
     t = desk.tr.t
     o = await clientid.lookup(t, r["symbol"], r["client_id"])
@@ -131,7 +131,7 @@ async def _resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
                            f"found {o['status']} and unfilled", order_id=o["id"])
     if r["abandon"] and not filled:
         from .entries import withdraw
-        async with desk.tr.lock:
+        async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: withdraw an abandoned intent"):
             got = await withdraw(t, {**r, "order_id": o["id"]})
         if got == "unknown":
             return None   # the cancel failed: look again next tick
@@ -175,7 +175,7 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
                 continue
             if r["status"] != "pending":   # its entry is gone, so its stop must go too
                 try:
-                    async with desk.tr.lock:
+                    async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a dead entry's pre-arm"):
                         await t.cancel_order(o["id"], sym, params={"trigger": True})
                 except Exception:  # noqa: BLE001 - retried next tick
                     continue
@@ -265,7 +265,7 @@ async def _late(desk, r: dict, o: dict, oid: str, cid: str | None, sym: str) -> 
                                 f"{oid} still rests; check Binance", sym, True)
         return None
     from .entries import withdraw
-    async with desk.tr.lock:   # cancel first; whatever filled is kept and adopted, never stripped
+    async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a late order"):   # cancel first; a fill is kept
         got = await withdraw(desk.tr.t, {**r, "order_id": oid})
     if got == "unknown":
         return None   # the next sweep retries

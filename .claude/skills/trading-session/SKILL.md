@@ -33,7 +33,7 @@ The shortbot state was injected at session start (open positions, alerts since l
 Load the `manage-position` skill, then for each position:
 - `positions` shows the plan, MAE/MFE and the stop on the exchange.
 - `coin_snapshot` shows what changed since entry. Compare it with the plan's invalidation and kill conditions.
-- Decide: hold / tighten (`move_stop`) / partial (`close_position` with a fraction) / exit / change the plan (`update_plan`). Log the reasoning.
+- Decide: hold / tighten (`move_stop`) / partial (`close_position` with a fraction and the `expect_contracts` you saw, or `of_original` for a plan target) / exit / change the plan (`update_plan`). Log the reasoning.
 
 ## 4. Scan and shortlist
 - `scan_shorts`: every scored coin is logged for research automatically.

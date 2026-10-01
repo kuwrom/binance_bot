@@ -18,7 +18,7 @@ from .setups import resolve
 
 
 class OpenFlow:
-    """Uses Trader's exchange, journal, lock, prechecks, budget and order primitives."""
+    """Uses Trader's exchange, journal, lock (then symbol_lock), prechecks, budget and order primitives."""
 
     async def open_short(self, symbol: str, stop_price: float, setup: str, thesis: str,
                          plan: dict | None = None, notional: float | None = None, leverage: int = 2,
@@ -85,15 +85,20 @@ class OpenFlow:
                 return {"ok": False, "error": f"size {amount * price:.2f} USDT below exchange minimum {min_cost}"}
             if blocked := await killswitch.gate(self, "open_short"):   # again: a trip during the checks above
                 return blocked
-
-            await self._prepare(symbol, leverage)
-            features = {**checks.get("features", {}), "regime": checks.get("regime"), "budget": budget,
-                        "vetoes_overridden": blockers if blockers else None, "veto_override": veto_override,
-                        "limits": lim.__dict__}
-            tid = self.j.create_trade(symbol, setup, thesis, stop_price, leverage, tp.to_dict(), features,
-                                      self.ex.experiment)
-            self.j.update_trade(tid, conviction=budget.get("conviction"), regime_cell=budget.get("cell"))
-            return await self._enter(tid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
+            async with self.symbol_lock(symbol, f"open short ({setup})"):
+                if blocked := killswitch.state_refusal(self.j, "open_short"):   # tripped while we waited for it
+                    return blocked
+                if await self.position(symbol):   # a limit fill or another session got there first
+                    return {"ok": False, "error": f"{symbol} already has a position (opened since the checks); "
+                                                  "manage it instead"}
+                await self._prepare(symbol, leverage)
+                features = {**checks.get("features", {}), "regime": checks.get("regime"), "budget": budget,
+                            "vetoes_overridden": blockers if blockers else None, "veto_override": veto_override,
+                            "limits": lim.__dict__}
+                tid = self.j.create_trade(symbol, setup, thesis, stop_price, leverage, tp.to_dict(), features,
+                                          self.ex.experiment)
+                self.j.update_trade(tid, conviction=budget.get("conviction"), regime_cell=budget.get("cell"))
+                return await self._enter(tid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
 
     async def _enter(self, tid: int, symbol: str, amount: float, stop_price: float, sized: bool,
                      leverage: int, lim, equity: float) -> dict:

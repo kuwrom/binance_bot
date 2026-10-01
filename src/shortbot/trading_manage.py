@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import ccxt.async_support as ccxt
 
-from . import reconcile, tranches
+from . import close_intent, reconcile, tranches
 from .exchange import to_symbol
 from .stops import is_protective_stop, swap_stop
 
@@ -27,26 +27,27 @@ def _whole(o: dict) -> bool:
 
 
 class ManageFlow:
-    """Uses Trader's exchange, journal, lock, position/stop queries and order primitives."""
+    """Uses Trader's exchange, journal, symbol_lock, position/stop queries and order primitives."""
 
-    async def close(self, symbol: str, reason: str, lesson: str = "", fraction: float = 1.0) -> dict:
+    async def close(self, symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,
+                    expect_contracts: float | None = None, of_original: bool = False) -> dict:
+        """fraction: of the CURRENT size, or with of_original the cumulative share of the original size. A partial
+        close is checked against the caller's view inside the symbol lock (close_intent.py)."""
         from .trading import _f, _sleep
         symbol = to_symbol(symbol)
         if not 0 < fraction <= 1:
             return {"ok": False, "error": "fraction must be in (0, 1]"}
-        async with self.lock:
+        async with self.symbol_lock(symbol, f"close {fraction:g}{' of original' if of_original else ''}: {reason}"):
             await self.ex.trade_markets()
             pos = await self.position(symbol)
             if not pos:
                 return {"ok": False, "error": f"no open position in {symbol}"}
-            size = _f(pos["contracts"])
-            amount = size if fraction == 1 else float(self.t.amount_to_precision(symbol, size * fraction))
-            if amount <= 0:
-                return {"ok": False, "error": "fraction too small for the exchange step size"}
-            amount = min(amount, size)   # a fraction that rounds to the whole size is a full close
+            size, trade = _f(pos["contracts"]), self.j.active_trade(symbol)
+            amount = close_intent.sized(self, symbol, size, trade, fraction, expect_contracts, of_original)
+            if isinstance(amount, dict):
+                return amount   # refused: nothing sent
             order = await self._market_close(symbol, amount)
             exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
-            trade = self.j.active_trade(symbol)
             if amount < size:
                 self.j.log_decision("partial_close", reason, symbol, snapshot={
                     "trade_id": trade and trade["id"], "exit": exit_px, "amount": amount, "lesson": lesson})
@@ -149,7 +150,7 @@ class ManageFlow:
         """Tighten-only. Swap = cancel old, place new; on failure the old stop is restored."""
         from .trading import _f
         symbol = to_symbol(symbol)
-        async with self.lock:
+        async with self.symbol_lock(symbol, f"move stop to {new_stop:g}: {reason}"):
             await self.ex.trade_markets()
             pos = await self.position(symbol)
             if not pos:
@@ -182,7 +183,7 @@ class ManageFlow:
         """Guardian safety net: restore a missing stop (journal stop, else entry+fallback%), or close the
         position if price is already beyond the intended stop."""
         from .trading import _f, _sleep
-        async with self.lock:
+        async with self.symbol_lock(symbol, "guardian: restore a missing stop"):
             if await self.stop_orders(symbol, close_position_only=True):
                 return None
             pos = await self.position(symbol)

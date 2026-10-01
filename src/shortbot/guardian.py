@@ -24,6 +24,7 @@ from .guardian_positions import PositionChecks
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
 from .notify import Notifier
+from .symlock import GUARDIAN_WAIT_S
 
 log = logging.getLogger("shortbot.guardian")
 # job: (every_s, timeout_s). Jobs of one lane run one after another; the lanes run side by side.
@@ -46,6 +47,7 @@ class Guardian(PositionChecks, MarketJobs):
         self.app = app or get_app(research=False)
         self.n = Notifier(self.app.settings, self.app.journal)
         self.app.trader._alert = self.n.as_trader_alert
+        self.app.trader.symlocks.wait_s = GUARDIAN_WAIT_S   # a busy symbol is skipped, never waited out
         self.ex = self.app.ex
         self.j = self.app.journal
         self.stop_fails: dict[str, int] = {}

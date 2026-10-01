@@ -19,7 +19,7 @@ Re-plan from the CURRENT price, as if entering now; the entry price is irrelevan
 `reassess` returns R now, risk to stop in R and in ATR, the chandelier stop, reward:risk to the next target, the
 ideal size for today's risk budget, and ranked actions. Rules: docs/POSITION_MANAGEMENT.md §b.
 - **Exit** if you wouldn't open it now. Don't wait for the stop.
-- **Reduce** (`close --fraction`) if the size is above today's ideal.
+- **Reduce** (`close --fraction --expect-contracts <size you saw>`) if the size is above today's ideal. A partial close without the size you saw is refused for 5 min after any size change (the guardian may have just taken a target).
 - **Tighten / trail** (`move-stop`), using the chandelier stop or structure.
 - **Widen with size cut** (`widen-stop`): only once, beyond a sweep or structural level. The app cuts size so the loss stays ≤ 1R.
 - **Add** (`add`): only in profit. The app tightens the stop first so the total worst case stays ≤ 1R. Never average up.
@@ -35,7 +35,7 @@ ideal size for today's risk budget, and ranked actions. Rules: docs/POSITION_MAN
    - funding moved to 1h settlement
    - a bullish catalyst in the news
    Any of these: propose cutting or tightening.
-4. **Targets**: the guardian executes these only if `auto.targets` is set; otherwise it alerts. When a target is reached, propose the partial close from the plan.
+4. **Targets**: the guardian executes these only if `auto.targets` is set; otherwise it alerts. When a target is reached, propose the partial close from the plan with `of_original` (`--of-original`): the fraction is then of the ORIGINAL size, as the plan counts it, so a target the guardian already took closes nothing more (STX 2026-10-01).
 5. **Time stop**: past `time_stop_hours` with no follow-through means exit (the playbook says a dead short is capital at risk for nothing).
 6. **Profit protection**: breakeven and trailing are automatic when their auto flags are on. Otherwise suggest `move_stop`.
 7. **Update the plan when the facts change**, e.g. extend a time stop that is working, or add a target. Use `update_plan` (needs approval) and write down why.

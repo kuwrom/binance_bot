@@ -138,10 +138,14 @@ async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, pl
 
 
 @tool(human=True)
-async def close_position(symbol: str, reason: str, lesson: str = "", fraction: float = 1.0) -> dict[str, Any]:
+async def close_position(symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,
+                         expect_contracts: float | None = None, of_original: bool = False) -> dict[str, Any]:
     """Buy back all or a fraction of a short (reduce-only). REQUIRES HUMAN APPROVAL. A full close records
-    exchange-truth PnL (fees + funding included) and your lesson in the journal."""
-    return await get_app().trader.close(symbol, reason, lesson, fraction)
+    exchange-truth PnL (fees + funding included) and your lesson in the journal. `fraction` is of the CURRENT size:
+    pass the contracts you saw as expect_contracts (refused if the position changed since, e.g. the guardian took a
+    target). For a plan target use of_original=true: fraction = share of the ORIGINAL size gone by the end, as plan
+    targets count it (a target already taken closes nothing more)."""
+    return await get_app().trader.close(symbol, reason, lesson, fraction, expect_contracts, of_original)
 
 
 @tool

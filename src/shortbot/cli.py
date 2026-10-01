@@ -125,7 +125,8 @@ async def _run(args: argparse.Namespace) -> object:
                                                    json.loads(args.plan) if args.plan else None, args.notional,
                                                    args.leverage, args.veto_override, args.conviction)
             case "close":
-                return await app.trader.close(args.symbol, args.reason, args.lesson, args.fraction)
+                return await app.trader.close(args.symbol, args.reason, args.lesson, args.fraction,
+                                              args.expect_contracts, args.of_original)
             case "book-plan":
                 return await allocator.run_cli(app, args)
             case "kill-switch" | "flatten":
@@ -271,7 +272,9 @@ def main() -> None:
     c.add_argument("symbol")
     c.add_argument("--reason", required=True)
     c.add_argument("--lesson", default="")
-    c.add_argument("--fraction", type=float, default=1.0)
+    c.add_argument("--fraction", type=float, default=1.0, help="of the CURRENT size (see --of-original)")
+    c.add_argument("--expect-contracts", type=float, help="the size you saw: refused if it changed since")
+    c.add_argument("--of-original", action="store_true", help="fraction = share of the ORIGINAL size gone by the end")
     killswitch_ops.add_cli(sub)
     allocator.add_cli(sub)
     sub.add_parser("reassess", help="re-plan a position from its current state").add_argument("symbol")

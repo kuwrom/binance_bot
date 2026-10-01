@@ -10,6 +10,7 @@ from typing import Any
 from . import killswitch as ks
 from .entries import EntryDesk, withdraw
 from .killswitch import HALTED, REDUCING
+from .symlock import SymbolBusy
 
 CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who typed it; shortbot-admin can
 
@@ -26,10 +27,14 @@ async def cancel_resting(desk, reason: str) -> dict[str, list[int]]:
         return out
     t = desk.tr.t
     for e in rows:   # compare-and-set: a resolution the reconciler or the placing call made meanwhile wins
-        if await withdraw(t, e) == "unfilled" and desk._settle(e["id"], e["status"], status="cancelled", reason=reason):
-            out["cancelled"].append(e["id"])
-        else:
-            out["left_for_fill_poll"].append(e["id"])
+        try:
+            async with desk.tr.symbol_lock(e["symbol"], f"kill switch: withdraw entry #{e['id']}"):
+                done = await withdraw(t, e) == "unfilled" and desk._settle(e["id"], e["status"], status="cancelled",
+                                                                          reason=reason)
+        except SymbolBusy:   # a session is acting on the symbol: the guardian's HALTED sweep retries every pass
+            out.setdefault("busy", []).append(e["id"])
+            continue
+        out["cancelled" if done else "left_for_fill_poll"].append(e["id"])
     return out
 
 

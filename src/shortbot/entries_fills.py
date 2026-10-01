@@ -241,7 +241,7 @@ async def _drop_prearm(desk, e: dict[str, Any], exit_orders: list[str]) -> bool:
     except Exception:  # noqa: BLE001 - unreadable: cancel it anyway, the exit stays unlabelled
         a = {}
     if a.get("status") in (None, "open"):
-        async with desk.tr.lock:
+        async with desk.tr.symbol_lock(sym, f"entry #{e['id']}: drop the pre-arm of a round trip"):
             try:
                 await t.cancel_order(e["prearm_id"], sym, params={"trigger": True})
             except Exception:  # noqa: BLE001 - best effort, as in withdraw

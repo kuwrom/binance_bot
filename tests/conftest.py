@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+
 import pytest
 
 
@@ -22,3 +25,52 @@ def guardian_alive(request, monkeypatch):
         async def alive(tr, now=None):
             return None
         monkeypatch.setattr("shortbot.killswitch.watch_guardian", alive)
+
+
+_SRC = str(Path(__file__).resolve().parents[1] / "src" / "shortbot")
+_TESTS = str(Path(__file__).resolve().parent)
+_WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_orders": 0}   # name: symbol arg
+
+
+def _origin(frame) -> str | None:
+    """The outermost shortbot function on the call chain that reached the exchange (test frames are skipped). None
+    when a test drove a private primitive (`_place_stop`, `_market_close`...) directly: no sequence to lock."""
+    outer = None
+    while frame:
+        f = frame.f_code.co_filename
+        if f.startswith(_SRC):
+            outer = frame
+        elif not f.startswith(_TESTS):
+            break
+        frame = frame.f_back
+    if outer is None or outer.f_code.co_name.startswith("_") or outer.f_code.co_name == "withdraw":
+        return None   # withdraw() is a primitive too: its callers hold the lock
+    return f"{Path(outer.f_code.co_filename).stem}.{outer.f_code.co_name}"
+
+
+@pytest.fixture(autouse=True)
+def order_lock_audit(monkeypatch):
+    """Task #21: every order-changing exchange call shortbot makes runs inside that symbol's lock, in every test."""
+    from shortbot import symlock
+    from tests.fakes import FakeCcxt
+    tables, bad = [], []
+    real_init = symlock.SymbolLocks.__init__
+
+    def init(self, *a, **k):
+        real_init(self, *a, **k)
+        tables.append(self)
+    monkeypatch.setattr(symlock.SymbolLocks, "__init__", init)
+
+    def audit(name, at):
+        real = getattr(FakeCcxt, name)
+
+        async def audited(self, *a, **k):
+            origin = _origin(sys._getframe(1))
+            if origin and not any(t.holds(a[at]) for t in tables):
+                bad.append(f"{name}({a[at]}) via {origin} outside its symbol lock")
+            return await real(self, *a, **k)
+        monkeypatch.setattr(FakeCcxt, name, audited)
+    for name, at in _WRITES.items():
+        audit(name, at)
+    yield bad
+    assert not bad, bad

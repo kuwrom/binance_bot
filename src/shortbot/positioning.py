@@ -126,7 +126,9 @@ class PositionOps:
         symbol = to_symbol(symbol)
         if blocked := await killswitch.gate(tr, "widen_stop"):   # can raise the loss at stop back up to 1R
             return blocked
-        async with tr.lock:
+        async with tr.symbol_lock(symbol, f"widen stop to {new_stop:g}: {reason}"):
+            if blocked := killswitch.state_refusal(tr.j, "widen_stop"):   # tripped while we waited for the lock
+                return blocked
             await tr.ex.trade_markets()
             pos, trade = await tr.position(symbol), tr.j.active_trade(symbol)
             if not pos or not trade:
@@ -167,6 +169,11 @@ class PositionOps:
         symbol = to_symbol(symbol)
         if blocked := await killswitch.gate(tr, "add_to_winner"):   # before the pre-add stop tighten
             return blocked
+        async with tr.symbol_lock(symbol, f"add {notional:g} USDT to a winner: {reason}"):   # one view: decide, act
+            return await self._add(symbol, notional, new_stop, reason)
+
+    async def _add(self, symbol: str, notional: float, new_stop: float, reason: str) -> dict[str, Any]:
+        tr = self.tr
         pos, trade = await tr.position(symbol), tr.j.active_trade(symbol)
         if not pos or not trade:
             return {"ok": False, "error": "no journal-tracked position"}
@@ -199,10 +206,9 @@ class PositionOps:
             mv = await tr.move_stop(symbol, new_stop, f"pre-add tighten: {reason}")  # protect first
             if not mv.get("ok"):
                 return {"ok": False, "error": f"could not tighten the stop first: {mv.get('error')}"}
-        async with tr.lock:
-            if blocked := await killswitch.gate(tr, "add_to_winner"):   # tripped meanwhile: the tightened stop stays
-                return blocked
-            await tr.t.create_order(symbol, "market", "sell", add_qty)
+        if blocked := killswitch.state_refusal(tr.j, "add_to_winner"):   # tripped meanwhile: the tightened stop stays
+            return blocked
+        await tr.t.create_order(symbol, "market", "sell", add_qty)
         plan = dict(trade.get("plan") or {})
         plan.setdefault("r1_usdt", r1)                               # pin 1R before the amount grows
         plan.setdefault("full_size", trade.get("amount") or qty)     # ladder exposure base (x = contracts/full_size)

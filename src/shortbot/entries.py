@@ -38,6 +38,7 @@ from . import killswitch
 from .entries_place import MIN_TTL_S, EntryPlacement  # noqa: F401 (MIN_TTL_S re-export)
 from .entry_intents import HINTS, ON_BOOK, located
 from .stops import is_clock_drift
+from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.entries")
 
@@ -150,9 +151,10 @@ class EntryDesk(EntryPlacement):
     # ------------------------------------------------------------ cancel / amend
     async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:
         """Relabel the row only when its limit died unfilled; returns withdraw's outcome."""
-        got = await withdraw(self.tr.t, e)
-        if got == "unfilled":
-            self._update(e["id"], status=status, reason=reason)
+        async with self.tr.symbol_lock(e["symbol"], f"cancel entry #{e['id']}: {reason}"):
+            got = await withdraw(self.tr.t, e)
+            if got == "unfilled":
+                self._update(e["id"], status=status, reason=reason)
         return got
 
     def _filled_sibling(self, e: dict) -> int | None:
@@ -185,10 +187,18 @@ class EntryDesk(EntryPlacement):
         t = self.tr.t
         px = float(t.price_to_precision(e["symbol"], new_limit))
         # a lower sell limit fills sooner and loses more at the stop; raising it toward the stop only reduces risk
-        if px < e["limit_price"] and (blocked := await killswitch.gate(self.tr, "amend (lower limit)")):
+        lower = px < e["limit_price"]
+        if lower and (blocked := await killswitch.gate(self.tr, "amend (lower limit)")):
             return blocked
-        await t.edit_order(e["order_id"], e["symbol"], "limit", "sell", e["amount"], px)
-        self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}")
+        async with self.tr.symbol_lock(e["symbol"], f"amend entry #{entry_id}: {reason}"):
+            if not self._rows("id=? AND status='pending' AND COALESCE(replaced, 0)=0 AND limit_price=?",
+                              (entry_id, e["limit_price"])):
+                return {"ok": False, "error": f"entry #{entry_id} changed since you looked (filled, cancelled or "
+                                              "amended meanwhile): re-read pending_entries"}
+            if lower and (blocked := killswitch.state_refusal(self.j, "amend (lower limit)")):
+                return blocked
+            await t.edit_order(e["order_id"], e["symbol"], "limit", "sell", e["amount"], px)
+            self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}")
         return {"ok": True, "entry_id": entry_id, "new_limit": px}
 
     # ------------------------------------------------------------ the 5 s loop (guardian)
@@ -206,6 +216,9 @@ class EntryDesk(EntryPlacement):
             tried += 1
             try:
                 ev = await self._poll_one(e, now_ms)
+            except SymbolBusy as x:   # a session acts on this symbol: the row stays pending, retried next pass
+                log.info("entry #%s skipped this pass: %s", e["id"], x)
+                continue
             except Exception as x:  # noqa: BLE001 - isolated: the next entry is still polled
                 failed, last = failed + 1, x
                 await self._poll_failed(e, x)
@@ -245,7 +258,7 @@ class EntryDesk(EntryPlacement):
         """Not found past its GTD: Binance forgets an unfilled CANCELED/EXPIRED order 3 days after its creation and
         keeps any order with a fill for 90 days (Query-Order doc), so it expired unfilled. Its pre-armed stop goes."""
         if e.get("prearm_id"):
-            async with self.tr.lock:
+            async with self.tr.symbol_lock(e["symbol"], f"entry #{e['id']}: drop a forgotten entry's pre-arm"):
                 try:
                     await self.tr.t.cancel_order(e["prearm_id"], e["symbol"], params={"trigger": True})
                 except Exception:  # noqa: BLE001 - best effort, as in withdraw
@@ -306,7 +319,7 @@ class EntryDesk(EntryPlacement):
         stop rests; if that stop can't be placed the pre-arm stays and the row stays pending (StopNotPlaced)."""
         tr, sym = self.tr, e["symbol"]
         rest, cps = "filled", []
-        async with tr.lock:
+        async with tr.symbol_lock(sym, f"entry #{e['id']} filled: protect it"):
             if o.get("status") == "open":   # partly filled and still resting
                 rest = await withdraw(tr.t, {**e, "prearm_id": None})
             pos = await tr._verified_position(sym)

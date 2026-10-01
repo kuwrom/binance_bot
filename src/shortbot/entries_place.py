@@ -147,7 +147,6 @@ class EntryPlacement:
         from .risk import est_liquidation_distance_pct
         if dist * 100 > est_liquidation_distance_pct(lev) - lim.liq_buffer_pct:
             raise ValueError(f"at {lev}x the stop ({dist * 100:.1f}%) sits beyond liquidation minus buffer")
-        await tr._prepare(sym, lev)
         px = float(tr.t.price_to_precision(sym, limit))
         from .risk import ShortRequest, check_open_short
         acct = await tr.account_state()
@@ -176,29 +175,37 @@ class EntryPlacement:
         a = atr(c1h) or 0.0
         if blocked := await killswitch.gate(tr, "limit entry"):   # a trip while this group was being placed: no row
             raise ValueError(blocked["error"])
-        # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
-        cid = clientid.new("entry", gid)
-        eid = self.j._insert(
-            "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price, amount,"
-            " leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price, ref_ms,"
-            " conviction, regime_cell, tranche, leg, client_id, abandon)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
-             json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
-             p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"), budget.get("cell"),
-             p.get("tranche"), p.get("leg"), cid, 1 if p.get("tranche") else 0))   # a split leg is withdrawn if unsure
-        try:
-            order = await tr.t.create_order(sym, "limit", "sell", amount, px,
-                                            {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
-        except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
-            unsure = clientid.send_unknown(e)
-            self._settle(eid, "placing", status="unknown" if unsure else "rejected", reason=f"{type(e).__name__}: {e}")
-            if unsure:
-                raise SendUnknown(eid, e) from e
-            raise
-        if not self._settle(eid, "placing", status="pending", order_id=order.get("id")):
-            raise RuntimeError(f"entry #{eid} was resolved by the reconciler while its order was in flight")
-        prearm_id = await self._prearm(eid, sym, amount, stop) if prearm else None
+        async with tr.symbol_lock(sym, f"place a limit entry (group {gid})"):
+            if blocked := killswitch.state_refusal(tr.j, "limit entry"):   # tripped while we waited for the lock
+                raise ValueError(blocked["error"])
+            if await tr.position(sym):   # filled meanwhile (e.g. a split's far leg): never re-lever a live position
+                raise ValueError(f"already short {sym} (opened since the checks); manage the existing position")
+            await tr._prepare(sym, lev)   # leverage + isolated margin: only on a flat symbol, after the risk check
+            # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
+            cid = clientid.new("entry", gid)
+            eid = self.j._insert(
+                "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price,"
+                " amount, leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price,"
+                " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
+                 json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
+                 p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"),
+                 budget.get("cell"), p.get("tranche"), p.get("leg"), cid,
+                 1 if p.get("tranche") else 0))   # a split leg is withdrawn if unsure
+            try:
+                order = await tr.t.create_order(sym, "limit", "sell", amount, px, {
+                    "timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
+            except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
+                unsure = clientid.send_unknown(e)
+                self._settle(eid, "placing", status="unknown" if unsure else "rejected",
+                             reason=f"{type(e).__name__}: {e}")
+                if unsure:
+                    raise SendUnknown(eid, e) from e
+                raise
+            if not self._settle(eid, "placing", status="pending", order_id=order.get("id")):
+                raise RuntimeError(f"entry #{eid} was resolved by the reconciler while its order was in flight")
+            prearm_id = await self._prearm(eid, sym, amount, stop) if prearm else None
         odds = {}
         try:
             from .probability import ProbabilityEngine

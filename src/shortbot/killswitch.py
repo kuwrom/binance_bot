@@ -219,6 +219,13 @@ def how_to_clear(st: dict[str, Any]) -> str | None:
             else f"{CLEAR_HINT} (not via Claude)")
 
 
+def state_refusal(j, action: str) -> dict[str, Any] | None:
+    """The gate's re-check INSIDE a symbol lock: the persisted state only. No heartbeat watchdog (its halt cancels
+    entries on every symbol, and a task holding one symbol lock never takes another)."""
+    st = read(j)
+    return refusal(st, action) if st["state"] != ACTIVE else None
+
+
 def refusal(st: dict[str, Any], action: str) -> dict[str, Any]:
     return {"ok": False, "kill_switch": st["state"],
             "error": f"kill switch {st['state']} since {st.get('at')} ({st.get('by')}: {st.get('reason')}): "
