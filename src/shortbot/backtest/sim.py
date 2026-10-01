@@ -1,4 +1,6 @@
-"""Event-driven hourly simulator for ONE short with a plan (docs/BACKTEST.md). Bars are aligned perp rows
+"""Event-driven hourly simulator for ONE trade with a plan (docs/BACKTEST.md): a short by default, a long when
+`Plan.side == "long"` (research only, task #17: every rule below is mirrored, e.g. a long's stop sits below entry,
+its targets above, it PAYS positive funding and its market entry buys at close + slippage). Bars are aligned perp rows
 (patterns.align): {"ts" (bar OPEN, ms), "o","h","l","c","qv", ...}. A signal is known at the CLOSE of bar i.
 
 Conventions (all conservative, fixed before any result was seen):
@@ -66,6 +68,7 @@ class Plan:
     arm_px: float | None = None                    # entry="stop": a bar must trade >= this before the trigger
     fund_budget_r: float | None = None             # exit at a close once funding PAID >= this many R ...
     fund_follow_r: float = 0.5                     # ... while the open price gain is < this many R
+    side: str = "short"                            # short | long (research: the desk trades shorts only)
 
 
 def vol24(rows: list[dict], i: int) -> float:
@@ -87,113 +90,121 @@ def _funding_index(rows: list[dict], funding: list | None) -> dict[int, float]:
 
 def simulate(rows: list[dict], i: int, plan: Plan, funding: list | None = None, costs: Costs = COSTS,
              fidx: dict[int, float] | None = None, vol24_usd: float | None = None) -> dict[str, Any] | None:
-    """Simulate a short signalled at the close of bar i. None if the plan is invalid; {"filled": False} if a
-    limit never filled. `vol24_usd` overrides the 24h volume behind the slippage (sub-hourly rows, trail5m)."""
+    """Simulate a trade signalled at the close of bar i. None if the plan is invalid; {"filled": False} if a
+    resting entry never filled. `vol24_usd` overrides the 24h volume behind the slippage (sub-hourly rows, trail5m).
+    Written once for both sides with s = +1 (short) / -1 (long): for a short every expression reduces to the
+    original short-only code."""
     n = len(rows)
-    if i >= n - 1:
+    if i >= n - 1 or plan.side not in ("short", "long"):
         return None
+    s = 1 if plan.side == "short" else -1
+    adv = (lambda b: b["h"]) if s > 0 else (lambda b: b["l"])     # the bar extreme that hurts the position
+    fav = (lambda b: b["l"]) if s > 0 else (lambda b: b["h"])     # ... and the one that helps it
+    worse, better = (max, min) if s > 0 else (min, max)           # for the position: higher hurts a short
     slip = costs.slip(vol24(rows, i) if vol24_usd is None else vol24_usd)
     if plan.entry == "market":
-        fill_i, entry, fee_in, first = i, rows[i]["c"] * (1 - slip), costs.taker_bps / 1e4, i + 1
+        fill_i, entry, fee_in, first = i, rows[i]["c"] * (1 - s * slip), costs.taker_bps / 1e4, i + 1
         slip_cost = slip
-    elif plan.entry == "stop":      # sell-stop below the market: breakdown resumption (round 2)
+    elif plan.entry == "stop":      # stop entry beyond the market: breakdown (short) / breakout (long) resumption
         trig = plan.limit_px
-        if not trig or trig >= rows[i]["c"]:
+        if not trig or s * (rows[i]["c"] - trig) <= 0:
             return None
         armed, fill_i = plan.arm_px is None, None
         for j in range(i + 1, min(n, i + 1 + plan.limit_ttl)):
-            if armed and rows[j]["l"] < trig:
+            if armed and s * (trig - fav(rows[j])) > 0:
                 fill_i = j
                 break
-            if rows[j]["h"] >= plan.stop:           # invalidated before the trigger: order cancelled
+            if s * (adv(rows[j]) - plan.stop) >= 0:    # invalidated before the trigger: order cancelled
                 break
-            armed = armed or rows[j]["h"] >= plan.arm_px
+            armed = armed or s * (adv(rows[j]) - plan.arm_px) >= 0
         if fill_i is None:
             return {"filled": False, "signal_i": i}
-        entry = min(trig, rows[fill_i]["o"]) * (1 - costs.stop_slip_mult * slip)   # stop-market into a falling book
+        entry = better(trig, rows[fill_i]["o"]) * (1 - s * costs.stop_slip_mult * slip)   # stop-market, gap-aware
         fee_in, first, slip_cost = costs.taker_bps / 1e4, fill_i, costs.stop_slip_mult * slip
     else:
         lim = plan.limit_px
-        if not lim or lim <= rows[i]["c"]:
+        if not lim or s * (lim - rows[i]["c"]) <= 0:
             return None
-        fill_i = next((j for j in range(i + 1, min(n, i + 1 + plan.limit_ttl)) if rows[j]["h"] > lim), None)
+        fill_i = next((j for j in range(i + 1, min(n, i + 1 + plan.limit_ttl)) if s * (adv(rows[j]) - lim) > 0),
+                      None)
         if fill_i is None:
             return {"filled": False, "signal_i": i}
         entry, fee_in, first, slip_cost = lim, costs.maker_bps / 1e4, fill_i, 0.0
     stop0 = plan.stop
-    if not entry or stop0 <= entry:
+    if not entry or s * (stop0 - entry) <= 0:
         return None
-    risk = (stop0 - entry) / entry
+    risk = s * (stop0 - entry) / entry
     fidx = fidx if fidx is not None else (_funding_index(rows, funding) if costs.funding else {})
     stop, stop_kind = stop0, "stop"
     rem, gross, fees, fund = 1.0, 0.0, fee_in, 0.0
-    pend = sorted(plan.targets, key=lambda t: -t[0])  # nearest (highest) target first
-    lo, hi, overrun = entry, entry, 0.0     # overrun = how far (in R) the stop bar ran past entry: squeeze size
+    pend = sorted(plan.targets, key=lambda t: -s * t[0])  # nearest target first
+    best, worst, overrun = entry, entry, 0.0   # overrun = how far (in R) the stop bar ran past entry: squeeze size
     exit_i, reason = None, None
     last = min(n - 1, fill_i + plan.time_stop)
     f_from = fill_i + (2 if plan.entry == "market" else 1)   # a close-time entry comes right after that print
 
     def close(frac: float, px: float, fee_bps: float) -> None:
         nonlocal rem, gross, fees
-        gross += frac * (entry - px) / entry
+        gross += frac * s * (entry - px) / entry
         fees += frac * fee_bps / 1e4 * px / entry
         rem -= frac
 
     for j in range(first, last + 1):
         b = rows[j]
         if costs.funding and j >= f_from and j in fidx and rem > 1e-9:
-            fund += rem * fidx[j] * b["o"] / entry
+            fund += s * rem * fidx[j] * b["o"] / entry          # a short receives positive funding, a long pays it
         in_fill_bar = plan.entry != "market" and j == fill_i
-        if not in_fill_bar and b["o"] >= stop:
-            overrun = (b["h"] - entry) / entry / risk
-            px = b["o"] * (1 + costs.stop_slip_mult * slip)
+        if not in_fill_bar and s * (b["o"] - stop) >= 0:
+            overrun = s * (adv(b) - entry) / entry / risk
+            px = b["o"] * (1 + s * costs.stop_slip_mult * slip)
             slip_cost += rem * costs.stop_slip_mult * slip
-            hi = max(hi, b["o"])
+            worst = worse(worst, b["o"])
             close(rem, px, costs.taker_bps)
             exit_i, reason = j, f"{stop_kind}_gap"
             break
-        if b["h"] >= stop:
-            overrun = (b["h"] - entry) / entry / risk
-            px = (stop + costs.stop_overshoot * (b["h"] - stop)) * (1 + costs.stop_slip_mult * slip)
+        if s * (adv(b) - stop) >= 0:
+            overrun = s * (adv(b) - entry) / entry / risk
+            px = (stop + costs.stop_overshoot * (adv(b) - stop)) * (1 + s * costs.stop_slip_mult * slip)
             slip_cost += rem * costs.stop_slip_mult * slip
-            hi = max(hi, stop)
+            worst = worse(worst, stop)
             close(rem, px, costs.taker_bps)
             exit_i, reason = j, stop_kind
             break
-        hi = max(hi, b["h"])
+        worst = worse(worst, adv(b))
         if not in_fill_bar:
-            while pend and b["l"] <= pend[0][0] and rem > 1e-9:
+            while pend and s * (pend[0][0] - fav(b)) >= 0 and rem > 1e-9:
                 tp, frac = pend.pop(0)
                 close(min(frac, rem), tp, costs.maker_bps)
-            lo = min(lo, b["l"])
+            best = better(best, fav(b))
             if rem <= 1e-9:
                 exit_i, reason = j, "target"
                 break
-        mfe_r = (entry - lo) / entry / risk
-        if plan.be_r is not None and mfe_r >= plan.be_r and entry < stop:
+        mfe_r = s * (entry - best) / entry / risk
+        if plan.be_r is not None and mfe_r >= plan.be_r and s * (stop - entry) > 0:
             stop, stop_kind = entry, "breakeven"
         if plan.trail_act_r is not None and mfe_r >= plan.trail_act_r:
-            t = lo * (1 + plan.trail_dist_r * risk)
-            if t < stop:
+            t = best * (1 + s * plan.trail_dist_r * risk)
+            if s * (stop - t) > 0:
                 stop, stop_kind = t, "trail"
         budget = (plan.fund_budget_r is not None and -fund / risk >= plan.fund_budget_r
-                  and (entry - b["c"]) / entry / risk < plan.fund_follow_r)
+                  and s * (entry - b["c"]) / entry / risk < plan.fund_follow_r)
         if j == last or budget:
             reason = "fund_budget" if budget and j != last else "time" if j == fill_i + plan.time_stop else "eod"
             if costs.funding and j + 1 in fidx:   # the close-time exit executes after this hour's print
-                fund += rem * fidx[j + 1] * b["c"] / entry
-            px = b["c"] * (1 + slip)
+                fund += s * rem * fidx[j + 1] * b["c"] / entry
+            px = b["c"] * (1 + s * slip)
             slip_cost += rem * slip
             close(rem, px, costs.taker_bps)
             exit_i = j
             break
     if exit_i is None:   # fill bar was the last bar of data
         exit_i, reason = fill_i, "eod"
-        close(rem, rows[fill_i]["c"] * (1 + slip), costs.taker_bps)
+        close(rem, rows[fill_i]["c"] * (1 + s * slip), costs.taker_bps)
     pnl = gross - fees + fund
-    return {"filled": True, "signal_i": i, "entry_i": fill_i, "exit_i": exit_i, "entry_ts": rows[fill_i]["ts"],
+    return {"filled": True, "side": plan.side, "signal_i": i, "entry_i": fill_i, "exit_i": exit_i,
+            "entry_ts": rows[fill_i]["ts"],
             "entry_px": entry, "stop0": stop0, "risk_pct": risk * 100, "bars": exit_i - fill_i, "reason": reason,
             "pnl_pct": pnl * 100, "gross_pct": gross * 100, "fees_pct": fees * 100, "funding_pct": fund * 100,
-            "slip_pct": slip_cost * 100, "r": pnl / risk, "mae_pct": (hi - entry) / entry * 100,
-            "mfe_pct": (entry - lo) / entry * 100, "mae_r": (hi - entry) / entry / risk,
-            "mfe_r": (entry - lo) / entry / risk, "overrun_r": overrun}
+            "slip_pct": slip_cost * 100, "r": pnl / risk, "mae_pct": s * (worst - entry) / entry * 100,
+            "mfe_pct": s * (entry - best) / entry * 100, "mae_r": s * (worst - entry) / entry / risk,
+            "mfe_r": s * (entry - best) / entry / risk, "overrun_r": overrun}

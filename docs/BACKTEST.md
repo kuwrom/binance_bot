@@ -7,7 +7,7 @@ walk-forward and a multiple-testing haircut. Read-only: it never touches the exc
 
 | file | what |
 |---|---|
-| `sim.py` | event-driven hourly simulator for one short with a plan |
+| `sim.py` | event-driven hourly simulator for one trade with a plan: a short, or a long with `Plan(side="long")` (research only, every rule mirrored; tests/test_backtest_long.py) |
 | `features.py` | per-entry features (no look-ahead; tested by truncating the data at the entry) |
 | `strategies.py`, `strategies_more.py` | pre-registered strategies + grids, placebos, random baseline |
 | `stats.py`, `report.py`, `run.py` | cluster t, drawdown, Deflated Sharpe, walk-forward, splits, markdown |
