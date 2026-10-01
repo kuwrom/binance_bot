@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "shortbot": {
+      "type": "stdio",
+      "command": ".venv/bin/shortbot-mcp",
+      "args": [],
+      "timeout": 180000
+    }
+  }
+}

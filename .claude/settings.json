@@ -1,0 +1,59 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Edit(.env)",
+      "Write(.env)",
+      "Bash(cat .env*)",
+      "Bash(less .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(grep * .env)",
+      "Bash(printenv*)",
+      "Bash(env)"
+    ],
+    "allow": [
+      "mcp__shortbot__market_regime",
+      "mcp__shortbot__scan_shorts",
+      "mcp__shortbot__coin_snapshot",
+      "mcp__shortbot__coin_news",
+      "mcp__shortbot__latest_announcements",
+      "mcp__shortbot__list_setups",
+      "mcp__shortbot__account",
+      "mcp__shortbot__positions",
+      "mcp__shortbot__risk_params",
+      "mcp__shortbot__governor_status",
+      "mcp__shortbot__session_clock",
+      "mcp__shortbot__warmup_start",
+      "mcp__shortbot__warmup_check",
+      "mcp__shortbot__market_map",
+      "mcp__shortbot__coin_profile",
+      "mcp__shortbot__read_coin",
+      "mcp__shortbot__position_ladder",
+      "mcp__shortbot__reset_risk_params",
+      "mcp__shortbot__journal",
+      "mcp__shortbot__research_report",
+      "mcp__shortbot__log_decision",
+      "mcp__shortbot__add_learning",
+      "mcp__shortbot__update_learning",
+      "mcp__shortbot__start_session",
+      "mcp__shortbot__move_stop",
+      "Bash(.venv/bin/shortbot *)",
+      "Bash(.venv/bin/pytest *)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && .venv/bin/shortbot brief 2>/dev/null || echo 'shortbot brief unavailable'",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

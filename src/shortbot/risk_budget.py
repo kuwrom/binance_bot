@@ -1,0 +1,198 @@
+"""Dynamic risk budget (docs/POSITION_MANAGEMENT.md §a): how much to risk on the NEXT trade, given the
+current situation, not a fixed number.
+
+    risk_$ = equity × base × m_dd × m_vol × m_regime × m_corr, then capped by portfolio/cluster heat room
+
+- m_dd:     clip(1 − DD/DD_max, 0.25, 1)          drawdown from peak equity (Grossman–Zhou)
+- m_vol:    clip(σ_target/σ_BTC_now, 0.5, 1.0)    BTC 30d realized vol vs its 1y median (never > 1)
+- m_regime: favorable 1.0 · caution 0.75 · hostile/unknown 0.5
+- m_corr:   0.5 if a short in the same correlation cluster is already open
+- tilt:     conviction x regime-cell, evidence-gated (tilts.py), capped at max_conviction_mult
+- m_gov:    account breakers (governor.py): halts block, drawdown/loss-streak halve; the risk of a new trade is
+            also capped at what is left under today's loss cap, so one stop-out can never breach it
+Conviction "M" (moonshot) ignores the multipliers above: 25% of a ring-fenced bucket (moonshot_bucket_pct of
+equity, minus this quarter's moonshot losses), still under the governor and the heat caps.
+The pure part (`compute_budget`) is unit-tested; `gather_inputs` pulls live data.
+"""
+
+from __future__ import annotations
+
+import math
+import statistics
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from datetime import datetime, timedelta, timezone
+
+from . import reconcile
+from .config import RiskLimits
+from .governor import REGIME_MULT, GovInputs, govern
+from .signals.core import MAJORS
+from .tilts import cell_mult, conviction_mult, regime_cell
+
+_vol_cache: tuple[float, float, float, list[float]] | None = None  # (ts, vol_now, vol_target, btc daily closes)
+MOON_SHARE = 0.25
+
+
+def cluster_of(symbol: str) -> str:
+    base = symbol.split("/")[0]
+    return f"major:{base}" if base in MAJORS else "alts"
+
+
+@dataclass
+class BudgetInputs:
+    equity: float
+    peak_equity: float
+    regime: str = "unknown"
+    btc_vol_now: float | None = None
+    btc_vol_target: float | None = None
+    open_risks: dict[str, float] = field(default_factory=dict)  # symbol -> USDT lost if its stop hits
+    gov: dict[str, Any] | None = None                            # governor.govern() output
+    cell: str | None = None                                      # current regime cell (tilts.regime_cell)
+    setup_rs: list[float] = field(default_factory=list)          # closed R multiples of this setup
+    cell_rs: list[float] = field(default_factory=list)           # ... of this setup in the current cell
+    moon_quarter_pnl: float = 0.0                                # net pnl of "M" trades this quarter
+
+
+def clip(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, conviction: str = "B") -> dict[str, Any]:
+    """Risk (USDT and %) allowed for a new short in `symbol` right now, with the reasons."""
+    eq = max(inp.equity, 0.0)
+    dd = max(0.0, (inp.peak_equity - eq) / inp.peak_equity * 100) if inp.peak_equity > 0 else 0.0
+    m_dd = clip(1 - dd / limits.max_drawdown_pct, 0.25, 1.0)
+    m_vol = (clip(inp.btc_vol_target / inp.btc_vol_now, 0.5, 1.0)
+             if inp.btc_vol_now and inp.btc_vol_target else 1.0)
+    m_regime = REGIME_MULT.get(inp.regime, 0.5)
+    cl = cluster_of(symbol)
+    same_cluster = [s for s in inp.open_risks if cluster_of(s) == cl and s != symbol]
+    m_corr = 0.5 if same_cluster else 1.0
+    gov = inp.gov or {"halt": False, "m_gov": 1.0, "reasons": [], "daily": {"room_usd": float("inf")}}
+    m_gov = gov["m_gov"]
+    reasons: list[str] = list(gov["reasons"])
+    tier = (conviction or "B").upper()
+    if tier == "M":
+        bucket = eq * limits.moonshot_bucket_pct / 100
+        bucket_room = max(0.0, bucket + min(inp.moon_quarter_pnl, 0.0))
+        risk_usd = min(bucket * MOON_SHARE, bucket_room) * m_gov
+        tilt, eff = 1.0, "M"
+        reasons.append(f"moonshot: {MOON_SHARE:.0%} of a {bucket:.2f} USDT bucket ({bucket_room:.2f} left this quarter)")
+    else:
+        m_conv, eff, note = conviction_mult(tier, inp.setup_rs)
+        m_cell, cell_note = cell_mult(inp.cell_rs, inp.setup_rs)
+        tilt = min(m_conv * m_cell, limits.max_conviction_mult)
+        reasons += [n for n in (note, cell_note if m_cell != 1.0 else "") if n]
+        risk_usd = eq * limits.risk_per_trade_pct * m_dd * m_vol * m_regime * m_corr * tilt * m_gov / 100
+
+    heat = sum(inp.open_risks.values())
+    cluster_heat = sum(inp.open_risks[s] for s in same_cluster)
+    room = min(eq * limits.max_portfolio_heat_pct / 100 - heat, eq * limits.max_cluster_heat_pct / 100 - cluster_heat)
+    day_room = gov["daily"]["room_usd"] - heat   # open risk would hit the same daily cap
+    capped = max(0.0, min(risk_usd, room, day_room))
+    if dd >= limits.max_drawdown_pct:
+        reasons.append(f"drawdown {dd:.1f}% >= {limits.max_drawdown_pct}%: STOP trading and review")
+        capped = 0.0
+    if gov["halt"]:
+        capped = 0.0
+    elif capped < risk_usd:
+        reasons.append(f"capped: heat room {max(room, 0):.2f}, daily-cap room {max(day_room, 0):.2f} USDT")
+    return {
+        "risk_usd": round(capped, 2), "risk_pct": round(capped / eq * 100, 3) if eq else 0.0,
+        "base_pct": limits.risk_per_trade_pct, "drawdown_pct": round(dd, 2), "conviction": eff, "cell": inp.cell,
+        "multipliers": {"m_dd": round(m_dd, 3), "m_vol": round(m_vol, 3), "m_regime": m_regime, "m_corr": m_corr,
+                        "tilt": round(tilt, 3), "m_gov": m_gov},
+        "heat_pct": round(heat / eq * 100, 3) if eq else None,
+        "cluster": cl, "cluster_heat_pct": round(cluster_heat / eq * 100, 3) if eq else None,
+        "halted_until": gov.get("until") if gov["halt"] else None,
+        "blocked": capped <= 0, "reasons": reasons,
+    }
+
+
+def realized_vol(closes: list[float]) -> float | None:
+    """Annualised stdev of daily log returns."""
+    if len(closes) < 3:
+        return None
+    rets = [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+    return statistics.stdev(rets) * math.sqrt(365) if len(rets) > 1 else None
+
+
+def btc_vol_now_and_target(daily_closes: list[float]) -> tuple[float | None, float | None]:
+    """(30d realized vol now, median of rolling 30d vol over the last year)."""
+    if len(daily_closes) < 60:
+        return realized_vol(daily_closes[-31:]), None
+    window = [realized_vol(daily_closes[i - 30:i + 1]) for i in range(30, len(daily_closes))]
+    window = [w for w in window[-365:] if w]
+    return window[-1], statistics.median(window)
+
+
+def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> float:
+    """Highest day P&L seen today (the guardian calls this every minute; arms the give-back stop)."""
+    key = f"day_peak:{(now or datetime.now(timezone.utc)).date().isoformat()}"
+    peak = max(float(journal.get(key) or 0.0), day_pnl)
+    journal.set(key, str(peak))
+    return peak
+
+
+def week_start_ms(now: datetime) -> int:
+    monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(monday.timestamp() * 1000)
+
+
+def quarter_start(now: datetime) -> str:
+    return now.replace(month=3 * ((now.month - 1) // 3) + 1, day=1, hour=0, minute=0, second=0,
+                       microsecond=0).isoformat()
+
+
+async def gather_inputs(trader, regime: str, positions: list[dict] | None = None,
+                        setup: str | None = None) -> BudgetInputs:
+    """Live inputs: equity + tracked peak, BTC vol + regime cell (cached 1h), open risk per position at its
+    exchange stop, governor state (day/week P&L, loss streak, give-back) and this setup's track record."""
+    global _vol_cache
+    now = datetime.now(timezone.utc)
+    pos = positions if positions is not None else await trader.positions()
+    acct = await trader.account()
+    eq = acct["equity"]
+    peak = max(float(trader.j.get("equity_peak") or 0), eq)
+    trader.j.set("equity_peak", str(peak))
+    if not _vol_cache or time.time() - _vol_cache[0] > 3600:
+        try:
+            candles = await trader.ex.public.fetch_ohlcv("BTC/USDT:USDT", "1d", limit=400)
+            closes = [c[4] for c in candles]
+            vnow, tgt = btc_vol_now_and_target(closes)
+            _vol_cache = (time.time(), vnow or 0.0, tgt or 0.0, closes)
+        except Exception:  # noqa: BLE001 - vol is a dampener; missing data = neutral
+            _vol_cache = (time.time(), 0.0, 0.0, [])
+    vnow, tgt = _vol_cache[1] or None, _vol_cache[2] or None
+    cell = regime_cell(_vol_cache[3], vnow, tgt)
+    risks = {}
+    for p in pos:
+        stop, mark, qty = p.get("exchange_stop"), p.get("mark") or 0, p.get("contracts") or 0
+        worst = stop if stop else mark * (1 + trader.ex.limits.max_stop_distance_pct / 100)
+        risks[p["symbol"]] = max(0.0, (worst - mark) * qty)
+    try:
+        wk = reconcile.summarize_income(await reconcile.income_since(trader.t, week_start_ms(now)))["net"]
+    except Exception:  # noqa: BLE001 - fall back to today only; the daily cap still binds
+        wk = acct.get("realized_today", 0.0)
+    rows = trader.j.closed_results()
+    week_pnl = wk + acct.get("unrealized", 0.0)
+    gin = GovInputs(eq, peak, acct["day_pnl"], track_day_peak(trader.j, acct["day_pnl"], now), week_pnl,
+                    [(r["closed_at"], r["pnl"]) for r in rows], regime, vnow, tgt, now)
+    s_rows = [r for r in rows if setup and r["setup"] == setup and r["r_multiple"] is not None]
+    qs = quarter_start(now)
+    return BudgetInputs(eq, peak, regime, vnow, tgt, risks, govern(trader.ex.limits, gin), cell,
+                        [r["r_multiple"] for r in s_rows],
+                        [r["r_multiple"] for r in s_rows if cell and r["regime_cell"] == cell],
+                        sum(r["pnl"] for r in rows if r["conviction"] == "M" and r["closed_at"] >= qs))
+
+
+async def governor_status(trader, regime: str) -> dict[str, Any]:
+    """Account breakers + the evidence behind the tilts (streak test over all closed R)."""
+    from .tilts import streak_test
+    inp = await gather_inputs(trader, regime)
+    rs = [r["r_multiple"] for r in trader.j.closed_results() if r["r_multiple"] is not None]
+    return {**(inp.gov or {}), "regime": regime, "cell": inp.cell, "equity": inp.equity,
+            "peak_equity": inp.peak_equity, "streak_test": streak_test(rs),
+            "moonshot_quarter_pnl": round(inp.moon_quarter_pnl, 2)}

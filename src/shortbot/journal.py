@@ -1,0 +1,238 @@
+"""SQLite journal: trades (with plan, entry features, fees/funding, excursions), decisions, alerts, kv,
+metrics. Research tables (scan candidates + outcomes, learnings) live in journal_research.py.
+
+Trade lifecycle: opening -> open -> closed, or opening -> aborted. Rows are addressed by id.
+Schema grows by adding columns to TRADE_COLUMNS; existing DBs are migrated automatically."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .journal_research import RESEARCH_SCHEMA, ResearchStore
+from .sessions import session_bucket
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, mode TEXT NOT NULL, notes TEXT
+);
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY, ts TEXT NOT NULL, session_id INTEGER, symbol TEXT,
+    action TEXT NOT NULL, reasoning TEXT NOT NULL, snapshot TEXT
+);
+CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, symbol TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY, ts TEXT NOT NULL, symbol TEXT, kind TEXT NOT NULL, message TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS metrics (
+    ts TEXT NOT NULL, symbol TEXT NOT NULL, price REAL, funding_rate REAL,
+    open_interest REAL, quote_volume_24h REAL, PRIMARY KEY (ts, symbol)
+);
+"""
+
+# Add new trade fields here; old databases get them via ALTER TABLE on startup.
+TRADE_COLUMNS: dict[str, str] = {
+    "status": "TEXT NOT NULL DEFAULT 'open'", "opened_at": "TEXT", "entry_price": "REAL",
+    "amount": "REAL", "notional": "REAL", "leverage": "INTEGER", "stop_price": "REAL",
+    "initial_stop": "REAL", "setup": "TEXT", "thesis": "TEXT", "plan": "TEXT", "entry_features": "TEXT",
+    "experiment": "TEXT", "closed_at": "TEXT", "exit_price": "REAL", "pnl": "REAL", "gross_pnl": "REAL",
+    "fees": "REAL", "funding": "REAL", "exit_reason": "TEXT", "lesson": "TEXT", "mae_pct": "REAL",
+    "mfe_pct": "REAL", "low_since_entry": "REAL", "targets_hit": "TEXT", "notes": "TEXT",
+    "conviction": "TEXT", "regime_cell": "TEXT", "post_exit": "TEXT",
+}
+JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _group(rows: list[dict[str, Any]], key: str, empty: str = "untagged") -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        s = out.setdefault(r[key] or empty, {"n": 0, "wins": 0, "pnl": 0.0, "_r": [], "_mae": [], "_mfe": []})
+        s["n"] += 1
+        s["wins"] += r["pnl"] > 0
+        s["pnl"] += r["pnl"]
+        if r.get("r_multiple") is not None:
+            s["_r"].append(r["r_multiple"])
+        for src, dst in (("mae_pct", "_mae"), ("mfe_pct", "_mfe")):
+            if r.get(src) is not None:
+                s[dst].append(r[src])
+    avg = lambda xs: round(sum(xs) / len(xs), 2) if xs else None  # noqa: E731
+    for s in out.values():
+        s["win_rate"] = round(s["wins"] / s["n"] * 100, 1)
+        s["pnl"] = round(s["pnl"], 2)
+        s["avg_r"], s["avg_mae_pct"], s["avg_mfe_pct"] = avg(s.pop("_r")), avg(s.pop("_mae")), avg(s.pop("_mfe"))
+    return out
+
+
+def exit_quality(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Did price keep falling after we exited (runners cut too early) or bounce (exits well timed)?"""
+    pe = [t["post_exit"] for t in trades if t.get("post_exit") and t["post_exit"].get("further_drop_24h_pct") is not None]
+    if not pe:
+        return {"n": 0, "note": "post-exit moves are labelled 24h after each close by the guardian"}
+    avg = lambda k: round(sum(p[k] for p in pe if p.get(k) is not None) / len(pe), 2)  # noqa: E731
+    return {"n": len(pe), "avg_further_drop_24h_pct": avg("further_drop_24h_pct"),
+            "avg_rise_against_24h_pct": avg("rise_against_24h_pct"), "avg_ret_24h_after_exit_pct": avg("ret_24h_pct"),
+            "how_to_read": "consistently large further drops (n >= 20) = hold runners longer / looser trail"}
+
+
+class Journal(ResearchStore):
+    def __init__(self, path: Path | str):
+        path = Path(path)
+        if str(path) != ":memory:":
+            path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=15)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")  # guardian + MCP server share this file
+        self.db.executescript(SCHEMA + RESEARCH_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
+        for col, ddl in TRADE_COLUMNS.items():
+            if col not in have:
+                self.db.execute(f"ALTER TABLE trades ADD COLUMN {col} {ddl}")
+        self.db.commit()
+
+    def _insert(self, sql: str, args: tuple) -> int:
+        cur = self.db.execute(sql, args)
+        self.db.commit()
+        return int(cur.lastrowid)
+
+    def _rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+
+    # ------------------------------------------------------------ sessions / decisions
+    def start_session(self, mode: str, notes: str = "") -> int:
+        return self._insert("INSERT INTO sessions (started_at, mode, notes) VALUES (?,?,?)", (now_iso(), mode, notes))
+
+    def log_decision(self, action: str, reasoning: str, symbol: str | None = None,
+                     snapshot: dict | None = None, session_id: int | None = None) -> int:
+        return self._insert(
+            "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot) VALUES (?,?,?,?,?,?)",
+            (now_iso(), session_id, symbol, action, reasoning, json.dumps(snapshot, default=str) if snapshot else None))
+
+    def decisions(self, symbol: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        if symbol:
+            return self._rows("SELECT * FROM decisions WHERE symbol=? ORDER BY id DESC LIMIT ?", (symbol, limit))
+        return self._rows("SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (limit,))
+
+    # ------------------------------------------------------------ trades
+    def _trade(self, row: dict[str, Any]) -> dict[str, Any]:
+        for f in JSON_FIELDS:
+            if row.get(f):
+                try:
+                    row[f] = json.loads(row[f])
+                except (TypeError, ValueError):
+                    pass
+        return row
+
+    def create_trade(self, symbol: str, setup: str, thesis: str, stop_price: float, leverage: int,
+                     plan: dict | None = None, entry_features: dict | None = None,
+                     experiment: str | None = None) -> int:
+        """Pending row written BEFORE the entry order, so a crash mid-entry is still traceable."""
+        return self._insert(
+            "INSERT INTO trades (symbol, status, opened_at, stop_price, initial_stop, leverage, setup, thesis, plan,"
+            " entry_features, experiment, targets_hit) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (symbol, "opening", now_iso(), stop_price, stop_price, leverage, setup, thesis,
+             json.dumps(plan or {}, default=str), json.dumps(entry_features or {}, default=str), experiment, "[]"))
+
+    def activate_trade(self, trade_id: int, entry_price: float, amount: float, notional: float) -> None:
+        self.update_trade(trade_id, status="open", entry_price=entry_price, amount=amount, notional=notional,
+                          low_since_entry=entry_price, mae_pct=0.0, mfe_pct=0.0)
+
+    def update_trade(self, trade_id: int, **fields: Any) -> None:
+        bad = set(fields) - set(TRADE_COLUMNS)
+        if bad:
+            raise ValueError(f"unknown trade fields {bad}")
+        vals = [json.dumps(v, default=str) if k in JSON_FIELDS and not isinstance(v, str) else v
+                for k, v in fields.items()]
+        self.db.execute(f"UPDATE trades SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*vals, trade_id))
+        self.db.commit()
+
+    def close_trade(self, trade_id: int, exit_price: float | None, pnl: float | None, exit_reason: str,
+                    lesson: str = "", gross_pnl: float | None = None, fees: float | None = None,
+                    funding: float | None = None) -> None:
+        self.update_trade(trade_id, status="closed", closed_at=now_iso(), exit_price=exit_price, pnl=pnl,
+                          exit_reason=exit_reason, lesson=lesson, gross_pnl=gross_pnl, fees=fees, funding=funding)
+
+    def abort_trade(self, trade_id: int, reason: str) -> None:
+        self.update_trade(trade_id, status="aborted", closed_at=now_iso(), exit_reason=reason)
+
+    def get_trade(self, trade_id: int) -> dict[str, Any] | None:
+        rows = self._rows("SELECT * FROM trades WHERE id=?", (trade_id,))
+        return self._trade(rows[0]) if rows else None
+
+    def active_trade(self, symbol: str) -> dict[str, Any] | None:
+        """Newest opening/open row for a symbol."""
+        rows = self._rows("SELECT * FROM trades WHERE symbol=? AND status IN ('opening','open') "
+                          "ORDER BY id DESC LIMIT 1", (symbol,))
+        return self._trade(rows[0]) if rows else None
+
+    def open_trades(self, include_opening: bool = False) -> list[dict[str, Any]]:
+        st = "('opening','open')" if include_opening else "('open')"
+        return [self._trade(r) for r in self._rows(f"SELECT * FROM trades WHERE status IN {st} ORDER BY id")]
+
+    def trades(self, limit: int = 50) -> list[dict[str, Any]]:
+        return [self._trade(r) for r in self._rows("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def closed_results(self) -> list[dict[str, Any]]:
+        """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input)."""
+        rows = self._rows(
+            "SELECT setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct, mfe_pct, entry_price,"
+            " initial_stop, amount, plan FROM trades WHERE status='closed' AND pnl IS NOT NULL ORDER BY closed_at")
+        for r in rows:
+            pinned = (json.loads(r.pop("plan") or "{}") or {}).get("r1_usdt")   # adds/split entries pin 1R
+            risk = pinned or ((r["initial_stop"] - r["entry_price"]) * r["amount"] if r["initial_stop"]
+                              and r["entry_price"] and r["amount"] else None)
+            r["r_multiple"] = r["pnl"] / risk if risk else None
+            r["session"] = session_bucket(datetime.fromisoformat(r["opened_at"])) if r.get("opened_at") else None
+        return rows
+
+    def stats(self) -> dict[str, Any]:
+        rows = self.closed_results()
+        return {"closed_trades": len(rows), "total_pnl": round(sum(r["pnl"] for r in rows), 2),
+                "by_setup": _group(rows, "setup"), "by_experiment": _group(rows, "experiment", "baseline"),
+                "by_entry_session": _group(rows, "session"), "exits": exit_quality(self.trades(500))}
+
+    # ------------------------------------------------------------ kv
+    def get(self, k: str) -> str | None:
+        row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+        return row[0] if row else None
+
+    def set(self, k: str, v: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (k, v))
+        self.db.commit()
+
+    def prune_kv(self, prefixes: tuple[str, ...], max_age_s: float) -> int:
+        """Delete timestamp-valued kv keys (dedupe markers) older than max_age_s."""
+        cutoff, n = time.time() - max_age_s, 0
+        for p in prefixes:
+            n += self.db.execute("DELETE FROM kv WHERE k LIKE ? AND CAST(v AS REAL) < ?", (p + "%", cutoff)).rowcount
+        self.db.commit()
+        return n
+
+    # ------------------------------------------------------------ alerts / metrics
+    def log_alert(self, kind: str, message: str, symbol: str | None = None) -> int:
+        return self._insert("INSERT INTO alerts (ts, symbol, kind, message) VALUES (?,?,?,?)",
+                            (now_iso(), symbol, kind, message))
+
+    def alerts(self, limit: int = 30, since: str | None = None) -> list[dict[str, Any]]:
+        if since:
+            return self._rows("SELECT * FROM alerts WHERE ts > ? ORDER BY id DESC LIMIT ?", (since, limit))
+        return self._rows("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,))
+
+    def record_metrics(self, rows: list[tuple]) -> None:
+        """rows: (ts, symbol, price, funding_rate, open_interest, quote_volume_24h)"""
+        self.db.executemany("INSERT OR REPLACE INTO metrics VALUES (?,?,?,?,?,?)", rows)
+        self.db.commit()
+
+    def metric_history(self, symbol: str, limit: int = 200) -> list[dict[str, Any]]:
+        return self._rows("SELECT * FROM metrics WHERE symbol=? ORDER BY ts DESC LIMIT ?", (symbol, limit))

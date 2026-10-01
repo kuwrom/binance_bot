@@ -1,0 +1,168 @@
+"""Settings loaded from environment (.env).
+
+Risk limits come in layers (see params.py):
+- `RiskLimits` from .env = the fixed BASELINE. The always-on guardian (AWS) only uses these.
+- The AI analyst may override any RiskLimits field for research (e.g. try 5x leverage), but only
+  inside `ResearchBounds`, an outer envelope that only the human changes (BOUND_* in .env).
+Every opening order is still checked by risk.check_open_short against the effective limits.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+LIVE_CONFIRM_PHRASE = "I_ACCEPT_REAL_MONEY_RISK"
+
+
+def _f(name: str, default: float) -> float:
+    return float(os.getenv(name, default))
+
+
+def _i(name: str, default: int) -> int:
+    return int(os.getenv(name, default))
+
+
+@dataclass(frozen=True)
+class RiskLimits:
+    max_leverage: int = 3
+    max_position_notional: float = 100.0      # USDT per coin
+    max_total_notional: float = 400.0         # USDT across all shorts
+    max_positions: int = 5
+    risk_per_trade_pct: float = 1.0           # max loss at stop, % of equity
+    daily_loss_limit_pct: float = 3.0         # blocks new entries for the UTC day
+    min_stop_distance_pct: float = 0.5
+    max_stop_distance_pct: float = 25.0
+    min_quote_volume_24h: float = 20_000_000  # USDT liquidity floor
+    liq_buffer_pct: float = 2.0               # stop must trigger this many % before est. liquidation
+    max_drawdown_pct: float = 20.0            # risk scales down linearly to 25% as drawdown -> this (m_dd)
+    max_portfolio_heat_pct: float = 5.0       # total open risk at stops, % of equity
+    max_cluster_heat_pct: float = 3.5         # correlated alt shorts count as one cluster
+    # governor.py breakers (docs/RISK_GOVERNANCE.md)
+    weekly_loss_limit_pct: float = 4.0        # halt until Monday 00:00 UTC
+    dd_halve_pct: float = 8.0                 # drawdown from peak -> half size
+    dd_stop_pct: float = 12.0                 # drawdown from peak -> halt until a human review
+    loss_streak_halve: int = 3                # consecutive losses -> half size for the UTC day / until 2 wins
+    loss_streak_pause: int = 5                # consecutive losses -> 24h cool-off
+    giveback_start_pct: float = 1.0           # day peak that arms the give-back stop
+    giveback_keep_frac: float = 0.5           # keep at least this fraction of the day's peak
+    moonshot_bucket_pct: float = 5.0          # ring-fenced equity for "M" bets; 25% of it at risk per bet
+    max_conviction_mult: float = 1.5          # cap on conviction x cell tilt
+    max_add_r_mult: float = 1.0               # adds to a winner may raise the loss at stop to this x the pinned 1R
+
+    @classmethod
+    def from_env(cls) -> "RiskLimits":
+        return cls(
+            max_leverage=_i("MAX_LEVERAGE", cls.max_leverage),
+            max_position_notional=_f("MAX_POSITION_NOTIONAL", cls.max_position_notional),
+            max_total_notional=_f("MAX_TOTAL_NOTIONAL", cls.max_total_notional),
+            max_positions=_i("MAX_POSITIONS", cls.max_positions),
+            risk_per_trade_pct=_f("RISK_PER_TRADE_PCT", cls.risk_per_trade_pct),
+            daily_loss_limit_pct=_f("DAILY_LOSS_LIMIT_PCT", cls.daily_loss_limit_pct),
+            min_stop_distance_pct=_f("MIN_STOP_DISTANCE_PCT", cls.min_stop_distance_pct),
+            max_stop_distance_pct=_f("MAX_STOP_DISTANCE_PCT", cls.max_stop_distance_pct),
+            min_quote_volume_24h=_f("MIN_QUOTE_VOLUME_24H", cls.min_quote_volume_24h),
+            liq_buffer_pct=_f("LIQ_BUFFER_PCT", cls.liq_buffer_pct),
+            max_drawdown_pct=_f("MAX_DRAWDOWN_PCT", cls.max_drawdown_pct),
+            max_portfolio_heat_pct=_f("MAX_PORTFOLIO_HEAT_PCT", cls.max_portfolio_heat_pct),
+            max_cluster_heat_pct=_f("MAX_CLUSTER_HEAT_PCT", cls.max_cluster_heat_pct),
+            weekly_loss_limit_pct=_f("WEEKLY_LOSS_LIMIT_PCT", cls.weekly_loss_limit_pct),
+            dd_halve_pct=_f("DD_HALVE_PCT", cls.dd_halve_pct),
+            dd_stop_pct=_f("DD_STOP_PCT", cls.dd_stop_pct),
+            loss_streak_halve=_i("LOSS_STREAK_HALVE", cls.loss_streak_halve),
+            loss_streak_pause=_i("LOSS_STREAK_PAUSE", cls.loss_streak_pause),
+            giveback_start_pct=_f("GIVEBACK_START_PCT", cls.giveback_start_pct),
+            giveback_keep_frac=_f("GIVEBACK_KEEP_FRAC", cls.giveback_keep_frac),
+            moonshot_bucket_pct=_f("MOONSHOT_BUCKET_PCT", cls.moonshot_bucket_pct),
+            max_conviction_mult=_f("MAX_CONVICTION_MULT", cls.max_conviction_mult),
+            max_add_r_mult=_f("MAX_ADD_R_MULT", cls.max_add_r_mult),
+        )
+
+
+# Outer envelope for AI research overrides: (low, high) per RiskLimits field. Human-only, via
+# BOUND_<FIELD>_MIN / BOUND_<FIELD>_MAX in .env, e.g. BOUND_MAX_LEVERAGE_MAX=10.
+DEFAULT_BOUNDS: dict[str, tuple[float, float]] = {
+    "max_leverage": (1, 10),
+    "max_position_notional": (5, 1000),
+    "max_total_notional": (5, 4000),
+    "max_positions": (1, 10),
+    "risk_per_trade_pct": (0.1, 3.0),
+    "daily_loss_limit_pct": (0.5, 10.0),
+    "min_stop_distance_pct": (0.1, 5.0),
+    "max_stop_distance_pct": (1.0, 50.0),
+    "min_quote_volume_24h": (1_000_000, 1_000_000_000),
+    "liq_buffer_pct": (0.5, 20.0),
+    "max_drawdown_pct": (5.0, 40.0),
+    "max_portfolio_heat_pct": (0.5, 15.0),
+    "max_cluster_heat_pct": (0.5, 10.0),
+    "weekly_loss_limit_pct": (1.0, 20.0),
+    "dd_halve_pct": (2.0, 30.0),
+    "dd_stop_pct": (4.0, 40.0),
+    "loss_streak_halve": (2, 10),
+    "loss_streak_pause": (3, 15),
+    "giveback_start_pct": (0.25, 10.0),
+    "giveback_keep_frac": (0.0, 0.9),
+    "moonshot_bucket_pct": (0.0, 10.0),
+    "max_conviction_mult": (1.0, 2.0),
+    "max_add_r_mult": (1.0, 2.0),
+}
+
+
+@dataclass(frozen=True)
+class ResearchBounds:
+    ranges: dict[str, tuple[float, float]] = field(default_factory=lambda: dict(DEFAULT_BOUNDS))
+
+    def get(self, name: str) -> tuple[float, float]:
+        return self.ranges[name]
+
+    def as_dict(self) -> dict[str, list[float]]:
+        return {k: [lo, hi] for k, (lo, hi) in self.ranges.items()}
+
+    @classmethod
+    def from_env(cls) -> "ResearchBounds":
+        out = {}
+        for k, (lo, hi) in DEFAULT_BOUNDS.items():
+            out[k] = (_f(f"BOUND_{k.upper()}_MIN", lo), _f(f"BOUND_{k.upper()}_MAX", hi))
+        return cls(out)
+
+
+@dataclass(frozen=True)
+class Settings:
+    mode: str                      # "demo" or "live"
+    api_key: str
+    api_secret: str
+    db_path: Path
+    telegram_token: str
+    telegram_chat_id: str
+    limits: RiskLimits = field(default_factory=RiskLimits)     # fixed baseline (guardian uses only this)
+    bounds: ResearchBounds = field(default_factory=ResearchBounds)
+    allow_ai_params_live: bool = False                         # AI overrides in live mode? human-only
+
+    @property
+    def is_live(self) -> bool:
+        return self.mode == "live"
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        mode = os.getenv("SHORTBOT_MODE", "demo").lower()
+        if mode not in ("demo", "live"):
+            raise ValueError(f"SHORTBOT_MODE must be demo or live, got {mode!r}")
+        if mode == "live" and os.getenv("LIVE_CONFIRM") != LIVE_CONFIRM_PHRASE:
+            raise ValueError(f"Live mode requires LIVE_CONFIRM={LIVE_CONFIRM_PHRASE}")
+        prefix = "LIVE" if mode == "live" else "DEMO"
+        return cls(
+            mode=mode,
+            api_key=os.getenv(f"BINANCE_{prefix}_API_KEY", ""),
+            api_secret=os.getenv(f"BINANCE_{prefix}_API_SECRET", ""),
+            db_path=Path(os.getenv("SHORTBOT_DB", "data/shortbot.db")),
+            telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+            limits=RiskLimits.from_env(),
+            bounds=ResearchBounds.from_env(),
+            allow_ai_params_live=os.getenv("AI_PARAMS_IN_LIVE", "false").lower() == "true",
+        )

@@ -1,0 +1,150 @@
+"""Free news sources: Binance announcements (public CMS JSON), crypto RSS feeds, Fear & Greed."""
+
+from __future__ import annotations
+
+import asyncio
+import calendar
+import re
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+import feedparser
+import httpx
+
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 Chrome/128 Safari/537.36"}
+CMS_LIST = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
+ANNOUNCE_URL = "https://www.binance.com/en/support/announcement/detail/{code}"
+CATALOGS = {48: "New Listing", 49: "Binance News", 161: "Delisting", 93: "Activities"}
+RSS_FEEDS = {
+    "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "Cointelegraph": "https://cointelegraph.com/rss",
+    "The Block": "https://www.theblock.co/rss.xml",
+    "Decrypt": "https://decrypt.co/feed",
+    "BeInCrypto": "https://beincrypto.com/feed/",
+    "NewsBTC": "https://www.newsbtc.com/feed/",
+    "CryptoPotato": "https://cryptopotato.com/feed/",
+    "U.Today": "https://u.today/rss",
+}
+BEARISH_PATTERNS = (r"delist\w*", r"monitoring tag", r"hack(ed|er|s)?", r"exploit\w*", r"unlock\w*", r"lawsuit",
+                    r"sec", r"investigation", r"outflows?", r"dump(s|ed|ing)?", r"rug ?pull", r"suspend\w*",
+                    r"halt\w*", r"insolven\w*", r"breach\w*", r"drain(ed)?")
+_BEARISH_RE = re.compile(r"\b(" + "|".join(BEARISH_PATTERNS) + r")\b", re.IGNORECASE)
+# Tickers that are also ordinary words/abbreviations: only match as $TICK, (TICK) or "TICK token/price/coin".
+COMMON_WORD_TICKERS = {"PEOPLE", "TRUMP", "ONE", "US", "AI", "BANK", "GAS", "HIGH", "LOW", "MOVE", "ME", "IT", "ON",
+                       "SUN", "NOT", "BIG", "GOOD", "HOT", "KEY", "CAT", "DOG", "MAX", "OM", "ID", "AT", "OP", "ACE",
+                       "ALT", "BOND", "CHESS", "COOKIE", "DOGS", "FUN", "GALA", "MAGIC", "MASK", "PORTAL", "SAFE",
+                       "STORJ", "TRUST", "USUAL", "VANA", "WAL", "WIN", "ZK", "Q", "S", "T", "W", "U", "B", "A"}
+# Project names -> ticker, so "Solana" headlines match SOL. Extend as the desk trades new coins.
+ALIASES = {"BTC": ["Bitcoin"], "ETH": ["Ethereum", "Ether"], "SOL": ["Solana"], "XRP": ["Ripple"],
+           "DOGE": ["Dogecoin"], "ADA": ["Cardano"], "AVAX": ["Avalanche"], "LINK": ["Chainlink"],
+           "DOT": ["Polkadot"], "QNT": ["Quant"], "WLD": ["Worldcoin", "World Network"], "PYTH": ["Pyth"],
+           "SUI": ["Sui Network"], "TON": ["Toncoin"], "NEAR": ["NEAR Protocol"], "APT": ["Aptos"],
+           "ARB": ["Arbitrum"], "OP": ["Optimism"], "INJ": ["Injective"], "TIA": ["Celestia"], "SEI": ["Sei Network"]}
+_MULTIPLIER = re.compile(r"^(1000000|100000|10000|1000|1M)(?=[A-Z])")
+_cache: dict[str, tuple[float, Any]] = {}
+
+
+async def _cached(key: str, ttl: float, fn):
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    val = await fn()
+    _cache[key] = (time.time(), val)
+    return val
+
+
+def normalize_base(base: str) -> str:
+    """'1000PEPE' -> 'PEPE', '1MBABYDOGE' -> 'BABYDOGE'."""
+    return _MULTIPLIER.sub("", base.upper())
+
+
+def mentions(text: str, base: str) -> bool:
+    """Does a headline mention this coin? Case-sensitive ticker match with context rules for tickers that
+    are ordinary words or 1-2 letters, plus project-name aliases."""
+    base = normalize_base(base)
+    tick = re.escape(base)
+    if base in COMMON_WORD_TICKERS or len(base) <= 2:
+        pat = rf"(\${tick}\b|\({tick}\)|\b{tick}\s+(token|coin|price|perp|futures)\b)"
+        if re.search(pat, text, re.IGNORECASE if len(base) > 2 else 0):
+            return True
+    elif re.search(rf"(?<![A-Za-z0-9$]){tick}(?![A-Za-z0-9])|\${tick}\b", text):
+        return True
+    return any(re.search(rf"\b{re.escape(n)}\b", text, re.IGNORECASE) for n in ALIASES.get(base, []))
+
+
+def bearish_keywords(text: str) -> list[str]:
+    return sorted({m.group(0).lower() for m in _BEARISH_RE.finditer(text)})
+
+
+async def binance_announcements(per_catalog: int = 15) -> list[dict]:
+    async def fetch():
+        out: list[dict] = []
+        async with httpx.AsyncClient(headers=UA, timeout=15) as c:
+            for cid, name in CATALOGS.items():
+                r = await c.get(CMS_LIST, params={"type": 1, "catalogId": cid, "pageNo": 1, "pageSize": per_catalog})
+                r.raise_for_status()
+                for cat in r.json().get("data", {}).get("catalogs", []):
+                    for a in cat.get("articles", []):
+                        out.append({"catalog": name, "title": a["title"],
+                                    "time": _iso(a["releaseDate"] / 1000),
+                                    "url": ANNOUNCE_URL.format(code=a["code"])})
+        return sorted(out, key=lambda x: x["time"], reverse=True)
+    return await _cached("ann", 120, fetch)
+
+
+async def rss_headlines(max_age_h: float = 48) -> list[dict]:
+    async def fetch_one(c: httpx.AsyncClient, src: str, url: str) -> list[dict]:
+        try:
+            r = await c.get(url)
+            feed = feedparser.parse(r.content)
+        except Exception:
+            return []
+        items = []
+        for e in feed.entries[:40]:
+            ts = e.get("published_parsed") or e.get("updated_parsed")
+            if not ts:
+                continue  # undated items would look fresh forever
+            epoch = calendar.timegm(ts)  # feedparser structs are UTC
+            if time.time() - epoch <= max_age_h * 3600:
+                items.append({"source": src, "title": e.get("title", ""), "time": _iso(epoch),
+                              "url": e.get("link", ""), "summary": _strip(e.get("summary", ""))[:300]})
+        return items
+
+    async def fetch():
+        async with httpx.AsyncClient(headers=UA, timeout=15, follow_redirects=True) as c:
+            batches = await asyncio.gather(*(fetch_one(c, s, u) for s, u in RSS_FEEDS.items()))
+        return sorted((i for b in batches for i in b), key=lambda x: x["time"], reverse=True)
+    return await _cached("rss", 300, fetch)
+
+
+async def fear_greed() -> dict:
+    async def fetch():
+        async with httpx.AsyncClient(timeout=10) as c:
+            d = (await c.get("https://api.alternative.me/fng/", params={"limit": 2})).json()["data"]
+        return {"value": int(d[0]["value"]), "label": d[0]["value_classification"],
+                "yesterday": int(d[1]["value"]) if len(d) > 1 else None}
+    return await _cached("fng", 900, fetch)
+
+
+async def news_for(base: str, max_items: int = 15) -> dict:
+    """Announcements + headlines mentioning a coin ticker, with bearish keywords flagged."""
+    ann, rss = await asyncio.gather(binance_announcements(), rss_headlines(), return_exceptions=True)
+    errors = [n for n, v in (("binance_announcements", ann), ("rss", rss)) if isinstance(v, BaseException)]
+    ann = ann if isinstance(ann, list) else []
+    rss = rss if isinstance(rss, list) else []
+    hits_a = [a for a in ann if mentions(a["title"], base)]
+    hits_r = [h for h in rss if mentions(h["title"] + " " + h["summary"], base)]
+    for h in hits_a + hits_r:
+        h["bearish_keywords"] = bearish_keywords(h["title"])
+    return {"coin": normalize_base(base), "binance_announcements": hits_a[:max_items],
+            "headlines": hits_r[:max_items], "errors": errors,
+            "note": "news sources failed: absence of news is NOT confirmed" if errors else None}
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat(timespec="minutes")
+
+
+def _strip(html: str) -> str:
+    return re.sub(r"<[^>]+>", "", html).strip()

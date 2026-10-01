@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/
+*.db
+.pytest_cache/
+
+# scratch dumps (exchangeInfo, HTTP headers)
+fx.json
+sx.json
+h.txt

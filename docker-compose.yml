@@ -1,0 +1,14 @@
+services:
+  guardian:
+    build: .
+    command: shortbot-guardian
+    user: "${UID:-1000}:${GID:-1000}"   # same owner as the host user so MCP + guardian share data/
+    env_file: .env
+    environment:
+      SHORTBOT_DB: /app/data/shortbot.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
