@@ -20,7 +20,7 @@ import ccxt
 
 from shortbot.config import RiskLimits, Settings
 from tests import fake_errors as err
-from tests.fake_engine import ALGO_STATUS, FEE, SYM, Engine, ProdView, raw  # noqa: F401 (FEE, SYM re-export)
+from tests.fake_engine import ALGO_STATUS, SYM, Engine, ProdView, raw
 
 STOP_TYPES = ("STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET")
 
@@ -43,7 +43,7 @@ class FakeCcxt(Engine):
         self.algo: dict[str, dict] = {}       # every conditional order: symbol, qty, trigger, client id, algoStatus
         self.limits: dict[str, dict] = {}     # limit orders, any status
         self.market_orders: dict[str, dict] = {}
-        self.orders: list[tuple] = []         # every create_order call: (type, side, amount, params, symbol)
+        self.orders: list[tuple] = []         # every create_order call: (type, side, amount, params)
         self.fills: list[dict] = []
         self.income: list[dict] = []
         self._id = 0
@@ -56,6 +56,7 @@ class FakeCcxt(Engine):
         self.ack_lost = 0           # orders that EXECUTE, then answer -1007 (execution status unknown)
         self.ack_lost_503 = 0       # orders that EXECUTE, then answer 503 "Unknown error" (status unknown)
         self.unavailable_503 = 0    # orders refused with 503 "Service Unavailable." (nothing ran)
+        self.ack_lost_unsent = 0    # orders that answer -1007 and did NOT run: "unknown" cuts both ways
         self.prod = ProdView(self)
         self.add_symbol(SYM, price)
 
@@ -135,7 +136,8 @@ class FakeCcxt(Engine):
         o = self.limits.get(i) or self.market_orders[i]
         return {"id": i, "clientOrderId": o["cid"], "symbol": o["symbol"], "type": o["type"], "side": o["side"],
                 "price": o["price"], "amount": o["amount"], "filled": o["filled"], "average": o["avg"],
-                "remaining": o["amount"] - o["filled"], "status": o["status"], "reduceOnly": o["reduce"]}
+                "remaining": o["amount"] - o["filled"], "status": o["status"], "reduceOnly": o["reduce"],
+                "timestamp": o["ts"], "lastTradeTimestamp": o["last_ts"]}
 
     def _algo_view(self, i):
         a = self.algo.get(i, {})
@@ -148,7 +150,8 @@ class FakeCcxt(Engine):
                 "stopPrice": p, "side": "buy", "type": "market", "reduceOnly": True, "amount": a.get("qty"),
                 "status": ALGO_STATUS[st], "info": {"orderType": "STOP_MARKET", "algoType": "CONDITIONAL",
                                                     "closePosition": close, "reduceOnly": True,
-                                                    "triggerPrice": str(p), "side": "BUY", "algoStatus": st}}
+                                                    "triggerPrice": str(p), "side": "BUY", "algoStatus": st,
+                                                    "actualOrderId": a.get("actual", "")}}
 
     def _open_cid(self, cid) -> bool:
         return any(o["cid"] == cid and o["status"] == "open" for o in self.limits.values()) or any(
@@ -162,7 +165,7 @@ class FakeCcxt(Engine):
 
     async def create_order(self, s, type_, side, amount, price=None, params=None):
         params = params or {}
-        self.orders.append((type_, side, amount, params, s))
+        self.orders.append((type_, side, amount, params))
         self._spec(s)
         trig = next((params[k] for k in ("triggerPrice", "stopPrice") if params.get(k) is not None), None)
         if trig is None and type_.upper() in STOP_TYPES:   # ccxt sends it to /fapi/v1/order, which refuses it
@@ -171,6 +174,9 @@ class FakeCcxt(Engine):
         if self.unavailable_503:
             self.unavailable_503 -= 1
             raise err.unavailable(path, executed=False)
+        if self.ack_lost_unsent:
+            self.ack_lost_unsent -= 1
+            raise err.status_unknown()
         cid = params.get("clientAlgoId") or params.get("newClientOrderId") or params.get("clientOrderId")
         if cid and self._open_cid(cid):   # New-Order doc: unique among OPEN orders only (a filled one is reusable)
             raise err.duplicate_client_id()
@@ -224,7 +230,8 @@ class FakeCcxt(Engine):
             self._check_margin(s, amount * price)
         i = self._next_id()
         self.limits[i] = {"symbol": s, "side": side, "type": "limit", "price": price, "amount": amount,
-                          "filled": 0.0, "avg": None, "status": "open", "gtd": gtd, "cid": cid, "reduce": reduce}
+                          "filled": 0.0, "avg": None, "status": "open", "gtd": gtd, "cid": cid, "reduce": reduce,
+                          "ts": self.now_ms(), "last_ts": None}
         if side == "sell" and price <= b["price"]:   # marketable: GTD is not post-only (GTX), so it takes at once
             self._exec_limit(i, amount)
         return self._order_view(i)
@@ -245,10 +252,9 @@ class FakeCcxt(Engine):
             raise err.min_notional(b["min"])
         elif side == "sell":
             self._check_margin(s, amount * b["price"])
-        i = self._next_id()
-        self.market_orders[i] = {"symbol": s, "side": side, "type": "market", "price": None, "amount": amount,
-                                 "filled": amount, "avg": b["price"], "status": "closed", "cid": cid, "reduce": reduce}
-        self._fill(s, side, amount, i)
+        else:   # one-way mode nets positions: this would open a LONG, which the short-only fake does not model
+            assert amount <= b["qty"] + 1e-12, f"fake: a BUY of {amount} without reduceOnly flips {s} long"
+        i = self._record_market(s, side, amount, reduce, cid)
         if side == "sell" and self.fail_entry_after_fill:
             raise ccxt.RequestTimeout("timed out after fill")
         return self._order_view(i)
@@ -311,10 +317,11 @@ class FakeCcxt(Engine):
         return {"code": 200, "msg": "The operation of cancel all open order is done."}
 
     async def fetch_my_trades(self, s, since=None, limit=None):
-        return [f for f in self.fills if f["symbol"] == s and f["timestamp"] >= (since or 0) - 5000]
+        # startTime is a hard bound (Account-Trade-List / Get-Income-History docs; ccxt sends since as startTime)
+        return [f for f in self.fills if f["symbol"] == s and f["timestamp"] >= (since or 0)]
 
     async def fapiPrivateGetIncome(self, req):
-        return [i for i in self.income if i["time"] >= req.get("startTime", 0) - 5000
+        return [i for i in self.income if i["time"] >= req.get("startTime", 0)
                 and req.get("symbol") in (None, i["symbol"]) and req.get("incomeType") in (None, i["incomeType"])]
 
     # --- test controls

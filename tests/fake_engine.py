@@ -48,7 +48,7 @@ class Engine:
                     if o["symbol"] == s and o["status"] == "open" and o["side"] == "sell" and o["price"] <= p]
             hits += [(t, 1, i) for i, t in [*self.stops.items(), *self.prearms.items()]
                      if self._algo_sym(i) == s and t <= p]
-            for level, kind, i in sorted(hits):
+            for level, kind, i in sorted(hits, key=lambda h: (h[0], h[1], int(h[2]))):
                 b["price"] = max(level, old)
                 if kind == 0 and self.limits[i]["status"] == "open":
                     self._exec_limit(i, self.limits[i]["amount"] - self.limits[i]["filled"])
@@ -59,14 +59,25 @@ class Engine:
     def _trigger(self, i: str) -> None:
         """closePosition: buys back the WHOLE short (New-Algo-Order doc). Pre-armed reduce-only stop: buys back its
         own quantity, capped at the position; with no position it is REJECTED and nothing fills (ALGO_UPDATE
-        `rm`: "Reduce Only reject"; change log 2025-11-06: no check before the conditional order triggers)."""
+        `rm`: "Reduce Only reject"; change log 2025-11-06: no check before the conditional order triggers).
+        The fill belongs to a NEW market order, not to the algo id (Query-Algo-Order doc: `actualOrderId`)."""
         s = self._algo_sym(i)
         b = self.sym[s]
         close = i in self.stops
         qty = b["qty"] if close else min(self.algo.get(i, {}).get("qty") or b["qty"], b["qty"])
         self._retire(i, "FINISHED" if qty > 0 else "REJECTED")
         if qty > 0:
-            self._fill(s, "buy", qty, i)
+            self.algo[i]["actual"] = self._record_market(s, "buy", qty, reduce=True, cid=None)
+
+    def _record_market(self, s: str, side: str, qty: float, reduce: bool, cid: str | None) -> str:
+        """A MARKET order that fills at once (and stays queryable by id or client id)."""
+        i = self._next_id()
+        self.market_orders[i] = {"symbol": s, "side": side, "type": "market", "price": None, "amount": qty,
+                                 "filled": qty, "avg": self.sym[s]["price"], "status": "closed", "cid": cid,
+                                 "reduce": reduce, "ts": self.now_ms()}
+        self._fill(s, side, qty, i)
+        self.market_orders[i]["last_ts"] = self.fills[-1]["timestamp"]
+        return i
 
     def _algo_sym(self, i: str) -> str:
         return self.algo.get(i, {}).get("symbol", SYM)   # a stop a test planted directly sits on SYM
@@ -85,21 +96,28 @@ class Engine:
         self._fill(o["symbol"], o["side"], q, i)
         o["avg"] = ((o["avg"] or 0.0) * o["filled"] + px * q) / (o["filled"] + q)
         o["filled"] += q
+        o["last_ts"] = self.fills[-1]["timestamp"]
         o["status"] = "closed" if o["filled"] >= o["amount"] - 1e-12 else "open"
 
     def _fill(self, s: str, side: str, amount: float, order: str | None = None) -> None:
-        """A trade at the current price, with its income rows (Get-Income-History doc: symbol, incomeType, income)."""
+        """A trade at the current price, stamped by the exchange clock, as ccxt parses a userTrades row
+        (Account-Trade-List doc), with its income rows (Get-Income-History doc: symbol, incomeType, income)."""
         b = self.sym[s]
-        px, ms = b["price"], int(time.time() * 1000)
-        self.fills.append({"symbol": s, "order": order, "side": side, "price": px, "amount": amount, "timestamp": ms})
-        self.income.append({"symbol": raw(s), "incomeType": "COMMISSION", "income": str(-px * amount * FEE),
-                            "asset": "USDT", "time": ms})
+        px, ms = b["price"], self.now_ms()
+        fee, pnl = px * amount * FEE, (b["entry"] - px) * amount if side == "buy" else 0.0
+        self.fills.append({"id": str(len(self.fills) + 1), "symbol": s, "order": order, "side": side, "price": px,
+                           "amount": amount, "timestamp": ms, "takerOrMaker": "taker",
+                           "fee": {"cost": fee, "currency": "USDT"},
+                           "info": {"orderId": order, "side": side.upper(), "realizedPnl": str(pnl),
+                                    "commission": str(fee), "time": ms}})
+        self.income.append({"symbol": raw(s), "incomeType": "COMMISSION", "income": str(-fee), "asset": "USDT",
+                            "time": ms})
         if side == "sell":
             b["entry"] = (b["entry"] * b["qty"] + px * amount) / (b["qty"] + amount)
             b["qty"] += amount
             return
-        self.income.append({"symbol": raw(s), "incomeType": "REALIZED_PNL", "income": str((b["entry"] - px) * amount),
-                            "asset": "USDT", "time": ms})
+        self.income.append({"symbol": raw(s), "incomeType": "REALIZED_PNL", "income": str(pnl), "asset": "USDT",
+                            "time": ms})
         b["qty"] = round(max(0.0, b["qty"] - amount), 8)
         if not b["qty"]:
             # a closePosition stop goes with the position. SECONDARY source: testnet probes 2026-09-24
@@ -134,11 +152,14 @@ class ProdView:
     price = property(lambda self: self.prices.get(SYM, self._fake.price),
                      lambda self, p: self.prices.__setitem__(SYM, p))
 
-    async def fetch_ticker(self, s):
-        return {**await self._fake.fetch_ticker(s), "last": self.prices.get(s, self._fake.sym[s]["price"])}
+    async def fetch_ticker(self, s):   # through the fake's own method, so a test's stub of it still applies
+        t = await self._fake.fetch_ticker(s)
+        return {**t, "last": self.prices[s]} if s in self.prices else t
 
     async def fetch_ohlcv(self, s, tf="1h", since=None, limit=30):
-        px = self.prices.get(s, self._fake.sym[s]["price"])
+        if s not in self.prices:
+            return await self._fake.fetch_ohlcv(s, tf, since=since, limit=limit)
+        px = self.prices[s]
         return [[k, px, px * 1.02, px * 0.98, px, 1] for k in range(limit)]
 
     def __getattr__(self, name):

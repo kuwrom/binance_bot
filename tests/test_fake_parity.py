@@ -33,6 +33,8 @@ async def test_reduce_only_close_needs_a_position_and_never_exceeds_it():
     await short(fake)
     o = await fake.create_order(SYM, "market", "buy", 150, None, {"reduceOnly": True})
     assert o["filled"] == 100 and fake.position == 0
+    with pytest.raises(AssertionError, match="long"):                      # one-way mode would flip it long
+        await fake.create_order(SYM, "market", "buy", 10)
 
 
 async def test_conditional_orders_live_on_the_algo_service_only():
@@ -79,6 +81,23 @@ async def test_a_price_move_fills_the_limit_then_triggers_its_prearmed_stop():
     assert (await fake.fetch_order(pre["id"], SYM, params=TRIG))["info"]["algoStatus"] == "FINISHED"
     pnl = [float(i["income"]) for i in fake.income if i["incomeType"] == "REALIZED_PNL"]
     assert pnl == [pytest.approx(-6.0)]
+
+
+async def test_a_triggered_stop_fills_under_its_own_order_id_and_since_is_a_hard_bound():
+    fake = FakeCcxt()
+    lim = await fake.create_order(SYM, "limit", "sell", 100, 1.04, gtd())
+    pre = await stop(fake, 1.10, qty=100)
+    fake.price = 1.12
+    actual = (await fake.fetch_order(pre["id"], SYM, params=TRIG))["info"]["actualOrderId"]
+    assert actual and actual != pre["id"]                                  # userTrades never carry the algo id
+    trades = await fake.fetch_my_trades(SYM)
+    assert [(x["order"], x["side"], x["price"]) for x in trades] == [(lim["id"], "sell", 1.04), (actual, "buy", 1.10)]
+    assert float(trades[1]["info"]["realizedPnl"]) == pytest.approx(-6.0)
+    o = await fake.fetch_order(actual, SYM)
+    assert o["status"] == "closed" and o["reduceOnly"] and o["lastTradeTimestamp"] == trades[1]["timestamp"]
+    assert (await fake.fetch_order(lim["id"], SYM))["lastTradeTimestamp"] == trades[0]["timestamp"]
+    assert await fake.fetch_my_trades(SYM, since=trades[1]["timestamp"] + 1) == []
+    assert await fake.fapiPrivateGetIncome({"startTime": trades[1]["timestamp"] + 1}) == []
 
 
 async def test_a_prearmed_stop_without_a_position_is_rejected_when_it_triggers():
@@ -166,6 +185,10 @@ async def test_answers_lost_after_the_order_ran():
     with pytest.raises(ccxt.ExchangeNotAvailable, match="Service Unavailable."):
         await short(fake)
     assert fake.position == 100                                             # this one did not run
+    fake.ack_lost_unsent = 1
+    with pytest.raises(ccxt.RequestTimeout, match="-1007"):
+        await short(fake)
+    assert fake.position == 100                                             # "unknown" can also mean: not run
     assert issubclass(ccxt.RequestTimeout, ccxt.NetworkError) and issubclass(ccxt.ExchangeNotAvailable,
                                                                              ccxt.NetworkError)
 
@@ -179,6 +202,12 @@ async def test_prod_and_demo_prices_diverge_and_prod_has_no_keys():
     with pytest.raises(ccxt.AuthenticationError):
         await ex.public.create_order(SYM, "market", "sell", 10)
     assert fake.orders == []
+
+    async def candles(s, tf="1h", since=None, limit=30):
+        return [[0, 9, 9, 9, 9, 1]]
+    fake.fetch_ohlcv = candles
+    fake.prod.prices.clear()
+    assert await ex.public.fetch_ohlcv(SYM) == [[0, 9, 9, 9, 9, 1]]       # a test's stub on the fake still applies
 
 
 async def test_symbols_keep_separate_books():
