@@ -23,7 +23,8 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 PREFIX = "sb"
-KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "add": "a"}   # one letter each in the id
+KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "add": "a",   # one letter each in the id
+         "bridge": "b"}   # stops.py: the reduce-only stop that covers a stop swap
 VALID = re.compile(r"^[\.A-Z\:/a-z0-9_-]{1,36}$")
 # definite refusals of a closePosition stop that ccxt raises as a bare ExchangeError (or may): one already rests on the
 # side (-4130), wrong endpoint (-4120), it would trigger at once (-2021). Nothing was placed: no lookup needed.

@@ -12,7 +12,7 @@ from datetime import datetime
 
 from . import indicators as ind
 from . import killswitch as ks
-from . import entry_intents, news, reconcile
+from . import entry_intents, news, reconcile, stops
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -107,9 +107,11 @@ class PositionChecks:
                           f"position ({p['contracts']}) in {sym} on a short-only desk", {"symbol": sym},
                           cause="long_position"), self.n)
             return
-        if p["UNPROTECTED"]:
+        close, bridges = await stops.listed(self.app.trader, sym)   # a pre-arm or bridge covers a fixed size only
+        if p["UNPROTECTED"] or not close or bridges:
             await self._restore_stop(sym)
-            return
+            if p["UNPROTECTED"] or not close:
+                return
         if p["journal_status"] == "NOT IN JOURNAL":
             await self.n.send("untracked_position", "Position not opened via shortbot: stop is enforced but no "
                               "plan/thesis. Journal it or close it.", sym, cooldown_s=86400)
@@ -148,7 +150,11 @@ class PositionChecks:
         try:
             res = await tr.ensure_stop(sym, FALLBACK_STOP_PCT)
             self.stop_fails.pop(sym, None)
-            await self.n.send("stop_missing", f"No exchange stop found. Action: {res}", sym, urgent=True, cooldown_s=300)
+            if res and res.get("action") == "bridges_swept":   # a dead stop swap's leftovers (stops.py)
+                await self.n.send("bridge_swept", f"leftover stop-swap bridge(s) cancelled: {res}", sym, cooldown_s=0)
+            elif res:
+                await self.n.send("stop_missing", f"No closePosition stop found. Action: {res}", sym, urgent=True,
+                                  cooldown_s=300)
         except SymbolBusy:
             raise   # someone else is acting on it: not a failed restore (check_positions skips it this pass)
         except Exception as e:  # noqa: BLE001

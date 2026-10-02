@@ -338,9 +338,12 @@ class EntryDesk(EntryPlacement):
         if rest == "unknown":
             return await self._rest_unknown(e)
         self._cancel_fails.pop(e["id"], None)
-        if cps and min(c["trigger"] for c in cps) > e["stop_price"] * 1.0001:
+        jt = self.j.active_trade(sym) or {}   # a widened trade keeps its wider stop (its size was cut for it, #14)
+        plan_stop = max(e["stop_price"], float(jt.get("stop_price") or 0)) if "widened" in (jt.get("notes") or "") \
+            else e["stop_price"]
+        if cps and min(c["trigger"] for c in cps) > plan_stop * 1.0001:
             # e.g. the guardian's +10% fallback stop landed first: tighten it to this entry's plan stop
-            await tr.move_stop(sym, e["stop_price"], f"entry #{e['id']} filled: plan stop")
+            await tr.move_stop(sym, plan_stop, f"entry #{e['id']} filled: plan stop")
         trades = await fills.history(tr.t, e, o)
         if not pos:   # filled and closed again before this poll (its pre-armed stop): rebuild it from history
             return await fills.round_trip(self, e, o, trades)

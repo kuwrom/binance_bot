@@ -107,22 +107,23 @@ async def test_move_stop_failure_restores_old_stop():
     assert not r["ok"] and "restored" in r["error"] and list(fake.stops.values()) == [1.05]
 
 
-async def test_move_stop_drift_after_cancel_restores_old_stop():
-    """ONDO #5: the cancel executed, then -1021; the position must not be left naked."""
+async def test_move_stop_drift_after_cancel_still_moves():
+    """ONDO #5: the cancel executed, then -1021. The bridge stop covers it; the new stop goes on (#14)."""
     t, fake = trader()
     await open_default(t)
     fake.drift_on_cancel = 1
     r = await t.move_stop(SYM, 1.02, "trail")
-    assert not r["ok"] and "restored" in r["error"] and list(fake.stops.values()) == [1.05]
+    assert r["ok"] and list(fake.stops.values()) == [1.02] and fake.prearms == {}
     assert t.ex.resyncs >= 1
 
 
-async def test_move_stop_drift_before_cancel_keeps_old_stop():
+async def test_move_stop_cancel_refused_twice_keeps_old_stop():
     t, fake = trader()
     await open_default(t)
-    fake.drift_before_cancel = 1
+    fake.drift_before_cancel = 2   # the old stop's cancel never runs: retried once (#14), then it stays
     r = await t.move_stop(SYM, 1.02, "trail")
     assert not r["ok"] and "still in place" in r["error"] and list(fake.stops.values()) == [1.05]
+    assert fake.prearms == {}
 
 
 async def test_move_stop_same_tick_is_a_noop_without_swapping():

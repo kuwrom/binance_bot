@@ -5,7 +5,7 @@ exchange-side stop-market (closePosition, mark price). Safety properties:
   the position is closed (with retries) and an urgent alert fires if even that fails
 - every order carries a client id (clientid.py, #9): an ambiguous answer (timeout, 5xx, -1007) is resolved by that id
   and the position, never by a blind resend
-- stop swaps roll back to the old stop on failure; stops only ever tighten
+- stop changes are make before break (stops.py): a bridge stop covers the swap; move_stop only tightens
 - scanner vetoes + market regime are re-checked server-side; overriding them needs a logged reason
 - every order-changing sequence on a symbol holds that symbol's lock (symlock.py): one at a time across the
   guardian, the MCP servers and CLI calls on this host. Opening also holds `lock`, this process's one asyncio lock
@@ -27,7 +27,7 @@ from . import clientid, reconcile
 from .exchange import Exchanges
 from .journal import Journal
 from .risk import AccountState
-from .stops import STOP_TYPES, is_clock_drift, is_protective_stop, swap_stop  # noqa: F401 (re-export)
+from .stops import STOP_TYPES, is_clock_drift, is_protective_stop  # noqa: F401 (re-export)
 from .symlock import SymbolLocks, lock_dir_for
 from .trading_manage import ManageFlow
 from .trading_open import OpenFlow

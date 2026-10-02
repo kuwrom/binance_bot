@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
-from . import clientid, killswitch, reconcile, warmup
+from . import clientid, killswitch, reconcile, stops, warmup
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier,
@@ -140,7 +140,10 @@ class OpenFlow:
         try:
             if fill and stop_price <= max(fill, mark):
                 raise ValueError(f"price {max(fill, mark)} already at/above stop {stop_price}")
-            stop = await self._place_stop(symbol, stop_price)   # always, even when the position couldn't be read
+            try:
+                stop = await self._place_stop(symbol, stop_price)   # always, even when the position couldn't be read
+            except Exception as e:  # noqa: BLE001 - a stale closePosition stop is swapped out (#14), else re-raised
+                stop = await stops.replace_stale(self, symbol, stop_price, size or amount, e)
         except Exception as e:  # noqa: BLE001
             try:
                 await self._market_close(symbol, size or amount)

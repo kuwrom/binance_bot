@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from . import clientid, killswitch
+from . import clientid, killswitch, stops
 from . import indicators as ind
 from .exchange import to_symbol
 
@@ -135,11 +135,13 @@ class PositionOps:
                 return {"ok": False, "error": "no journal-tracked position"}
             if "widened" in (trade.get("notes") or ""):
                 return {"ok": False, "error": "stop already widened once on this trade (rule: at most once)"}
-            stops = await tr.stop_orders(symbol)
-            cur = min((s["trigger"] for s in stops), default=None)
+            old = await tr.stop_orders(symbol, close_position_only=True)   # a resting entry's pre-arm isn't ours to move
+            cur = min((s["trigger"] for s in old), default=None)
             entry, qty = float(pos["entryPrice"]), float(pos["contracts"])
+            new_stop = float(tr.t.price_to_precision(symbol, new_stop))
             if cur is None or new_stop <= cur:
-                return {"ok": False, "error": "not a widening (use move_stop to tighten)"}
+                return {"ok": False, "error": "not a widening (use move_stop to tighten)" if cur else
+                        "no closePosition stop to widen: the guardian restores it first"}
             liq = float(pos.get("liquidationPrice") or 0)
             if liq and new_stop >= liq * (1 - tr.ex.limits.liq_buffer_pct / 100):
                 return {"ok": False, "error": f"new stop {new_stop} too close to liquidation {liq}"}
@@ -148,21 +150,47 @@ class PositionOps:
             cut = qty - allowed
             if cut > 0:
                 cut = float(tr.t.amount_to_precision(symbol, cut + float(tr.t.market(symbol)["precision"]["amount"] or 0)))
-                await tr._market_close(symbol, min(cut, qty), whole=cut >= qty)
-            for s in stops:
-                await tr.t.cancel_order(s["id"], symbol, params={"trigger": True})
+            if cut >= qty:   # nothing would be left to protect at the wider stop
+                return {"ok": False, "error": f"a widen to {new_stop} within 1R ({r1:.2f}) leaves no size: close instead"}
+            return await self._widen(trade, symbol, old, cur, new_stop, qty, max(cut, 0.0), r1, reason)
+
+    async def _widen(self, trade: dict, symbol: str, old: list[dict], cur: float, new_stop: float, qty: float,
+                     cut: float, r1: float, reason: str) -> dict[str, Any]:
+        """Stop first, then the size cut (#14): the size never changes without its new stop resting, and a stop that
+        can't be moved costs no size. Bounded residual: a process killed between the two leaves the uncut size at the
+        wider stop (loss at stop up to qty x (new - entry), over 1R by the cut's share) and the journal still on the old
+        stop, until a human or the next session sees it. A cut that fails moves the stop back (a tighten)."""
+        tr = self.tr
+        snap = {"from": cur, "to": new_stop, "cut": cut, "r_initial": r1}
+        res = await stops.set_stop(tr, symbol, new_stop, qty, old)
+        if res.get("closed") or not res.get("ok"):
+            tr.j.log_decision("widen_stop_failed", reason, symbol, snapshot={**snap, "cut": 0, "result": res})
+            return {**res, "size_cut": 0}
+        left = qty
+        if cut > 0:
             try:
-                await tr._place_stop(symbol, new_stop, tries=3)
-            except Exception as e:  # noqa: BLE001 - restore the old stop, never leave it naked
-                await tr._place_stop(symbol, cur, tries=3)
-                return {"ok": False, "error": f"new stop rejected ({e}); old stop restored", "reduced": max(cut, 0)}
-            tr.j.update_trade(trade["id"], stop_price=new_stop,
-                              notes=f"{trade.get('notes') or ''} widened {cur}->{new_stop}".strip())
-            tr.j.log_decision("widen_stop", reason, symbol, snapshot={"from": cur, "to": new_stop, "cut": max(cut, 0),
-                                                                      "r_initial": r1})
-            await tr.alert("action_widen", f"stop {cur} -> {new_stop}, size cut {max(cut, 0)}: {reason}", symbol, False)
-            return {"ok": True, "old_stop": cur, "new_stop": new_stop, "size_cut": max(cut, 0),
-                    "remaining": round(qty - max(cut, 0), 8), "max_loss_usdt": round(r1, 2)}
+                await tr._market_close(symbol, cut, whole=False)   # never re-sent blind (#9)
+                err = None
+            except Exception as e:  # noqa: BLE001 - incl. clientid.Unknown: the position decides below
+                err = e
+            try:
+                left = float((await tr.position(symbol) or {}).get("contracts") or 0)
+            except Exception:  # noqa: BLE001
+                left = None if err else qty - cut
+            if left is None or left > qty - cut + 1e-9:
+                back = await tr.move_stop(symbol, cur, f"widen undone: the size cut failed ({err})")
+                msg = (f"size cut of {cut:g} failed ({err}); stop moved back to {cur}" if back.get("ok") else
+                       f"size cut of {cut:g} failed ({err}) AND moving the stop back to {cur} failed "
+                       f"({back.get('error')}): the full size rests at the wider stop {new_stop}. Cut it now")
+                tr.j.log_decision("widen_stop_failed", reason, symbol, snapshot={**snap, "cut": 0, "error": msg})
+                await tr.alert("widen_undone", msg, symbol, not back.get("ok"))
+                return {"ok": False, "error": msg, "size_cut": 0}
+        tr.j.update_trade(trade["id"], stop_price=new_stop,
+                          notes=f"{trade.get('notes') or ''} widened {cur}->{new_stop}".strip())
+        tr.j.log_decision("widen_stop", reason, symbol, snapshot={**snap, "remaining": left})
+        await tr.alert("action_widen", f"stop {cur} -> {new_stop}, size cut {cut}: {reason}", symbol, False)
+        return {"ok": True, "old_stop": cur, "new_stop": new_stop, "size_cut": cut, "remaining": round(left, 8),
+                "max_loss_usdt": round(r1, 2), **({"warnings": res["warnings"]} if res.get("warnings") else {})}
 
     async def add_to_winner(self, symbol: str, notional: float, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr

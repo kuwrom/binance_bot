@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import ccxt.async_support as ccxt
 
-from . import clientid, close_intent, reconcile, tranches
+from . import clientid, close_intent, reconcile, stops, tranches
 from .exchange import to_symbol
-from .stops import is_protective_stop, swap_stop
+from .stops import is_bridge, is_protective_stop
 
 TRIG = {"trigger": True}
 
@@ -103,12 +103,12 @@ class ManageFlow:
         return out
 
     async def _strip_stops(self, symbol: str, listed: list[dict], own: list[dict]) -> None:
-        """Flat: cancel the closePosition stop and the pre-armed stops of this trade's own entries, matched by id or,
-        for a pre-arm whose send answer was lost (prearm_id unset), by its client id."""
+        """Flat: cancel the closePosition stop, any stop-swap bridge (stops.py) and the pre-armed stops of this trade's own
+        entries, matched by id or, for a pre-arm whose send answer was lost (prearm_id unset), by its client id."""
         ids = {str(e["prearm_id"]) for e in own if e.get("prearm_id")}
         cids = {e["prearm_cid"] for e in own if e.get("prearm_cid")}
         for o in listed:
-            if not (_whole(o) or str(o.get("id")) in ids or o.get("clientOrderId") in cids):
+            if not (_whole(o) or is_bridge(o) or str(o.get("id")) in ids or o.get("clientOrderId") in cids):
                 continue   # another group's pre-armed stop: its limit may still fill
             try:
                 await self.t.cancel_order(o["id"], symbol, params=TRIG)
@@ -175,7 +175,8 @@ class ManageFlow:
             return f"NO closePosition stop ({e})"
 
     async def move_stop(self, symbol: str, new_stop: float, reason: str) -> dict:
-        """Tighten-only. Swap = cancel old, place new; on failure the old stop is restored."""
+        """Tighten-only, make before break (stops.set_stop). Only the position's closePosition stop moves: a resting
+        entry's pre-armed stop is that entry's protection."""
         from .trading import _f
         symbol = to_symbol(symbol)
         async with self.symbol_lock(symbol, f"move stop to {new_stop:g}: {reason}"):
@@ -183,9 +184,9 @@ class ManageFlow:
             pos = await self.position(symbol)
             if not pos:
                 return {"ok": False, "error": f"no open position in {symbol}"}
-            stops = await self.stop_orders(symbol)
+            old = await self.stop_orders(symbol, close_position_only=True)
             mark = _f(pos.get("markPrice"))
-            current = min((s["trigger"] for s in stops), default=None)
+            current = min((s["trigger"] for s in old), default=None)
             new_stop = float(self.t.price_to_precision(symbol, new_stop))   # compare what the exchange would get
             if current is not None and new_stop >= current:   # also a same-tick "move": never swap for nothing
                 return {"ok": False, "noop": new_stop == current,
@@ -196,7 +197,7 @@ class ManageFlow:
                 dist = (new_stop - _f(pos["entryPrice"])) / _f(pos["entryPrice"]) * 100
                 if dist > self.ex.limits.max_stop_distance_pct:
                     return {"ok": False, "error": f"no stop yet and {dist:.1f}% from entry exceeds max stop distance"}
-            res = await swap_stop(self, symbol, stops, current, new_stop, _f(pos["contracts"]))
+            res = await stops.set_stop(self, symbol, new_stop, _f(pos["contracts"]), old)
             if not res["ok"] or res.get("closed"):
                 return res
             placed = res["placed"]
@@ -205,15 +206,20 @@ class ManageFlow:
                 self.j.update_trade(trade["id"], stop_price=new_stop)
             self.j.log_decision("move_stop", reason, symbol, snapshot={"from": current, "to": new_stop})
             return {"ok": True, "symbol": symbol, "old_stop": current, "new_stop": new_stop,
-                    "order_id": placed.get("id")}
+                    "order_id": placed.get("id"), **({"warnings": res["warnings"]} if res.get("warnings") else {})}
 
     async def ensure_stop(self, symbol: str, fallback_pct: float) -> dict | None:
-        """Guardian safety net: restore a missing stop (journal stop, else entry+fallback%), or close the
-        position if price is already beyond the intended stop."""
+        """Guardian safety net: restore a missing closePosition stop (journal stop, else entry+fallback%), or close the
+        position if price is already beyond the intended stop. Pre-armed stops and bridges don't count (they cover a
+        fixed size); a bridge left by a dead swap goes once a closePosition stop rests (stops.set_stop)."""
         from .trading import _f, _sleep
         async with self.symbol_lock(symbol, "guardian: restore a missing stop"):
-            if await self.stop_orders(symbol, close_position_only=True):
-                return None
+            close, bridges = await stops.listed(self, symbol)
+            if close:
+                if not bridges:
+                    return None
+                await stops.drop_bridges(self, symbol, bridges)
+                return {"symbol": symbol, "action": "bridges_swept", "bridges": [b["id"] for b in bridges]}
             pos = await self.position(symbol)
             if not pos:
                 return None
@@ -228,6 +234,12 @@ class ManageFlow:
                     await _sleep(1)
                     await reconcile.finalize(self, jt, f"guardian: unprotected and past stop {stop}")
                 return {"symbol": symbol, "action": "closed", "mark": mark, "stop": stop}
-            await self._place_stop(symbol, stop, tries=3)
+            res = await stops.set_stop(self, symbol, stop, _f(pos["contracts"]))
+            if res.get("closed"):
+                return {"symbol": symbol, "action": "closed", "mark": mark, "stop": stop, "why": res.get("reason")}
+            if not res.get("ok"):
+                if res.get("present"):
+                    return None   # one rests after all (placed meanwhile, or the listing lagged)
+                raise RuntimeError(res.get("error") or "stop not placed")
             self.j.log_alert("stop_restored", f"placed missing stop at {stop}", symbol)
             return {"symbol": symbol, "action": "stop_placed", "stop": stop}
