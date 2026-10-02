@@ -52,3 +52,27 @@ def test_evaluate_verdicts():
                "ret": -0.02 + (i % 3) * 0.001, "edge": -0.02 + (i % 3) * 0.001} for i in range(40)]
     [row] = F.evaluate(trades)
     assert row["verdict"] == "avoid" and row["n"] == 40 and row["coins"] == 7
+
+
+def test_breakdown_control_covers_the_entry_window_not_the_event_day():
+    """HOT: high funding on day 50, closes below the prior low on day 52 (at 96). Every coin falls to 90 on day 53.
+    The breakdown short (entry day 52, 1d) earns 1 - 90/96; its class control over the SAME window earns ~1 - 90/100,
+    so the edge is negative (~ -3.5%). A control from the event day (a flat market) would show the drop as +6% edge."""
+    bars, funding = {}, {}
+    for i in range(25):
+        s = "HOTUSDT" if i == 24 else f"C{i}USDT"
+        rows, px = [], 100.0
+        for k in range(80):
+            if k == 53:
+                px *= 0.9
+            lo = px * (0.97 if (s == "HOTUSDT" and k == 51) else 1.0)
+            c = px * (0.96 if (s == "HOTUSDT" and k == 52) else 1.0)
+            rows.append((D0 + k * DAY, px, px, lo, c, 1e7 * (50 - i)))
+        bars[s] = rows
+        funding[s] = [(D0 + k * DAY + j * DAY // 3, 0.002 if (s == "HOTUSDT" and k == 50) else 0.0)
+                      for k in range(80) for j in range(3)]
+    trades = F.events({"bars": bars, "funding": funding})
+    bd = next(t for t in trades if t["symbol"] == "HOTUSDT" and t["entry"] == "breakdown" and t["h"] == 1
+              and t["thr"] == 0.0005)
+    assert bd["ret"] == pytest.approx(1 - 90 / 96 - F.FEES)
+    assert -0.05 < bd["edge"] < -0.02

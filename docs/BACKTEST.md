@@ -135,6 +135,28 @@ walk-forward and a multiple-testing haircut. Read-only: it never touches the exc
 | distance to the 24h high | Shorting within 1% of the high is the worst bucket (−0.28R); ≥ 15% below it is ≈ 0. Fading *at* the high loses to momentum, and continuation after a drop is the better short (see bounce_fade). |
 | funding / premium / OI change | Small effects. Negative-funding entries were *not* worse (−0.12R). |
 
+## Long sleeve (research, 2026-10-02, task #18)
+`run --days60 --long` runs the four pre-registered long strategies from the library (`strategies_long.py`: 12 param sets, effective N 6) through the same simulator (`Plan(side="long")`), the mirrored matched placebos, stress and DSR. Window 2026-07-27 → 09-29.
+
+| strategy (picked on IS) | n | coins | avg R | OOS R | vs same-hour placebo, paired (t_day) | stress R | verdict |
+|---|---|---|---|---|---|---|---|
+| flush_reclaim (6% drop, all coins) | 656 | 248 | +0.18 | +0.37 | −0.01 (0.1) | +0.14 | fails |
+| oversold_bounce (7% drop) | 819 | 279 | −0.06 | −0.09 | −0.03 (−0.8) | −0.12 | fails |
+| capitulation (−40%/7d, 168h) | 59 | 49 | +0.03 | −0.08 | −0.19 (−0.4) | +0.01 | fails |
+| premium_discount (z ≤ −3) | 4,174 | 477 | +0.01 | +0.00 | **+0.03 (2.6)** | −0.08 | promising |
+
+Pooled long trades: +0.01R. Same-coin placebo: +0.02R. Same-hour placebo: +0.00R. Random shorts: −0.23R.
+
+**Read:**
+- In this up-drifting window, simply being long was worth about +0.2R over being short.
+- None of the long triggers adds anything beyond that direction.
+- The flush-reclaim's +0.18R is the market's: the same-hour placebo made +0.19R.
+- The liquid-only variants (≥ $100M) were worse (paired −0.24/−0.32R, t ≈ −2). That contradicts the card's "majors only" idea in this window.
+
+**Next:**
+- Shadow-log the long side of premium_discount, the only variant worth it.
+- Retest all four on a new window before any long is considered.
+
 ## Caveats
 - One 2-month window is essentially one regime (an alt-up drift), and hourly bars hide intrabar squeezes: stops almost never gap on 1h. The stress run is the honest cost bound.
 - **Walk-forward:** the IS/OOS split has no fitting beyond picking 1 of ≤ 4 param sets, so OOS is a regime check. Rerun the same ledger on a new window before trusting any cell.

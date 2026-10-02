@@ -51,6 +51,8 @@ def test_seed_registers_drafts_once_and_versions_on_rule_change(tmp_path):
     assert L.seed_library(d, tmp_path) == {"cards": 1, "new": 0}
     p = R.latest(d, "lib.oi_flush_long")
     assert p["status"] == "draft" and p["level"] == "strategy" and json.loads(p["definition"])["direction"] == "long"
+    (tmp_path / "a.md").write_text(CARD.replace("n=40", "n=400, our backtest t=2.1"))      # evidence: no version
+    assert L.seed_library(d, tmp_path)["new"] == 0
     (tmp_path / "a.md").write_text(CARD.replace("OI -10%", "OI -15%"))
     assert L.seed_library(d, tmp_path)["new"] == 1 and R.latest(d, "lib.oi_flush_long")["version"] == 2
 

@@ -14,7 +14,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: liquidated longs are forced sellers and push price below fair value; once OI is flushed and funding turns negative, new shorts are late and the first reclaim of the breakdown level forces them to cover
 - rules: *(proposed)* BTC/ETH/SOL; trigger = 24h long liquidations in the top decile, or OI -8-10% in 24h with price -6% or worse; funding <= 0 at the next print; enter on the 1h close back above the cascade's breakdown level; stop under the wick low; target a 50-100% retrace of the cascade leg; time stop 72h; regime filter: price above the 200DMA, or a reclaim
 - data needed: OI hist (/futures/data/openInterestHist, 30d window), funding, klines: Binance public; liquidations only live (!forceOrder@arr), no REST history
-- evidence: Feb-2026: funding -6% ann. near the ~$60k bottom; on 28-Feb $420M of $500M liquidations were longs while OI rose with negative funding (https://www.coindesk.com/markets/2026/02/28/bitcoin-sets-up-potential-short-squeeze-as-funding-plunges-to-6). Glassnode wk46-2025: OI fell with price, funding at cycle lows, but ETF outflows meant "no active dip-buy signal" (https://research.glassnode.com/the-week-onchain-week-46-2025/)
+- evidence: Feb-2026: funding -6% ann. near the ~$60k bottom; on 28-Feb $420M of $500M liquidations were longs while OI rose with negative funding (https://www.coindesk.com/markets/2026/02/28/bitcoin-sets-up-potential-short-squeeze-as-funding-plunges-to-6). Glassnode wk46-2025: OI fell with price, funding at cycle lows, but ETF outflows meant "no active dip-buy signal" (https://research.glassnode.com/the-week-onchain-week-46-2025/). own 60-day backtest 2026-07-27 to 09-29, docs/BACKTEST.md "Long sleeve": 6% drop / all coins: 656 trades, +0.18R, but the matched same-hour placebo earned +0.19R (paired -0.01, t 0.1); liquid-only (>= $100M) was worse: paired -0.24 / -0.32R (t -2.0 / -2.2). Fails
 - grade: Anecdote
 - risks: catching knives when the trend breaks (10 Oct 2025, Nov 2025); the OI flush can repeat; ADL on alts
 - fit: High — every input except liquidation history is already in the DataHub; the natural first long setup to paper-trade
@@ -25,7 +25,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: forced deleveraging overshoots in the most liquid names; dip buyers and short covering retrace part of the move within 1-3 days when the drop was driven by positioning, not news
 - rules: *(proposed)* trigger = daily return < -2.5 sigma (about BTC -7%, SOL -12%), funding <= 0 at the next print, and OI down >= 8% on the day; enter on the first 1h higher low after 00:00 UTC; stop = day low - 0.5 ATR; target a 38-50% retrace; time stop 72h; skip hack, delisting or regulation drops
 - data needed: klines, funding, OI hist: Binance public
-- evidence: no published stats found. Adjacent: the funding-Z long below (93 trades, +1.14%/trade). The long mirror of our bounce_fade detector
+- evidence: no published stats found. own 60-day backtest 2026-07-27 to 09-29, docs/BACKTEST.md "Long sleeve": 7% drop: 819 trades, -0.06R, below both placebos (paired -0.03, t -0.8); 12% drop: -0.07R (paired -0.10, t -1.8). Fails
 - grade: Anecdote
 - risks: trend-day continuation (10 Oct 2025, Nov 2025); repeated failed bounces in bear markets
 - fit: High — data in hand and hourly-native; the simplest long counterpart to bounce_fade (same detector, other side)
@@ -56,12 +56,12 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - direction: long
 - family: trend
 - mechanism: on BTC, high funding marks persistent leveraged bull demand, not exhaustion; fading it on majors lost money
-- rules: BTC entries made while funding z > +1.5 had higher 30d forward returns: +6.95% (win 62.3%) vs +4.23% (54.1%) baseline; z > +2.5: +9.87% (64.5%). Rule: never short majors on funding alone; require a price breakdown. Keep funding_hi shorts to post-pump alts
+- rules: BTC entries made while funding z > +1.5 had higher 30d forward returns: +6.95% (win 62.3%) vs +4.23% (54.1%) baseline; z > +2.5: +9.87% (64.5%). Rules: (1) never short on funding alone (any class); (2) aggregate gate: when BTC/ETH 7-day carry is in the top quintile of its trailing year (roughly > 20-30% annualised), cut the size of broad/beta alt shorts; setup-level fades need no change
 - data needed: funding history: Binance public
-- evidence: BTC 2019-2026 backtest (https://tradingstrategies.work/blog/funding-rate-signal-btc-backtest); consistent with crypto time-series momentum (Liu-Tsyvinski RFS 2021). Conflicts in part with BIS WP 1087 (high carry predicts crashes), which is monthly and futures-based
-- grade: Single-source
-- risks: overlapping 30d windows inflate significance; BTC only; alt funding spikes behave differently
-- fit: Med — mainly a veto rule for the short book
+- evidence: BTC 2019-2026 backtest (https://tradingstrategies.work/blog/funding-rate-signal-btc-backtest); consistent with crypto time-series momentum (Liu-Tsyvinski RFS 2021). Own study on Binance 2020-07 to 2026-08 (own study, docs/REGIME_STUDIES.md): top-quintile BTC/ETH carry -> alt basket short 7d -4.3% vs +0.1% on other days (diff -4.4%, Newey-West t -3.1, same sign 2020/2021/2023/2024, opposite 2026 YTD), 30d alt crash frequency 12.5% vs 24.0%; top-gainer fades unaffected; coin-level funding has no edge (36 cells). Contradicts BIS WP 1087 on this venue
+- grade: Practitioner-data
+- risks: 35 regime cells were tested, and t -3.1 sits near the Bonferroni bar (~3.2); 2026 YTD reversed; the effect is market beta, not alpha
+- fit: High — a free daily sizing gate for broad alt shorts, and the evidence behind "never fade on funding alone"
 
 ### dislocation_capture — Liquidation-cascade dislocation capture (perp discount, rebound)
 - direction: both
@@ -80,7 +80,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: forced sellers (liquidations, insolvent holders such as Celsius) dump regardless of price; liquidity returns slowly and price retraces
 - rules: trigger when a coin drops ~40% and breaks its prior range for an identifiable forced-selling reason; investigate the cause first, then enter; time exit 2-3 days up to 1-2 weeks ("don't hold on too long"); stop not published. Avoid breakout-chasing
 - data needed: klines, OI hist (30d), news: mostly Binance public
-- evidence: Selini Capital CIO (13 years profitable, self-reported): GMT -45% retraced in 2-3 days; after alts are -80-90% it is "hard to find a lot of shorts"; shorting alts was his "big flaw for many years" (https://blockcrunch.substack.com/p/how-this-top-trader-is-navigating, https://panews.io/articles/0rf24oeo)
+- evidence: Selini Capital CIO (13 years profitable, self-reported): GMT -45% retraced in 2-3 days; after alts are -80-90% it is "hard to find a lot of shorts"; shorting alts was his "big flaw for many years" (https://blockcrunch.substack.com/p/how-this-top-trader-is-navigating, https://panews.io/articles/0rf24oeo). own 60-day backtest 2026-07-27 to 09-29, docs/BACKTEST.md "Long sleeve" (mechanical version, no cause check): -30%/-40% over 7 days then a 24h-high breakout: 59-134 trades, -0.03 to +0.09R, every variant below its same-hour placebo (paired -0.11 to -0.20). Fails mechanically; the card's "identifiable forced-selling reason" is untested
 - grade: Anecdote
 - risks: catching a real collapse (LUNA, FTT); 10-Oct wicks to ~0 then a partial recovery; venue lockout during the event
 - fit: Med — the natural exit-and-flip for our short book after cascades, and the first long sleeve to add
@@ -91,7 +91,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: the perp is tied to the index only through funding and arbitrage capital; one-sided leveraged flow overshoots the premium, and arbitrageurs pull it back
 - rules: *(proposed)* 1h premiumIndexKlines, z-score vs 7d; z > +3 at a 24h high -> short (our premium_hi); z < -3 after a dump -> LONG the perp for 4-24h; stop on a new low in the premium
 - data needed: /fapi/v1/premiumIndexKlines, markPriceKlines, indexPriceKlines: Binance public
-- evidence: perp deviations are large, co-move across coins and decline over time (He-Manela-Ross-von Wachter, https://arxiv.org/abs/2212.06888); premia are sticky but mean-reverting (https://robotwealth.com/the-art-and-science-of-trading-carry/); funding drives most realised basis returns (https://arxiv.org/abs/2605.05089)
+- evidence: perp deviations are large, co-move across coins and decline over time (He-Manela-Ross-von Wachter, https://arxiv.org/abs/2212.06888); premia are sticky but mean-reverting (https://robotwealth.com/the-art-and-science-of-trading-carry/); funding drives most realised basis returns (https://arxiv.org/abs/2605.05089). own 60-day backtest 2026-07-27 to 09-29, docs/BACKTEST.md "Long sleeve", long side: z <= -3: 4,174 trades, +0.01R (gross +0.10R), +0.03R over the matched placebo (t 2.6, IS -0.00 / OOS +0.05) but stress -0.08R and DSR 0.00: "promising", the only long variant worth shadow-logging; z <= -4: +0.03R paired (t 1.6)
 - grade: Working-paper
 - risks: deep discounts accompany real bad news (hacks, delistings); the discount can widen further in cascades
 - fit: Med — the long mirror of premium_hi; same data and code path

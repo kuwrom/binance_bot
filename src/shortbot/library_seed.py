@@ -23,6 +23,7 @@ from . import registry as R
 LIB_DIR = Path(__file__).resolve().parents[2] / "docs" / "strategies"
 REQUIRED = ("direction", "family", "mechanism", "rules", "evidence", "grade", "fit")
 DIRECTIONS = ("long", "short", "both", "neutral")
+RULE_KEYS = ("direction", "family", "rules", "data_needed")   # the registry definition: a change = a new version
 _HEAD = re.compile(r"^### ([a-z0-9_]+) — (.+)$")
 _BULLET = re.compile(r"^- ([a-z ]+): (.*)$")
 
@@ -57,11 +58,12 @@ def load(lib_dir: Path = LIB_DIR) -> list[dict[str, Any]]:
 
 
 def seed_library(db, lib_dir: Path = LIB_DIR) -> dict[str, int]:
-    """Idempotent: an unchanged card is a no-op; edited rules become a new version (old evidence stays with v1)."""
+    """Idempotent: an unchanged card is a no-op; edited RULES (RULE_KEYS) become a new version, while evidence, grade,
+    risks and fit live in the doc and can be updated as studies come in without orphaning episodes or trials."""
     R.ensure(db)
     out = {"cards": 0, "new": 0}
     for c in load(lib_dir):
-        body = {k: v for k, v in c.items() if k not in ("id", "name", "mechanism", "doc")}
+        body = {k: c[k] for k in RULE_KEYS if c.get(k)}
         r = R.register(db, {"id": f"lib.{c['id']}", "level": "strategy", "name": c["name"],
                             "mechanism": c["mechanism"], "definition": json.dumps(body, sort_keys=True),
                             "detector": "none (library card)", "metric": "trade_r", "status": "draft",

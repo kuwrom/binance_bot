@@ -101,10 +101,10 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: small trend-chasers bid for leveraged longs while arbitrage capital is scarce; extreme carry marks crowded, fragile longs, and crashes follow
 - rules: daily OI-weighted annualised funding/basis on BTC+ETH (and an alt aggregate); top decile (funding > 0.03%/8h for days, or quarterly basis > 20-25% ann.) -> allow larger short exposure on high-beta alts and cut longs; low or negative carry -> cut new shorts, long bias. Use for sizing and stops, not timing
 - data needed: funding, premiumIndex, delivery prices: Binance public
-- evidence: BTC/ETH futures carry averages > 10% a year and peaks near 60%; high carry predicts future crashes, more negative skew and costlier crash insurance; a $1 rise in basis predicts ~$5 lower spot to maturity; +10% carry predicts +44% (of OI) more sell-side liquidations next month (Schmeling-Schrimpf-Todorov, BIS WP 1087, https://www.bis.org/publ/work1087.htm)
+- evidence: BTC/ETH futures carry averages > 10% a year and peaks near 60%; high carry predicts future crashes, more negative skew and costlier crash insurance; a $1 rise in basis predicts ~$5 lower spot to maturity; +10% carry predicts +44% (of OI) more sell-side liquidations next month (Schmeling-Schrimpf-Todorov, BIS WP 1087, https://www.bis.org/publ/work1087.htm). **REFUTED on Binance perps 2020-07 to 2026-08 (own study, docs/REGIME_STUDIES.md, task #12):** with BTC/ETH carry in its top quintile, the alt basket short over 7 days did 4.4% WORSE than other days (Newey-West t -3.1, same sign in 4 of 5 years), 30-day alt crashes (basket <= -25%) were LESS frequent (12.5% vs 24.0%, t -1.9), and top-gainer fades showed no regime effect (|t| < 1.3). High carry is trend-on here, not crash risk; see high_funding_trend_confirm
 - grade: Working-paper
-- risks: carry stays high for months in bull runs (see high_funding_trend_confirm); monthly horizon; Ethena-scale capital may cap future extremes
-- fit: High — free, daily, and a regime gate for both books
+- risks: carry stays high for months in bull runs; monthly horizon; Ethena-scale capital may cap future extremes
+- fit: Low — retired as stated (the opposite holds on our venue); the evidence moved to high_funding_trend_confirm
 
 ### high_funding_squeeze_veto — Rising coin funding: size down, don't exclude
 - direction: short
@@ -112,10 +112,10 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: rising carry predicts more short-side liquidations and higher volatility before any crash
 - rules: if a coin's funding or basis is top-decile AND rising over 24-72h, halve size or require a confirmed lower high, and widen stops
 - data needed: funding, OI, klines: Binance public
-- evidence: BIS WP 1087 (above); retail crypto traders chase momentum (Kogan et al. JFE 2024, https://doi.org/10.1016/j.jfineco.2024.103897)
-- grade: Working-paper
-- risks: may veto the best crash shorts, since high carry also predicts crashes; sizing tool only
-- fit: High — a free mechanical overlay on every short
+- evidence: BIS WP 1087 (above); retail crypto traders chase momentum (Kogan et al. JFE 2024, https://doi.org/10.1016/j.jfineco.2024.103897). Own study (task #13, 21k events, 2020-2026): a coin's funding >= 0.05% or 0.10% per 8h has NO short edge against same-class peers over the same window, in any class (majors, pumped alts, other alts), raw or after a breakdown, at 1/3/7 days: 36 cells, none 'avoid', best |t| 2.24 (chance level for 36 trials)
+- grade: Practitioner-data
+- risks: may veto the best crash shorts; the market-level effect is the aggregate-carry regime, not the coin's own funding
+- fit: Low — no coin-level evidence; keep coin funding as a flag (funding budget, tailwind), use the aggregate-carry rule in high_funding_trend_confirm for sizing
 
 ### liquidation_wick_harvest — Deep resting reduce-only take-profits to catch cascade wicks
 - direction: both

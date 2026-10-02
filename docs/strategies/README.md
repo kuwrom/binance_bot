@@ -20,7 +20,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 
 ## What the research says, in six lines
 1. **Factor sorts are a long tool.** Academic cross-sectional premia live in the long leg (CTREND low quintile t=0.16, post-2020 momentum loser quintile t=0.08). Absolute short alpha needs events, flows and crowding, which is what the desk already trades.
-2. **Carry didn't die, it moved.** Mainstream funding fell to ~2.8% ann. (mid-2026), and pro funding-arb books earn 6-8%. The yield now sits in perp-vs-perp dispersion (Liquibit ~10% gross) and TradFi perps (~12.6% funding). For us carry is a **signal**: a crash gate (BIS WP 1087) and a ranking of who pays.
+2. **Carry didn't die, it moved.** Mainstream funding fell to ~2.8% ann. (mid-2026), and pro funding-arb books earn 6-8%. The yield now sits in perp-vs-perp dispersion (Liquibit ~10% gross) and TradFi perps (~12.6% funding). For us carry is a **signal**. On Binance 2020-26 high aggregate carry meant trend-on, the opposite of the BIS crash claim: alt shorts did 4.4% worse over 7 days (t -3.1). A coin's own funding showed no edge either way ([../REGIME_STUDIES.md](../REGIME_STUDIES.md)).
 3. **The cleanest forced flow is forced selling, and pros buy it.** Selini's founder (13 years, self-reported) calls shorting alts his "big flaw for many years". The first long sleeve should buy capitulations and liquidation flushes.
 4. **Tail risk is venue risk.** On 10 Oct 2025:
    - auto-deleveraging (ADL) closed profitable shorts;
@@ -35,12 +35,12 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 ## Priority queue (evidence × fit)
 | # | card | side | why first |
 |---|---|---|---|
-| 1 | carry_crash_regime | gate | BIS evidence; free daily data; gates both books |
+| 1 | high_funding_trend_confirm | short sizing | **tested**: top-quintile aggregate carry = alt shorts -4.4%/7d (t -3.1); cut broad alt short size, never short on funding alone |
 | 2 | liquidation_wick_harvest | short exits | nearly free; monetises 10-Oct-type wicks |
-| 3 | high_funding_squeeze_veto / high_funding_trend_confirm | short sizing | stop fading majors on funding alone |
+| 3 | premium_index_reversion (long side) | long | **tested**: the only "promising" long (+0.03R vs placebo, t 2.6; stress < 0): shadow-log it |
 | 4 | airdrop_hodler_supply_short, lowfloat_highfdv_decay_short, supply_overhang_short | short | ~-70% listing cohort; tags for listing_fade |
 | 5 | tsmom_trend_following | gate / long core | peer-reviewed; "only short downtrends" veto |
-| 6 | long_liq_flush_reclaim_long, oversold_bounce_majors, capitulation_forced_selling_long | long | first long sleeve: mirrors of bounce_fade, data in hand |
+| 6 | long_liq_flush_reclaim_long, oversold_bounce_majors, capitulation_forced_selling_long | long | **tested, fail** in the 60-day window (no edge over same-hour placebos); retest on new data |
 | 7 | ctrend_technical_aggregate, carry_momo_breakout_blend | long / both | strongest long ranking signals |
 | 8 | hack_exploit_short | short | NY Fed: -27% 24h CAR |
 | 9 | premium_index_reversion, funding_interval_switch | both | same code path as premium_hi / squeeze_exhaustion |
@@ -57,7 +57,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 ## Index (generated: `python -m shortbot.library_seed`)
 | id | direction | family | grade | fit | file |
 |---|---|---|---|---|---|
-| carry_crash_regime | both | carry | Working-paper | High | short_and_overlays.md |
+| carry_crash_regime | both | carry | Working-paper | Low | short_and_overlays.md |
 | carry_momo_breakout_blend | both | cross-sectional | Practitioner-data | High | trend_factors.md |
 | cs_momentum_large_caps | both | cross-sectional | Peer-reviewed | Med | trend_factors.md |
 | daily_reversal_illiquid_momentum_liquid | both | cross-sectional | Peer-reviewed | High | trend_factors.md |
@@ -95,7 +95,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | monday_btc_effect | long | other | Peer-reviewed | Low | long_side.md |
 | breakout_20d_overlay | long | trend | Practitioner-data | Med | trend_factors.md |
 | ctrend_technical_aggregate | long | trend | Peer-reviewed | High | trend_factors.md |
-| high_funding_trend_confirm | long | trend | Single-source | Med | long_side.md |
+| high_funding_trend_confirm | long | trend | Practitioner-data | High | long_side.md |
 | oversold_bounce_majors | long | volatility | Anecdote | High | long_side.md |
 | coinm_usdm_funding_spread | neutral | carry | Single-source | Low | carry_neutral.md |
 | funding_cash_carry | neutral | carry | Practitioner-data | Med | carry_neutral.md |
@@ -115,7 +115,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | pairs_copula_cointegration | neutral | stat-arb | Working-paper | Med | carry_neutral.md |
 | perp_spot_basis_convergence | neutral | stat-arb | Working-paper | Med | carry_neutral.md |
 | short_vol_options | neutral | volatility | Single-source | Low | carry_neutral.md |
-| high_funding_squeeze_veto | short | carry | Working-paper | High | short_and_overlays.md |
+| high_funding_squeeze_veto | short | carry | Practitioner-data | Low | short_and_overlays.md |
 | max_lottery_short | short | cross-sectional | Peer-reviewed | High | trend_factors.md |
 | airdrop_hodler_supply_short | short | event/supply | Practitioner-data | High | short_and_overlays.md |
 | eth_exchange_inflow_short | short | event/supply | Working-paper | Med | short_and_overlays.md |
