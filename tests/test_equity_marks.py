@@ -69,3 +69,24 @@ async def test_gather_falls_back_when_income_is_unreachable():
     j.set(em.KV_PEAK, "1200")
     r = await em.gather(T(), j, 1000.0, -3.0, -4.0)
     assert r["degraded"] and r["day_pnl"] == -3.0 and r["week_pnl"] == -4.0 and r["peak"] == 1200
+
+
+def test_overlapping_callers_count_each_transfer_once():
+    j = Journal(":memory:")
+    j.set(em.KV_PEAK, "1000")
+    j.set(em.KV_CURSOR, str(ms(T0)))
+    dep = [{"incomeType": "TRANSFER", "income": "100", "time": ms(at(1))}]
+    a = em.adjusted_peak(j, 1000.0, dep, ms(at(2)))         # caller A advances the cursor over the deposit
+    b = em.adjusted_peak(j, 1000.0, dep, ms(at(1, 30)))     # caller B started earlier: its window is behind
+    assert a == 1100 and b == 1100 and int(j.get(em.KV_CURSOR)) == ms(at(2)) - em.CURSOR_LAG_MS
+
+
+def test_a_late_reported_transfer_is_counted_on_the_next_pass():
+    j = Journal(":memory:")
+    j.set(em.KV_PEAK, "1000")
+    j.set(em.KV_CURSOR, str(ms(T0)))
+    now = ms(at(2))
+    late = [{"incomeType": "TRANSFER", "income": "-50", "time": now - 30_000}]   # inside the lag window
+    assert em.adjusted_peak(j, 900.0, late, now) == 1000                         # not counted yet
+    assert em.adjusted_peak(j, 900.0, late, now + 120_000) == 950                # counted once, next pass
+    assert em.adjusted_peak(j, 900.0, late, now + 240_000) == 950

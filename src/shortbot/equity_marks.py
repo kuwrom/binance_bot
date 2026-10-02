@@ -43,9 +43,11 @@ def _mark(journal, kind: str, key: str, equity: float, now_ms: int) -> dict[str,
     return m
 
 
-def transfers(rows: list[dict[str, Any]], since_ms: int) -> float:
+def transfers(rows: list[dict[str, Any]], since_ms: int, until_ms: int | None = None) -> float:
+    """Net TRANSFER income with since_ms <= time < until_ms (open-ended without until_ms)."""
     return sum(float(r.get("income") or 0) for r in rows
-               if r.get("incomeType") == "TRANSFER" and int(r.get("time") or 0) >= since_ms)
+               if r.get("incomeType") == "TRANSFER" and int(r.get("time") or 0) >= since_ms
+               and (until_ms is None or int(r.get("time") or 0) < until_ms))
 
 
 def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_day: float, old_week: float,
@@ -68,14 +70,32 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
         return {"day_pnl": old_day, "week_pnl": old_week, "late": {}, "degraded": True}
 
 
+CURSOR_LAG_MS = 60_000   # income can be reported a few seconds late: count transfers only up to now - lag
+
+
 def adjusted_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int | None = None) -> float:
-    """equity_peak shifted by transfers since the last call, never below current equity."""
+    """equity_peak shifted by transfers, never below current equity. Several processes call this (guardian lanes,
+    MCP, CLI), so the read-modify-write is one IMMEDIATE transaction and the cursor only moves forward: each
+    transfer in [cursor, now - lag) is counted exactly once by whichever caller advances the cursor over it."""
     now_ms = now_ms or int(time.time() * 1000)
-    cursor = int(journal.get(KV_CURSOR) or now_ms)
-    peak = float(journal.get(KV_PEAK) or 0.0) + transfers(transfer_rows, cursor)
-    peak = max(peak, equity)
-    journal.set(KV_PEAK, str(peak))
-    journal.set(KV_CURSOR, str(now_ms))
+    upto = now_ms - CURSOR_LAG_MS
+    db = journal.db
+    db.commit()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        row = db.execute("SELECT v FROM kv WHERE k=?", (KV_CURSOR,)).fetchone()
+        cursor = int(row[0]) if row else upto
+        row = db.execute("SELECT v FROM kv WHERE k=?", (KV_PEAK,)).fetchone()
+        peak = float(row[0]) if row else 0.0
+        if upto > cursor:
+            peak += transfers(transfer_rows, cursor, upto)
+        peak = max(peak, equity)
+        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (KV_PEAK, str(peak)))
+        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (KV_CURSOR, str(max(cursor, upto))))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return peak
 
 
