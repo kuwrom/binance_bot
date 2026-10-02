@@ -36,8 +36,8 @@ def kinds(t):
 
 def test_codes_stop_refusals_and_refs():
     assert clientid.code(err.one_close_position_stop()) == -4130 and clientid.code(err.unavailable("order", 1)) is None
-    for e in (err.one_close_position_stop(), err.switch_algo()):   # bare ExchangeError: unknown, unless a stop refusal
-        assert clientid.send_unknown(e) and not clientid.send_unknown(e, clientid.STOP_REFUSALS)
+    for e in (err.one_close_position_stop(), err.switch_algo()):   # bare ExchangeError, a code errors.py knows (#37):
+        assert not clientid.send_unknown(e) and not clientid.send_unknown(e, clientid.STOP_REFUSALS)   # definite
     assert not clientid.send_unknown(err.would_trigger(), clientid.STOP_REFUSALS)
     assert clientid.send_unknown(err.status_unknown(), clientid.STOP_REFUSALS)
     assert clientid.tag("1000PEPE/USDT:USDT") == "1000PEPE" and clientid.tag("币安人生/USDT:USDT") == ""

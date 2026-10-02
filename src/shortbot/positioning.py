@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from . import clientid, killswitch, stops, targets_sync
+from . import clientid, errors, killswitch, stops, targets_sync
 from . import indicators as ind
 from .audit import refusals
 from .exchange import to_symbol
@@ -185,13 +185,18 @@ class PositionOps:
         if cut > 0:
             await targets_sync.pull_safe(tr, symbol, "widen: before its size cut")   # #65: none fills with the cut
             try:
-                await tr._market_close(symbol, cut, whole=False)   # never re-sent blind (#9)
+                got = await tr._market_close(symbol, cut, whole=False)   # never re-sent blind (#9)
                 err = None
             except Exception as e:  # noqa: BLE001 - incl. clientid.Unknown: the position decides below
-                err = e
+                got, err = {}, e
+            if got.get("rejected"):   # -2022 on a flat position: a stop or target closed it before the cut
+                await stops.strip_flat(tr, symbol)   # the widened stop protects nothing now
+                tr.j.log_decision("widen_stop_failed", reason, symbol, snapshot={**snap, "cut": 0, "result": "flat"})
+                return {"ok": True, "closed": True, "size_cut": 0, "reason": "the position closed before the size cut "
+                        "(a stop or target filled first); the guardian's reconcile journals that exit"}
             try:
                 left = float((await tr.position(symbol) or {}).get("contracts") or 0)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - unread: a failed cut counts as not done (stop moved back below)
                 left = None if err else qty - cut
             if left is None or left > qty - cut + 1e-9:
                 back = await tr.move_stop(symbol, cur, f"widen undone: the size cut failed ({err})")
@@ -266,8 +271,8 @@ class PositionOps:
                 "trade_id": trade["id"], "add_qty": add_qty, "client_id": cid, "unknown": True, "new_stop": new_stop})
             await tr.alert("add_unknown", msg, symbol, True)
             return {"ok": False, "unknown": True, "client_id": cid, "error": msg}
-        except Exception as e:  # noqa: BLE001 - a definite refusal: nothing ran; the tightened stop stays
-            return {"ok": False, "error": f"add refused: {e}"}
+        except Exception as e:  # noqa: BLE001 - a definite refusal (_market_sell raises no other); tighter stop stays
+            return {"ok": False, "error": f"add refused: {errors.describe(e)}"}
         if o.get("filled") is not None and not float(o["filled"]):
             return {"ok": False, "error": f"add order {o.get('status')}: nothing filled"}
         add_qty = float(o.get("filled") or add_qty)   # what filled

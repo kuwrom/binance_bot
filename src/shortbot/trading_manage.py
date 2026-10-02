@@ -16,12 +16,13 @@ from decimal import ROUND_FLOOR, Decimal
 
 import ccxt.async_support as ccxt
 
-from . import clientid, close_intent, fill_quality, margin, reconcile, stops, targets_sync, tranches
+from . import clientid, close_intent, errors, fill_quality, margin, reconcile, stops, targets_sync, tranches
 from .audit import refusals
 from .exchange import to_symbol
 from .stops import is_bridge, is_protective_stop
 
 TRIG = {"trigger": True}
+FLAT_FIRST = "flat before the close landed (-2022): a stop or target closed it first, nothing of ours filled"
 
 
 def _whole(o: dict) -> bool:
@@ -86,8 +87,11 @@ class ManageFlow:
             else:   # the limits of "unknown" legs may still rest and fill: their pre-armed stops stay
                 own = tranches.own_entries(self.j, trade["id"]) if trade else []
                 await self._strip_stops(symbol, listed, own + legs.get("unfilled", []) + legs.get("filled", []))
-            res = await reconcile.finalize(self, trade, reason, lesson) if trade else {"note": "not in journal"}
-            return {"ok": True, "symbol": symbol, "closed_amount": amount, "exit": exit_px, "result": res}
+            gone = bool(order.get("rejected"))   # -2022 on a flat position (trading._flat_first): done, by the exchange
+            why = f"{reason} ({FLAT_FIRST})" if gone else reason
+            res = await reconcile.finalize(self, trade, why, lesson) if trade else {"note": "not in journal"}
+            return {"ok": True, "symbol": symbol, "closed_amount": 0.0 if gone else amount, "exit": exit_px,
+                    "result": res, **({"note": FLAT_FIRST} if gone else {})}
 
     async def _close_part(self, symbol: str, trade: dict | None, pos: dict, size: float, amount: float, reason: str,
                           lesson: str) -> dict:
@@ -102,6 +106,12 @@ class ManageFlow:
             self.j.log_decision("close_unknown", reason, symbol, snapshot={
                 "trade_id": trade and trade["id"], "amount": amount, "client_id": e.cid, "lesson": lesson})
             return {"ok": False, "unknown": True, "symbol": symbol, "client_id": e.cid, "error": msg}
+        if order.get("rejected"):   # -2022 on a flat position: over; reconcile journals the exchange's exit
+            self.j.log_decision("close_flat", reason, symbol, snapshot={
+                "trade_id": trade and trade["id"], "asked": amount, "why": order["rejected"], "lesson": lesson})
+            await stops.strip_flat(self, symbol)
+            return {"ok": True, "flat": True, "symbol": symbol, "closed_amount": 0.0, "remaining": 0.0,
+                    "note": f"{FLAT_FIRST}; the guardian's reconcile journals that exit within a minute"}
         fill_quality.record(self, trade and trade["id"], "exit", "market", order)
         exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
         if order.get("filled") is None:   # flat meanwhile, or an answer without it: the position says what is left
@@ -185,9 +195,12 @@ class ManageFlow:
                 raise ValueError("no journal stop for this position")
             await self._place_stop(symbol, stop, tries=3)
             return f"closePosition stop placed at {stop:g}"
-        except Exception as e:  # noqa: BLE001
-            if "-4130" in str(e):
+        except Exception as e:  # noqa: BLE001 - StopExists: covered; flat: done; anything else is a NAKED alert
+            kind = errors.classify(e)
+            if kind is errors.StopExists:   # -4130: one rests (the listing above couldn't say)
                 return "closePosition stop already in place"
+            if kind is errors.ReduceOnlyRejected and await self.flat_now(symbol):   # -4509
+                return "flat before its stop landed: nothing left to cover"
             await self.alert("NAKED_POSITION", f"{qty:g} left after a full close and placing a closePosition stop at "
                              f"{stop or 'n/a'} failed ({e}). Pre-armed stops: {sorted(trig) or 'none'}. Set a stop "
                              "or close it NOW.", symbol, True)
@@ -264,6 +277,8 @@ class ManageFlow:
                 await self._close_past(symbol, pos, jt, f"guardian: unprotected and past stop {stop}")
                 return {"symbol": symbol, "action": "closed", "mark": mark, "stop": stop}
             res = await stops.set_stop(self, symbol, stop, _f(pos["contracts"]))
+            if res.get("flat"):
+                return None   # closed before its stop landed (-4509): nothing left to protect
             if res.get("closed"):
                 return {"symbol": symbol, "action": "closed", "mark": mark, "stop": stop, "why": res.get("reason")}
             if not res.get("ok"):

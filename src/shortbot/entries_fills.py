@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import fill_quality, reconcile
+from .entries_cancel import drop_prearm
 from .episodes import qty as _qty
 from .episodes import vwap as _vwap
 from .episodes import walk   # the one flat-to-flat walk: reconcile matches journal trades with it too
@@ -276,8 +277,5 @@ async def _drop_prearm(desk, e: dict[str, Any], exit_orders: list[str]) -> bool:
         a = {}
     if a.get("status") in (None, "open"):
         async with desk.tr.symbol_lock(sym, f"entry #{e['id']}: drop the pre-arm of a round trip"):
-            try:
-                await t.cancel_order(e["prearm_id"], sym, params={"trigger": True})
-            except Exception:  # noqa: BLE001 - best effort, as in withdraw
-                pass
+            await drop_prearm(t, sym, e["prearm_id"], desk.tr.alert, f"entry #{e['id']} filled and closed again")
     return str((a.get("info") or {}).get("actualOrderId") or "") in exit_orders

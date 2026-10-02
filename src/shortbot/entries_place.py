@@ -9,13 +9,16 @@ The TTL is capped at MAX_TTL_H: a resting order must not outlive the read it was
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from . import clientid, killswitch, warmup
+import ccxt.async_support as ccxt
+
+from . import clientid, errors, killswitch, warmup
 from .audit import refusals
 from .entry_gates import market_pause, stamps
 from .entry_intents import HINTS, ON_BOOK, SendUnknown
@@ -24,6 +27,7 @@ from .plans import build_plan, validate_plan
 from .setups import resolve
 from .steps import floor_amount, too_small
 
+log = logging.getLogger("shortbot.entries")
 MIN_TTL_S = 660
 MAX_TTL_H = 24.0
 
@@ -81,26 +85,27 @@ class EntryPlacement:
             except SendUnknown as e:   # may rest on the book: resolved by its client id, never by resending
                 unknown.append({"symbol": p.get("symbol"), "entry_id": e.entry_id, "error": str(e),
                                 "hint": HINTS["unknown"]})
-            except Exception as e:  # noqa: BLE001 - one bad proposal must not block the others
-                rejected.append({"symbol": p.get("symbol"), "error": f"{type(e).__name__}: {e}"})
+            except Exception as e:  # noqa: BLE001 - one bad proposal must not block the others; each one is reported
+                why = errors.describe(e) if isinstance(e, ccxt.BaseError) else f"{type(e).__name__}: {e}"
+                rejected.append({"symbol": p.get("symbol"), "error": why})
         if placed or unknown:   # bookkeeping: a failure here must not hide what rests on the book
             try:
                 self.j.log_decision("propose_entries", f"group {gid}: {len(placed)} limit shorts", None, snapshot={
                     "group": gid, "placed": placed, "rejected": rejected, "unknown": unknown, "regime": regime})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - returned as a warning: what rests on the book must still be shown
                 warnings.append(f"decision not journalled: {type(e).__name__}: {e}")
             try:
                 await tr.alert("action_propose", f"group {gid}: " + ", ".join(
                     [f"{x['symbol'].split('/')[0]} sell {x['limit_price']} stop {x['stop_price']}" for x in placed]
                     + [f"{x['symbol']} entry #{x['entry_id']} send status UNKNOWN" for x in unknown]), None, False)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - returned as a warning: the caller shows it to the human
                 warnings.append(f"alert not sent: {type(e).__name__}: {e}")
             for x in placed:   # each research exception reaches the human (#11)
                 if o := x.get("overrides"):
                     try:
                         await tr.alert("veto_override", f"entry #{x['entry_id']} (group {gid}): {o['veto_override']!r}"
                                        f" overrode {o['vetoes_overridden']}", x["symbol"], False)
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:  # noqa: BLE001 - returned as a warning; the override is journalled
                         warnings.append(f"override alert not sent: {type(e).__name__}: {e}")
         return {"ok": bool(placed), "group_id": gid, "placed": placed, "rejected": rejected, "unknown": unknown,
                 **({"warnings": warnings} if warnings else {})}
@@ -152,12 +157,12 @@ class EntryPlacement:
         rate = iv = None   # shorts paying funding (negative / 1h interval): half size; each lookup on its own
         try:
             rate = (await tr.ex.public.fetch_funding_rate(sym)).get("fundingRate")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - unread: sized without the funding cut (funding_mult: None is neutral)
             pass
         try:
             ivs = await tr.ex.funding_intervals() if hasattr(tr.ex, "funding_intervals") else {}
             iv = (ivs.get(sym.split("/")[0] + "USDT") or {}).get("interval_h")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - unread: the rate alone decides the funding cut
             pass
         fm = funding_mult(rate, iv)
         size_mult = min(size_mult, fm)
@@ -229,9 +234,8 @@ class EntryPlacement:
                 order = await tr.t.create_order(sym, "limit", "sell", amount, px, {
                     "timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
             except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
-                unsure = clientid.send_unknown(e)
-                self._settle(eid, "placing", status="unknown" if unsure else "rejected",
-                             reason=f"{type(e).__name__}: {e}")
+                unsure = errors.classify(e).unknown
+                self._settle(eid, "placing", status="unknown" if unsure else "rejected", reason=errors.describe(e))
                 if unsure:
                     raise SendUnknown(eid, e) from e
                 raise
@@ -270,8 +274,9 @@ class EntryPlacement:
             o = await t.create_order(sym, "STOP_MARKET", "buy", amount, None, {
                 "triggerPrice": float(t.price_to_precision(sym, stop)), "reduceOnly": True,
                 "workingType": "MARK_PRICE", "clientOrderId": cid})
-        except Exception as e:  # noqa: BLE001
-            refused = not clientid.send_unknown(e)
+        except Exception as e:  # noqa: BLE001 - refused: nothing rests; unknown: entry_intents finds it by its id
+            refused = not errors.classify(e).unknown
+            log.warning("pre-arm of entry #%s %s: %s", eid, "refused" if refused else "unknown", errors.describe(e))
         try:
             if o is not None:
                 self._update(eid, prearm_id=o.get("id"))

@@ -109,6 +109,25 @@ class Engine(ReduceOnly):
     def _algo_sym(self, i: str) -> str:
         return self.algo.get(i, {}).get("symbol", SYM)   # a stop a test planted directly sits on SYM
 
+    async def fapiPrivateGetOpenAlgoOrders(self, req=None):
+        """Raw GET /fapi/v1/openAlgoOrders (Current-All-Algo-Open-Orders doc: every symbol without `symbol`, weight 40).
+        Fields as the official SDK's model (binance-connector-python, derivatives_trading_usds_futures
+        current_all_algo_open_orders_response_inner.py): algoId an int, numbers as strings. Binance's own client id for
+        an order sent without one is undocumented."""
+        rows = []
+        for i in [*self.stops, *self.prearms]:
+            a, close = self.algo.get(i, {}), i in self.stops
+            if (req or {}).get("symbol") in (None, raw(self._algo_sym(i))):
+                rows.append({"algoId": int(i), "clientAlgoId": a.get("cid") or f"autogen{i}", "algoType": "CONDITIONAL",
+                             "orderType": "STOP_MARKET", "symbol": raw(self._algo_sym(i)), "side": "BUY",
+                             "positionSide": "BOTH", "timeInForce": "GTC", "quantity": str(a.get("qty") or 0),
+                             "algoStatus": a.get("status", "NEW"), "actualOrderId": "", "actualPrice": "0",
+                             "triggerPrice": str(self.stops.get(i, self.prearms.get(i))), "price": "0",
+                             "workingType": "MARK_PRICE", "priceMatch": "NONE", "closePosition": close,
+                             "priceProtect": False, "reduceOnly": True, "createTime": a.get("ts", 0),
+                             "updateTime": a.get("ts", 0), "triggerTime": 0, "goodTillDate": 0})
+        return rows
+
     def _retire(self, i: str, status: str) -> None:
         """A conditional order leaves the open list; its meta stays queryable (GET /fapi/v1/algoOrder)."""
         close = i in self.stops

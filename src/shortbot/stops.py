@@ -25,7 +25,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid
+from . import clientid, errors
 
 TRIG = {"trigger": True}
 STOP_TYPES = {"stop_market", "stop"}
@@ -33,8 +33,8 @@ BRIDGE = f"{clientid.PREFIX}-{clientid.KINDS['bridge']}"   # client id prefix of
 SETTLE_S = 20.0   # an interrupted swap gets this long to end with a closePosition stop
 
 
-def is_clock_drift(e: BaseException) -> bool:
-    return isinstance(e, ccxt.InvalidNonce) or "-1021" in str(e)
+def is_clock_drift(e: BaseException) -> bool:   # -1021 (errors.ClockDrift): resync the clock
+    return errors.classify(e) is errors.ClockDrift
 
 
 def is_protective_stop(o: dict) -> bool:
@@ -61,8 +61,8 @@ def trigger_of(o: dict) -> float:
         return 0.0
 
 
-def would_trigger(e: BaseException) -> bool:   # -2021: the stop would trigger at once (price is already past it)
-    return isinstance(e, ccxt.OrderImmediatelyFillable) or clientid.code(e) == -2021
+def would_trigger(e: BaseException) -> bool:   # -2021 / -4142: the stop would trigger at once (price is past it)
+    return errors.classify(e) is errors.WouldTrigger
 
 
 async def listed(tr, symbol: str) -> tuple[list[dict], list[dict]]:
@@ -78,11 +78,12 @@ async def _cancel(tr, symbol: str, ids) -> set[str]:
     for i in ids:
         try:
             await tr.t.cancel_order(i, symbol, params=TRIG)
-        except ccxt.OrderNotFound:
-            pass
-        except Exception as e:  # noqa: BLE001 - the listing decides what still rests
+        except Exception as e:  # noqa: BLE001 - Gone is done; anything else: the listing decides what still rests
+            kind = errors.classify(e)
+            if kind is errors.Gone:   # -2011: triggered or cancelled already
+                continue
             doubt.add(str(i))
-            if is_clock_drift(e):
+            if kind is errors.ClockDrift:
                 await tr.ex.resync_time()
     return doubt
 
@@ -99,10 +100,11 @@ async def _bridge(tr, symbol: str, stop: float, contracts: float) -> dict:
         if o.get("status") in (None, "open"):
             return o
         raise ccxt.InvalidOrder(f"bridge stop {cid} answered {o.get('status')}")
-    except Exception as e:  # noqa: BLE001 - classified below
-        if not clientid.send_unknown(e, clientid.STOP_REFUSALS):
+    except Exception as e:  # noqa: BLE001 - classified: a definite refusal raises as is, else found by its id
+        kind = errors.classify(e)
+        if not kind.unknown:
             raise
-        if is_clock_drift(e):
+        if kind is errors.ClockDrift:
             await tr.ex.resync_time()
         await _sleep(1)
         if found := await tr._find_stop(symbol, cid):
@@ -135,9 +137,12 @@ async def _first(tr, symbol: str, stop: float) -> dict[str, Any]:
     closePosition stop listed rests already (-4130, with or without its code)."""
     try:
         placed = await tr._place_stop(symbol, stop, tries=3)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - classified; anything not settled here is re-raised
         if would_trigger(e):
             return await _crossed(tr, symbol, stop, set())
+        if errors.classify(e) is errors.ReduceOnlyRejected and await tr.flat_now(symbol):   # -4509: flat first
+            await strip_flat(tr, symbol)
+            return {"ok": True, "closed": True, "flat": True, "reason": "the position closed before its stop landed"}
         close, _ = await listed(tr, symbol)
         if not close:
             raise
@@ -168,7 +173,7 @@ async def _swap(tr, symbol: str, ids: set[str], cur: float, new_stop: float, con
                 return await _crossed(tr, symbol, new_stop, ids)
             try:
                 close, _ = await listed(tr, symbol)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - unlisted: no second round; _settle restores and alerts what rests
                 break
             if not any(str(o["id"]) in ids for o in close):
                 break
@@ -202,7 +207,7 @@ async def _settle(tr, symbol: str, levels: list[float], stale: set[str], placed:
         try:
             close, got = [await tr._place_stop(symbol, px, tries=2)], "restored"
             break
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - the next level is tried; none left: _naked alerts with this why
             why = f"{e}"
     if not (close or placed):
         return await _naked(tr, symbol, bridges, why, contracts)
@@ -247,19 +252,24 @@ async def _crossed(tr, symbol: str, stop: float, stale: set[str]) -> dict[str, A
     pos = await tr.position(symbol)
     if pos:
         await tr._market_close(symbol, float(pos["contracts"]))
-    await _strip(tr, symbol)
+    await strip_flat(tr, symbol)
     await tr.alert("stop_hit_on_move", f"price crossed {stop} during the move; closed", symbol, True)
     return {"ok": True, "closed": True, "reason": "price crossed the new stop while moving it"}
 
 
-async def _strip(tr, symbol: str) -> None:
+async def strip_flat(tr, symbol: str) -> None:
     """Flat: a closePosition stop or bridge left now would block (-4130) or cut the next short on the symbol. Resting
-    entries' pre-arms stay: their limits may still fill."""
+    entries' pre-arms stay: their limits may still fill. One that can't be listed or cancelled is told (the orphan
+    sweep, orphans.py, cancels a bridge on a flat symbol; replace_stale swaps a stale closePosition stop)."""
     try:
         close, bridges = await listed(tr, symbol)
-        await _cancel(tr, symbol, [o["id"] for o in close + bridges])
-    except Exception:  # noqa: BLE001 - best effort; a later stop change or close sweeps again
-        pass
+        doubt = await _cancel(tr, symbol, [o["id"] for o in close + bridges])
+    except Exception as e:  # noqa: BLE001 - the change itself is done; told below
+        doubt = {f"unlisted ({errors.describe(e)})"}
+    if doubt:
+        await tr.alert("stop_left", f"flat, but stop(s) {sorted(doubt)} may still rest: a bridge would cut the next "
+                       "short on the symbol. The orphan sweep cancels bridges within minutes; check Binance.", symbol,
+                       False)
 
 
 async def _after(tr, symbol: str, res: dict[str, Any], stale: set[str]) -> dict[str, Any]:
@@ -269,7 +279,7 @@ async def _after(tr, symbol: str, res: dict[str, Any], stale: set[str]) -> dict[
     except Exception as e:  # noqa: BLE001 - the change itself is done
         return {**res, "warnings": [*res.get("warnings", []), f"position not re-read after the stop change ({e})"]}
     if pos is None:
-        await _strip(tr, symbol)
+        await strip_flat(tr, symbol)
         return {"ok": True, "closed": True, "reason": "the position closed during the stop change (a stop triggered)"}
     if (pos.get("side") or "short") != "short":
         msg = (f"position is {pos.get('side')} {pos.get('contracts')} after a stop change: a short-only desk. Close it "
@@ -284,7 +294,8 @@ async def replace_stale(tr, symbol: str, stop: float, contracts: float, e: Excep
     closePosition stop listed now is stale, left by an earlier position, and a second is refused (-4130; the listing
     decides, not the code). It is swapped, make before break, to this entry's stop: one retry. Re-raises `e` when the
     refusal wasn't that, or the swap failed (the caller closes the position)."""
-    if clientid.send_unknown(e, clientid.STOP_REFUSALS) or would_trigger(e):
+    kind = errors.classify(e)
+    if kind.unknown or kind is errors.WouldTrigger:
         raise e
     close, _ = await listed(tr, symbol)
     if not close:

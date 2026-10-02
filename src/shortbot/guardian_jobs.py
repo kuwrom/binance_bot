@@ -181,7 +181,7 @@ class MarketJobs:
         for sym in {t["symbol"] for t in movers} | held:
             try:
                 oi[sym] = (await self.ex.public.fetch_open_interest(sym)).get("openInterestAmount")
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - research metrics: a coin without OI is recorded without it
                 pass
         self.j.record_metrics([(ts, s, t.get("last"), rates.get(s, {}).get("fundingRate"), oi.get(s),
                                 t.get("quoteVolume")) for s, t in tickers.items() if s in perps])

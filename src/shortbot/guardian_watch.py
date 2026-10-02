@@ -47,13 +47,13 @@ class WatchChecks:
             for name, check in (("squeeze/funding", self._squeeze_and_funding), ("news", self._news)):
                 try:   # each on its own: a dead feed never hides a squeeze
                     await check(sym)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001 - collected: _watch_result alerts a streak of them
                     log.error("watch %s %s failed: %s", name, sym, e, exc_info=not isinstance(e, WatchInputError))
                     errors.append(f"{name}: {type(e).__name__}: {e}")
             try:
                 if why := await self.adl_check(p, *adl):
                     errors.append(why)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - collected: _watch_result alerts a streak of them
                 log.exception("watch adl %s failed", sym)
                 errors.append(f"adl: {type(e).__name__}: {e}")
             await self._watch_result(sym, errors)

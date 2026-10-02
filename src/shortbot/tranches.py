@@ -78,7 +78,7 @@ async def cancel_legs(trader, trade_id: int, reason: str) -> dict[str, list[dict
     got: dict[str, list[dict[str, Any]]] = {"unfilled": [], "filled": [], "unknown": []}
     for e in own_legs(trader.j, trade_id):
         async with trader.symbol_lock(e["symbol"], f"trade #{trade_id} closed: withdraw its legs"):
-            got[await withdraw(trader.t, e)].append(e)
+            got[await withdraw(trader.t, e, trader.alert)].append(e)
     for e in got["unfilled"]:   # written after the awaits, one commit each: no write transaction spans an exchange call
         trader.j.db.execute("UPDATE entries SET status='cancelled', reason=? WHERE id=? AND status='pending'",
                             (reason, e["id"]))

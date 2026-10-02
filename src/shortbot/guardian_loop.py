@@ -41,7 +41,7 @@ async def send_safe(n, kind: str, message: str, symbol: str | None = None, **kw:
     """Alerting must never take down the loop that is reporting a failure (a locked DB, a Telegram outage)."""
     try:
         await n.send(kind, message, symbol, **kw)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - the alert path itself failed: logged, the loop goes on
         log.exception("alert %s could not be sent", kind)
 
 
@@ -139,7 +139,7 @@ class Lane:
             if job.every_s >= PERSIST_EVERY_S:   # successes only: a restart retries a failed daily job
                 try:
                     self.j.set(KV_LAST_RUN + job.name, str(self.last[job.name]))
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 - logged; a restart only runs the job early
                     log.exception("could not store the last run of %s", job.name)
 
     async def _failed(self, job: Job, e: Exception) -> None:
@@ -150,7 +150,7 @@ class Lane:
             log.warning("clock drift (-1021) in %s: resyncing time", job.name)
             try:
                 await self.ex.resync_time()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - logged; the streak below still escalates a job that keeps failing
                 log.exception("time resync failed")
         else:
             log.error("%s failed: %s", job.name, why, exc_info=not isinstance(e, TimeoutError))

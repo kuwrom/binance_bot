@@ -38,9 +38,9 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 from . import entries_fills as fills
-from . import targets_sync
+from . import errors, targets_sync
 from .entries_amend import EntryAmend
-from .entries_cancel import CANCEL_FAILS_ALERT, DEAD, EntryCancel, withdraw  # noqa: F401 (withdraw re-export)
+from .entries_cancel import CANCEL_FAILS_ALERT, DEAD, EntryCancel, drop_prearm, withdraw  # noqa: F401 (re-export)
 from .entries_place import MIN_TTL_S, EntryPlacement  # noqa: F401 (MIN_TTL_S re-export)
 from .entry_gates import STAMPED
 from .entry_intents import HINTS, ON_BOOK, resolve
@@ -86,6 +86,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         self._poll_fails: dict[int, int] = {}     # entry id -> polls failed in a row
         self._rt_tries: dict[int, int] = {}       # entry id -> polls a round trip waited for trade history
         self._swept_at = 0.0               # entry_intents: last all-symbol open-orders sweep
+        self._orphans_at = 0.0             # orphans: last all-symbol conditional-orders sweep
         self._flagged: set[tuple] = set()  # entry_intents: alerted once (unmatched pre-arms, late orders)
 
     async def _regime(self) -> str:
@@ -195,10 +196,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         keeps any order with a fill for 90 days (Query-Order doc), so it expired unfilled. Its pre-armed stop goes."""
         if e.get("prearm_id"):
             async with self.tr.symbol_lock(e["symbol"], f"entry #{e['id']}: drop a forgotten entry's pre-arm"):
-                try:
-                    await self.tr.t.cancel_order(e["prearm_id"], e["symbol"], params={"trigger": True})
-                except Exception:  # noqa: BLE001 - best effort, as in withdraw
-                    pass
+                await drop_prearm(self.tr.t, e["symbol"], e["prearm_id"], self.tr.alert,
+                                  f"entry #{e['id']} expired unfilled")
         why = "order forgotten by Binance (-2013) past its GTD: it expired unfilled"
         return {"entry_id": e["id"], "event": "expired", "why": why} if self._settle(
             e["id"], "pending", status="expired", reason=why) else None
@@ -251,7 +250,12 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             e = now[0]
             rest = await withdraw(tr.t, {**e, "prearm_id": None}) if o.get("status") == "open" else "filled"
             pos = await tr._verified_position(sym)
-            cps = await self._protect(e) if pos else []
+            try:
+                cps = await self._protect(e) if pos else []
+            except fills.StopNotPlaced as x:   # -4509 on a flat position: closed again before its stop landed
+                if errors.classify(x.__cause__ or x) is not errors.ReduceOnlyRejected or not await tr.flat_now(sym):
+                    raise
+                pos, cps = None, []   # the round trip below journals it
             if rest != "unknown":
                 self._cancel_fails.pop(e["id"], None)
                 await fills.plan_stop(self, e, cps)
@@ -274,13 +278,10 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         if not cps:
             try:
                 await tr._place_stop(sym, e["stop_price"], tries=3)
-            except Exception as x:  # noqa: BLE001
+            except Exception as x:  # noqa: BLE001 - re-raised typed: the poll alerts at once, the pre-arm stays
                 raise fills.StopNotPlaced(e, x) from x
-        if e["prearm_id"]:
-            try:
-                await tr.t.cancel_order(e["prearm_id"], sym, params={"trigger": True})
-            except Exception:  # noqa: BLE001
-                pass
+        if e["prearm_id"]:   # the whole-position stop rests: the pre-arm goes (one left behind: drop_prearm tells)
+            await drop_prearm(tr.t, sym, e["prearm_id"], tr.alert, f"entry #{e['id']} filled, its stop is on")
         return cps
 
     async def _rest_unknown(self, e: dict) -> dict[str, Any]:

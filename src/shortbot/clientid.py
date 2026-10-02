@@ -11,7 +11,7 @@ Binance USDⓈ-M (developers.binance.com, checked 2026-10-01):
 ccxt 4.5.84: params['clientOrderId'] -> newClientOrderId, or clientAlgoId for a linear-swap trigger order (without it
 ccxt sends its own 'x-xcKtGhcu' + uuid22); fetch_order / cancel_order map it to origClientOrderId, or with
 params['trigger'] to clientAlgoId (GET/DELETE /fapi/v1/algoOrder). A code missing from ccxt's maps raises a bare
-ExchangeError('binanceusdm ' + body) (binance.py handle_errors), e.g. -4130 and -4120.
+ExchangeError('binanceusdm ' + body) (binance.py handle_errors), e.g. -4130 and -4120: errors.py classifies by the code.
 """
 
 from __future__ import annotations
@@ -22,24 +22,28 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
+from . import errors
+
 PREFIX = "sb"
 KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "add": "a",   # one letter each in the id
          "bridge": "b",   # stops.py: the reduce-only stop that covers a stop swap
          "target": "t",   # targets.py: a plan target resting as a reduce-only limit, ref = the trade id
          "probe": "x"}    # probes.py: a demo exchange-behaviour probe's order (#55), never the desk's
+code = errors.code   # the Binance code in a ccxt error (moved to errors.py; kept here for its callers)
 VALID = re.compile(r"^[\.A-Z\:/a-z0-9_-]{1,36}$")
-# definite refusals of a closePosition stop that ccxt raises as a bare ExchangeError (or may): one already rests on the
-# side (-4130), wrong endpoint (-4120), it would trigger at once (-2021). Nothing was placed: no lookup needed.
+# definite refusals of a closePosition stop, some raised by ccxt as a bare ExchangeError: one already rests on the side
+# (-4130), wrong endpoint (-4120), it would trigger at once (-2021). errors.py's table holds them for every request now;
+# kept for callers that name them.
 STOP_REFUSALS = (-4130, -4120, -2021)
 
 
-class Unknown(Exception):
+class Unknown(errors.OutcomeUnknown):
     """An order's outcome stays unknown after looking it up by its client id: it may have run, or still run. Never
     re-send it blind; re-read the position first."""
 
     def __init__(self, cid: str, cause: BaseException):
-        super().__init__(f"send status unknown, {cid} not found ({type(cause).__name__}: {cause})")
-        self.cid, self.cause = cid, cause
+        super().__init__(cause, f"send status unknown, {cid} not found ({type(cause).__name__}: {cause})")
+        self.cid = cid
 
 
 def new(kind: str, ref: int | str) -> str:
@@ -57,24 +61,16 @@ def tag(symbol: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", symbol.split("/")[0])[:12]
 
 
-def code(e: BaseException) -> int | None:
-    """The Binance error code in a ccxt error ('binanceusdm {"code":-4130,...}'), if the answer carried one."""
-    m = re.search(r'"code"\s*:\s*(-?\d+)', str(e))
-    return int(m.group(1)) if m else None
-
-
 def ours(cid: Any) -> bool:
     return str(cid or "").startswith(PREFIX + "-")
 
 
 def send_unknown(e: BaseException, refusals: tuple[int, ...] = ()) -> bool:
-    """True when an order request may have executed although it raised: timeouts, transport errors, HTTP 5xx,
-    -1000/-1006/-1007, a -1021 answered after the order executed (seen on cancels, ONDO #5), an error code ccxt doesn't
-    map. False for a definite refusal: an ExchangeError subclass (price filter, min notional, margin...) or a code in
-    `refusals` (e.g. STOP_REFUSALS)."""
-    if refusals and code(e) in refusals:
-        return False
-    return not (isinstance(e, ccxt.ExchangeError) and type(e) is not ccxt.ExchangeError)
+    """True when an order request may have executed although it raised (errors.py `unknown`): timeouts, transport
+    errors, HTTP 5xx and 429, -1000/-1006/-1007, a -1021 answered after the order executed (seen on cancels, ONDO #5),
+    an error code ccxt doesn't map. False for a definite refusal: a code or ccxt class errors.py knows as one (price
+    filter, min notional, margin, -4130...), or a code in `refusals`."""
+    return errors.classify(e, refusals).unknown
 
 
 async def lookup(t, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:

@@ -26,11 +26,11 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, equity_marks, reconcile, targets
+from . import clientid, equity_marks, errors, reconcile, targets
 from .exchange import Exchanges, to_raw, to_symbol
 from .journal import Journal
 from .risk import AccountState
-from .stops import STOP_TYPES, is_clock_drift, is_protective_stop  # noqa: F401 (re-export)
+from .stops import STOP_TYPES, is_protective_stop  # noqa: F401 (re-export)
 from .symlock import SymbolLocks, lock_dir_for
 from .trading_manage import ManageFlow
 from .trading_open import OpenFlow
@@ -249,9 +249,9 @@ class Trader(OpenFlow, ManageFlow):
 
     async def _place_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict:
         """ONE closePosition stop at stop_price, under one client id (clientAlgoId) for all its sends. Returns the stop as
-        acked, or as found by that id after an ambiguous answer (timeout, 5xx, -1007, -1021). A definite refusal raises
-        at once (any ExchangeError subclass, and clientid.STOP_REFUSALS: -4130 a closePosition stop already rests,
-        -2021 it would trigger now, -4120). Re-sending after looking is safe: the id is unique among open orders and a
+        acked, or as found by that id after an ambiguous answer (errors.py `unknown`: timeout, 5xx, 429, -1007,
+        -1021). A definite refusal raises at once (StopExists -4130: a closePosition stop already rests; WouldTrigger
+        -2021; Refused -4120; Precision...). Re-sending after looking is safe: the id is unique among open orders and a
         side holds one closePosition stop, so a re-send of a stop that landed meanwhile is refused, and that refusal is
         resolved by the id again. Raises the last error when the id was never found (it may still land)."""
         px = float(self.t.price_to_precision(symbol, stop_price))
@@ -261,9 +261,10 @@ class Trader(OpenFlow, ManageFlow):
             try:
                 return await self.t.create_order(symbol, "STOP_MARKET", "buy", None, None,
                                                  {**STOP_PARAMS, "triggerPrice": px, "clientOrderId": cid})
-            except Exception as e:  # noqa: BLE001 - classified below
-                unknown = clientid.send_unknown(e, clientid.STOP_REFUSALS)
-                if is_clock_drift(e):
+            except Exception as e:  # noqa: BLE001 - classified: a definite refusal raises, else found by its id
+                kind = errors.classify(e)
+                unknown = kind.unknown
+                if kind is errors.ClockDrift:
                     await self.ex.resync_time()
                 if unknown:
                     await _sleep(1)
@@ -291,10 +292,12 @@ class Trader(OpenFlow, ManageFlow):
 
     async def _market_close(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> dict:
         """Reduce-only market BUY of `amount`, each send under its own client id. A definite refusal is retried (nothing
-        ran). An ambiguous answer is settled, never blindly re-sent: the order found by its id is the answer; a flat
-        position leaves nothing to buy back ({"flat": True, "filled": None}); otherwise only a `whole` close (amount =
-        the position the caller saw) is sent again, as reduce-only can't buy back more than the position. A partial
-        close (whole=False) is never re-sent while in doubt: clientid.Unknown once its tries are spent."""
+        ran), except ReduceOnlyRejected (-2022) on a flat position: the close is done ({"flat": True, "filled": 0.0,
+        "rejected": why}: a stop or target closed it first; after a send of unknown outcome, the flat answer below). An
+        ambiguous answer is settled, never blindly re-sent: the order found by its id is the answer; a flat position
+        leaves nothing to buy back ({"flat": True, "filled": None}); otherwise only a `whole` close (amount = the
+        position the caller saw) is sent again, as reduce-only can't buy back more than the position. A partial close
+        (whole=False) is never re-sent while in doubt: clientid.Unknown once its tries are spent."""
         doubt: list[str] = []
         last: Exception | None = None
         for i in range(tries):
@@ -304,11 +307,13 @@ class Trader(OpenFlow, ManageFlow):
                     return await self.t.create_order(symbol, "market", "buy", amount, None,
                                                      {"reduceOnly": True, "clientOrderId": cid})
                 except Exception as e:  # noqa: BLE001 - this is the last line of defence: classified, then retried
-                    last = e
-                    if is_clock_drift(e):
+                    last, kind = e, errors.classify(e)
+                    if kind is errors.ClockDrift:
                         await self.ex.resync_time()
-                    if clientid.send_unknown(e):
+                    if kind.unknown:
                         doubt.append(cid)
+                    elif kind is errors.ReduceOnlyRejected and (flat := await self._flat_first(symbol, cid, e, doubt)):
+                        return flat
             await _sleep(2 ** i)
             if doubt and (got := await self._close_outcome(symbol, doubt)) is not None:
                 return got
@@ -316,6 +321,25 @@ class Trader(OpenFlow, ManageFlow):
             raise clientid.Unknown(doubt[-1], last or RuntimeError("no answer"))
         unsure = f" (outcome unknown: {', '.join(doubt)})" if doubt else ""
         raise RuntimeError(f"market close failed after {tries} tries{unsure}: {last}")
+
+    async def flat_now(self, symbol: str) -> bool:
+        """After errors.ReduceOnlyRejected (-2022, -4509): True only when the position reads flat now."""
+        try:
+            return await self.position(symbol) is None
+        except Exception:  # noqa: BLE001 - unreadable counts as not flat: the caller's refusal stands
+            return False
+
+    async def _flat_first(self, symbol: str, cid: str, e: Exception, doubt: list[str]) -> dict | None:
+        """-2022: the reduce-only close would reduce nothing. Flat now: closed before it landed, so done: by a stop or a
+        target ("rejected": nothing of ours filled), or by an earlier send of ours whose answer was lost (`doubt`: the
+        unknown-outcome flat answer). Not flat, or unreadable: None, the refusal stands."""
+        if not await self.flat_now(symbol):
+            return None
+        if doubt:
+            return {"id": None, "clientOrderId": doubt[-1], "flat": True, "status": None, "filled": None,
+                    "average": None}
+        return {"id": None, "clientOrderId": cid, "flat": True, "status": "rejected", "filled": 0.0, "average": None,
+                "rejected": errors.describe(e)}
 
     async def _close_outcome(self, symbol: str, doubt: list[str]) -> dict | None:
         """Settle close sends of unknown outcome: the newest one found with a fill; one found dead and unfilled leaves
@@ -344,10 +368,11 @@ class Trader(OpenFlow, ManageFlow):
         is, or clientid.Unknown when `cid` stays unsettled: it may still fill, so it is never re-sent."""
         try:
             return await self.t.create_order(symbol, "market", "sell", amount, None, {"clientOrderId": cid})
-        except Exception as e:  # noqa: BLE001 - classified below
-            if not clientid.send_unknown(e):
+        except Exception as e:  # noqa: BLE001 - classified: a definite refusal raises as is, else looked up by its id
+            kind = errors.classify(e)
+            if not kind.unknown:
                 raise
-            if is_clock_drift(e):
+            if kind is errors.ClockDrift:
                 await self.ex.resync_time()
             for i in range(lookups):
                 await _sleep(1 + i)

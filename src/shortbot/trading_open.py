@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-from . import clientid, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
+from . import clientid, errors, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
 from .audit import refusals
 from .entry_intents import ON_BOOK
 from .exchange import to_symbol
@@ -188,9 +188,10 @@ class OpenFlow:
             if not held:
                 return await self._entry_unknown(tid, cid, symbol, e)
             order = {}
-        except Exception as e:  # noqa: BLE001 - a definite refusal: nothing ran
-            self.j.abort_trade(tid, f"entry order refused: {e}")
-            return {"ok": False, "error": f"entry order refused, no position: {e}"}
+        except Exception as e:  # noqa: BLE001 - a definite refusal (_market_sell raises no other): nothing ran
+            why = errors.describe(e)   # InsufficientMargin, MarketClosed, Precision...: what to change
+            self.j.abort_trade(tid, f"entry order refused: {why}")
+            return {"ok": False, "error": f"entry order refused, no position: {why}"}
         if not _f(order.get("filled")) and order.get("status") in DEAD:
             self.j.abort_trade(tid, f"entry order {order['status']}, unfilled")
             return {"ok": False, "error": f"entry order {order['status']} unfilled; no position"}
@@ -260,7 +261,7 @@ class OpenFlow:
                 if p := await self.position(symbol):
                     return p, None
                 err = None
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - returned to the caller, which alerts what it can't read
                 err = e
             await _sleep(0.5)
         return None, err

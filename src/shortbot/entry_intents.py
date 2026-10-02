@@ -31,9 +31,10 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, targets
+from . import clientid, errors, orphans, targets
 from .exchange import to_symbol
 from .journal import now_iso
+from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.entries")
 GRACE_S = 90            # > the longest a send can take (ccxt timeout 20 s, recvWindow 10 s): not found = never placed
@@ -58,11 +59,11 @@ def external_orders(j) -> list[dict[str, Any]]:
     return [{k: r[k] for k in ("symbol", "amount", "limit_price")} for r in rows if (r.get("mode") or "demo") == j.mode]
 
 
-class SendUnknown(Exception):
+class SendUnknown(errors.OutcomeUnknown):
     """The order may or may not rest on the book; its row stays 'unknown' until reconcile() resolves it."""
 
     def __init__(self, entry_id: int, cause: BaseException):
-        super().__init__(f"send status unknown ({type(cause).__name__}: {cause})")
+        super().__init__(cause, f"send status unknown ({type(cause).__name__}: {cause})")
         self.entry_id = entry_id
 
 
@@ -92,22 +93,32 @@ async def located(t, e: dict[str, Any]) -> dict[str, Any] | str:
 
 
 async def reconcile(desk) -> list[dict[str, Any]]:
-    """Resolve every limit-entry send whose outcome the journal doesn't know. One failure never blocks the rest."""
+    """Resolve every limit-entry send whose outcome the journal doesn't know, then the pre-arm, open-order and orphan
+    sweeps. One failure never blocks the rest (_carry_on)."""
     events: list[dict[str, Any]] = []
     for r in desk._rows("status IN ('placing','unknown') AND client_id IS NOT NULL"):
         try:
             ev = await resolve(desk, r)
-        except Exception as e:  # noqa: BLE001 - stays unresolved; retried next tick
-            log.warning("entry #%s unresolved: %s: %s", r["id"], type(e).__name__, e)
+        except Exception as e:  # noqa: BLE001 - stays unresolved; retried next tick (reported unless transient)
+            await _carry_on(desk, f"entry #{r['id']} unresolved", "entry_intents.resolve", e, r["symbol"])
             continue
         if ev:
             events.append(ev)
-    for step in (_resolve_prearms, _sweep):
+    for step in (_resolve_prearms, _sweep, orphans.sweep):
         try:
             events += await step(desk)
-        except Exception as e:  # noqa: BLE001
-            log.warning("%s failed: %s: %s", step.__name__, type(e).__name__, e)
+        except Exception as e:  # noqa: BLE001 - retried next tick (reported unless transient)
+            await _carry_on(desk, f"{step.__name__} failed", f"entry_intents.{step.__name__}", e)
     return events
+
+
+async def _carry_on(desk, what: str, where: str, e: BaseException, symbol: str | None = None) -> None:
+    """A failure the next tick retries: a transient one (errors.py; a busy symbol lock) is logged, anything else is
+    reported to a human as well (errors.report: once an hour per site and type)."""
+    if isinstance(e, SymbolBusy) or errors.transient(e):
+        log.warning("%s: %s", what, errors.describe(e))
+    else:
+        await errors.report(desk.tr.alert, where, e, symbol)
 
 
 async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
@@ -137,7 +148,7 @@ async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
     if r["abandon"] and not filled:
         from .entries import withdraw
         async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: withdraw an abandoned intent"):
-            got = await withdraw(t, {**r, "order_id": o["id"]})
+            got = await withdraw(t, {**r, "order_id": o["id"]}, desk.tr.alert)
         if got == "unknown":
             return None   # the cancel failed: look again next tick
         if got == "unfilled":
@@ -182,8 +193,11 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
                 try:
                     async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a dead entry's pre-arm"):
                         await t.cancel_order(o["id"], sym, params={"trigger": True})
-                except Exception:  # noqa: BLE001 - retried next tick
-                    continue
+                except Exception as e:  # noqa: BLE001 - Gone: off the book already; else retried next tick
+                    if errors.classify(e) is not errors.Gone:
+                        await _carry_on(desk, f"pre-arm of dead entry #{r['id']} not cancelled",
+                                        "entry_intents._resolve_prearms", e, sym)
+                        continue
             desk._update(r["id"], prearm_id=o["id"])
             events.append({"entry_id": r["id"], "event": "prearm_resolved", "cancelled": r["status"] != "pending"})
     return events
@@ -212,8 +226,8 @@ async def _sweep(desk) -> list[dict[str, Any]]:
                 events.append(await _external(desk, o, oid, cid, sym))
             elif r["status"] not in ("pending", "placing", "unknown", "external"):
                 events.append(await _late(desk, r, o, oid, cid, sym))
-        except Exception as e:  # noqa: BLE001 - next order; the next sweep retries
-            log.warning("sweep %s %s: %s: %s", sym, oid, type(e).__name__, e)
+        except Exception as e:  # noqa: BLE001 - next order; the next sweep retries (reported unless transient)
+            await _carry_on(desk, f"sweep {sym} {oid}", "entry_intents._sweep", e, sym)
     return [e for e in events if e]
 
 
@@ -229,7 +243,8 @@ async def _externals_left(desk, rows: list[dict], resting: set[str]) -> None:
             except ccxt.OrderNotFound:   # Query Order forgets only unfilled CANCELED/EXPIRED orders (after ~3 days)
                 o = {"filled": 0, "status": "forgotten by Binance: unfilled"}
             except Exception as e:  # noqa: BLE001 - stays 'external' (counted): the next sweep asks again
-                log.warning("external order %s: %s: %s", r["order_id"], type(e).__name__, e)
+                await _carry_on(desk, f"external order {r['order_id']}", "entry_intents._externals_left", e,
+                                r["symbol"])
                 continue
             st = "external_filled" if float(o.get("filled") or 0) > 0 else "external_gone"
             desk._settle(r["id"], "external", status=st, reason=f"{r['reason']}; left the book ({o.get('status')})")
@@ -275,7 +290,7 @@ async def _late(desk, r: dict, o: dict, oid: str, cid: str | None, sym: str) -> 
         return None
     from .entries import withdraw
     async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a late order"):   # cancel first; a fill is kept
-        got = await withdraw(desk.tr.t, {**r, "order_id": oid})
+        got = await withdraw(desk.tr.t, {**r, "order_id": oid}, desk.tr.alert)
     if got == "unknown":
         return None   # the next sweep retries
     if got == "filled" and r["status"] != "filled":

@@ -137,7 +137,7 @@ class PositionChecks:
         if is_clock_drift(e):
             try:
                 await self.ex.resync_time()   # the lane-level resync never sees errors swallowed here
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - logged; the failure itself is alerted just below
                 log.exception("time resync failed")
         log.exception("position %s failed", sym)
         await send_safe(self.n, "position_check_error", f"{type(e).__name__}: {e}", sym, cooldown_s=1800)
@@ -226,8 +226,8 @@ class PositionChecks:
                 async with tr.symbol_lock(sym, "guardian: forced close (no stop)"):
                     pos = await tr.position(sym)   # still due? another process may have protected or closed it
                     covered = bool(pos) and bool(await tr.stop_orders(sym, close_position_only=True))
-                    if pos and not covered:
-                        await tr._market_close(sym, float(pos["contracts"]))
+                    if pos and not covered and (await tr._market_close(sym, float(pos["contracts"]))).get("rejected"):
+                        pos = None   # -2022: flat before the close landed (closed elsewhere first)
                 self.stop_fails.pop(sym, None)
                 await self.n.send("forced_close", f"Could not restore a stop {n}x ({e}); " + (
                     "a stop is in place now (set elsewhere): NOT closed." if covered else "position CLOSED." if pos

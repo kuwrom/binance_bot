@@ -9,7 +9,8 @@
   3 days ago (-2013); `fill_limit` / `trigger_stop` force one
 - rejections: reduce-only without a position (-2022), tick size (-4014), min notional (-4164), margin (-2019),
   GTD under 10 min (-5040), a client id that an OPEN order already uses (-4116)
-- fault injection: answers lost after the order ran (-1007 / 503), 503 before it ran, -1021 around cancels
+- fault injection: answers lost after the order ran (-1007 / 503), 503 before it ran, -1021 around cancels, any
+  refusal before it ran (`refuse`: 429, -1111, -4141...)
 - `fake.prod` is the separate keyless prod client (`ex.public`): its prices can diverge from the demo book
 - fills and income (REALIZED_PNL / COMMISSION) so PnL reconciliation can be tested; userTrades in 7-day windows (fake_engine)
 - positions, margin type, Multi-Assets mode, ADL quantile and Binance's own closes (fake_account.py)"""
@@ -61,6 +62,7 @@ class FakeCcxt(Account, Engine):
         self.ack_lost_503 = 0       # orders that EXECUTE, then answer 503 "Unknown error" (status unknown)
         self.unavailable_503 = 0    # orders refused with 503 "Service Unavailable." (nothing ran)
         self.ack_lost_unsent = 0    # orders that answer -1007 and did NOT run: "unknown" cuts both ways
+        self.refuse: list[Exception] = []   # next orders refused with these (fake_errors builders): nothing runs
         self.multi_assets, self.adl_answer, self.force_orders, self.countdowns = False, None, [], {}   # fake_account.py
         self.prod = ProdView(self)
         self.add_symbol(SYM, price)
@@ -180,6 +182,8 @@ class FakeCcxt(Account, Engine):
         if self.ack_lost_unsent:
             self.ack_lost_unsent -= 1
             raise err.status_unknown()
+        if self.refuse:
+            raise self.refuse.pop(0)
         cid = params.get("clientAlgoId") or params.get("newClientOrderId") or params.get("clientOrderId")
         if cid and self._open_cid(cid):   # New-Order doc: unique among OPEN orders only (a filled one is reusable)
             raise err.duplicate_client_id()

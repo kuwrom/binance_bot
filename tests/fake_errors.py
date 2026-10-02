@@ -124,3 +124,42 @@ def no_api_key():   # ccxt check_required_credentials() on the keyless prod clie
 
 def invalid_symbol():   # -1121 BAD_SYMBOL (common map -> BadSymbol, ccxt binance.py ~2702): not listed on the account
     return ccxt.BadSymbol(_body(-1121, "Invalid symbol."))
+
+
+# ---- #37 typed errors: the codes the order path tells apart (errors.py); classes checked against ccxt 4.5.84's own
+# handle_errors by tests/test_errors.py
+def rate_limited():   # -1003 TOO_MANY_REQUESTS (common map -> RateLimitExceeded)
+    return ccxt.RateLimitExceeded(_body(-1003, "Too many requests; current limit is 2400 requests per minute. Please "
+                                               "use the websocket for live updates to avoid polling the API."))
+
+
+def too_many_requests():
+    # HTTP 429 (general-info doc: "breaking a request rate limit"; its body is -1003, fake_http.py). ccxt binance.py
+    # handle_errors raises DDoSProtection(id + ' ' + status + ' ' + reason + ' ' + body) before reading the code
+    return ccxt.DDoSProtection('binanceusdm 429 Too Many Requests {"code":-1003,"msg":"Too many requests; current '
+                               'limit is 2400 requests per minute."}')
+
+
+def bad_precision():   # -1111 BAD_PRECISION (common map -> BadRequest)
+    return ccxt.BadRequest(_body(-1111, "Precision is over the maximum defined for this asset."))
+
+
+def symbol_closed():   # -4141 SYMBOL_ALREADY_CLOSED (linear map -> OperationRejected): delisted or settled
+    return ccxt.OperationRejected(_body(-4141, "Symbol is closed."))
+
+
+def reduce_only_mode():   # -4400 TRADING_QUANTITATIVE_RULE (linear map -> PermissionDenied): only reduce-only orders
+    return ccxt.PermissionDenied(_body(-4400, "Futures Trading Quantitative Rules violated, only reduceOnly order "
+                                              "is allowed, please try again later."))
+
+
+def unmapped(code: int = -4999, msg: str = "Not in ccxt's maps."):   # handle_errors' last line: a bare ExchangeError
+    return ccxt.ExchangeError(_body(code, msg))
+
+
+def close_position_flat():
+    # -4509 (not in ccxt's maps -> ExchangeError): a closePosition STOP_MARKET placed while flat. Not on the error-code
+    # page; seen on demo by probe #6 (countdown_cancel_all, probe_result 2026-10-02, #55). The fake itself still places
+    # one while flat (a follow-up task aligns it)
+    return ccxt.ExchangeError(_body(-4509, "Time in Force (TIF) GTE can only be used with open positions. Please "
+                                           "ensure that positions are available."))

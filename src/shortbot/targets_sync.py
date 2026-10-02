@@ -27,7 +27,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, targets
+from . import clientid, errors, targets
 from .steps import floor_amount
 from .stops import is_clock_drift
 from .symlock import SymbolBusy
@@ -160,14 +160,15 @@ async def _place(tr, symbol: str, trade: dict, w: dict) -> None:
     try:
         o = await tr.t.create_order(symbol, "limit", "buy", w["qty"], w["price"],
                                     {"reduceOnly": True, "timeInForce": "GTC", "clientOrderId": cid})
-    except Exception as e:  # noqa: BLE001 - classified below
-        if not clientid.send_unknown(e):
-            targets.move(tr.j, row, "rejected", f"refused: {e}")
-            await tr.alert("target_rejected", f"target {w['target']:g} ({w['qty']:g} @ {w['price']:g}) refused: {e}. "
-                           "Not retried at this size for an hour; the guardian's market fallback covers it",
-                           symbol, False)
+    except Exception as e:  # noqa: BLE001 - classified: refused is journalled and told, unknown found by its id
+        kind = errors.classify(e)
+        if not kind.unknown:
+            targets.move(tr.j, row, "rejected", f"refused: {errors.describe(e)}")
+            await tr.alert("target_rejected", f"target {w['target']:g} ({w['qty']:g} @ {w['price']:g}) refused: "
+                           f"{errors.describe(e)}. Not retried at this size for an hour; the guardian's market "
+                           "fallback covers it", symbol, False)
             return
-        if is_clock_drift(e):
+        if kind is errors.ClockDrift:
             await tr.ex.resync_time()
         try:
             o = await clientid.lookup(tr.t, symbol, cid)
@@ -242,8 +243,11 @@ async def clear_stale(tr, symbol: str, keep: int | None = None) -> int:
             for o, r in stale:
                 await _cancel(tr, symbol, o, r, "re-entry guard: a new short on the symbol")
             return len(stale)
-    except Exception as e:  # noqa: BLE001
-        log.warning("re-entry guard on %s: %s: %s", symbol, type(e).__name__, e)
+    except Exception as e:  # noqa: BLE001 - never raises (the guardian sweeps every pass); reported unless transient
+        if isinstance(e, SymbolBusy) or errors.transient(e):
+            log.warning("re-entry guard on %s: %s", symbol, errors.describe(e))
+        else:
+            await errors.report(tr.alert, "targets_sync.clear_stale", e, symbol)
         return 0
 
 
