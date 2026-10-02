@@ -118,7 +118,8 @@ class OpenFlow:
                         "hint": "or pass budget_override='<research reason>' to risk more as a logged exception"}
                 over_budget = {"risk_at_stop_usdt": round(notional * dist, 2), "budget_risk_usd": budget["risk_usd"],
                                "multipliers": budget.get("multipliers"), "reasons": budget.get("reasons")}
-            req = ShortRequest(symbol, notional, price, stop_price, leverage, _f(prod_ticker.get("quoteVolume")))
+            req = ShortRequest(symbol, notional, price, stop_price, leverage, _f(prod_ticker.get("quoteVolume")),
+                               maint=await self.ex.maint_margin(symbol, notional))   # the symbol's leverage bracket
             try:
                 check_open_short(req, acct, lim)
             except RiskViolation as e:

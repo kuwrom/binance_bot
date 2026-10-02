@@ -19,6 +19,7 @@ class ShortRequest:
     stop_price: float
     leverage: int
     quote_volume_24h: float
+    maint: tuple[float, float] | None = None   # the symbol's bracket (maint. rate, amount): Exchanges.maint_margin
 
 
 @dataclass(frozen=True)
@@ -50,17 +51,40 @@ class RiskViolation(Exception):
         super().__init__("; ".join(reasons))
 
 
-# Conservative maintenance-margin assumption for the liquidation estimate (Binance tiers start ~0.4-1%).
-ASSUMED_MAINT_MARGIN_PCT = 1.0
+# Maintenance margin rate assumed when the symbol's leverage bracket is unknown (no keys, the read failed). A first
+# bracket's rate is about half the initial margin at its max leverage (BTC 125x 0.4%, ETH 75x 0.65%, 50x 1%): 2.5%
+# covers any symbol that allows 20x; the old 1% only those that allow 50x.
+FALLBACK_MAINT_MARGIN_PCT = 2.5
 
 
 def stop_distance_pct(entry: float, stop: float) -> float:
     return (stop - entry) / entry * 100
 
 
-def est_liquidation_distance_pct(leverage: int) -> float:
-    """Approx. % move against an isolated short before liquidation: 1/leverage minus maintenance margin."""
-    return 100.0 / leverage - ASSUMED_MAINT_MARGIN_PCT
+def bracket_for(brackets: list[dict], notional: float) -> tuple[float, float]:
+    """(maintenance margin rate, maintenance amount `cum`) of the leverage bracket holding this notional: the last one
+    whose notionalFloor <= notional (GET /fapi/v1/leverageBracket rows; ccxt parse_position_risk picks the same)."""
+    rows = sorted(brackets, key=lambda b: float(b["notionalFloor"]))
+    pick = next((b for b in reversed(rows) if notional >= float(b["notionalFloor"])), rows[0])
+    return float(pick["maintMarginRatio"]), float(pick.get("cum") or 0)
+
+
+def liquidation_price(side: int, qty: float, entry: float, wallet: float, mmr: float, cum: float = 0.0,
+                      other_mm: float = 0.0, other_upnl: float = 0.0) -> float:
+    """Binance's one-way-mode liquidation price (FAQ "How to Calculate Liquidation Price of USDⓈ-M Futures
+    Contracts"): LP = (WB - TMM1 + UPNL1 + cumB - Side*Q*EP) / (Q*MMR - Side*Q). side 1 long, -1 short; isolated:
+    wallet = the isolated margin and other_mm = other_upnl = 0."""
+    return (wallet - other_mm + other_upnl + cum - side * qty * entry) / (qty * mmr - side * qty)
+
+
+def est_liquidation_distance_pct(leverage: int, maint: tuple[float, float] | None = None,
+                                 notional: float = 0.0) -> float:
+    """% move against an isolated short opened at `leverage` (isolated margin = notional / leverage) before Binance
+    liquidates it, at its bracket's (maintenance rate, amount) when known, else at FALLBACK_MAINT_MARGIN_PCT:
+    (1 + 1/L + cum/N) / (1 + MMR) - 1."""
+    mmr, cum = maint or (FALLBACK_MAINT_MARGIN_PCT / 100, 0.0)
+    n = notional if notional > 0 else 1.0
+    return (liquidation_price(-1, n, 1.0, n / leverage, mmr, cum if notional > 0 else 0.0) - 1) * 100
 
 
 def max_notional_for_risk(equity: float, entry: float, stop: float, limits: RiskLimits) -> float:
@@ -105,7 +129,7 @@ def check_open_short(req: ShortRequest, acct: AccountState, limits: RiskLimits) 
     if not 1 <= req.leverage <= limits.max_leverage:
         reasons.append(f"leverage {req.leverage} outside [1, {limits.max_leverage}]")
     elif dist > 0:
-        liq = est_liquidation_distance_pct(req.leverage)
+        liq = est_liquidation_distance_pct(req.leverage, req.maint, req.notional)
         if dist > liq - limits.liq_buffer_pct:
             reasons.append(
                 f"at {req.leverage}x liquidation is ~{liq:.1f}% away, but the stop is {dist:.1f}% away: you "

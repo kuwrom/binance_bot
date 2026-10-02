@@ -155,6 +155,8 @@ class PositionChecks:
                           f"position ({p['contracts']}) in {sym} on a short-only desk", {"symbol": sym},
                           cause="long_position"), self.n)
             return
+        if p.get("error"):   # its stops couldn't be read (Trader.positions): a failed check of this symbol only
+            raise RuntimeError(p["error"])
         close, bridges = await stops.listed(self.app.trader, sym)   # a pre-arm or bridge covers a fixed size only
         if p["UNPROTECTED"] or not close or bridges:
             await self._restore_stop(sym)

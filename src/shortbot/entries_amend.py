@@ -72,8 +72,9 @@ class EntryAmend:
                 "re-propose to re-size at the new level"]}, seen
         acct = await tr.account_state()
         qv = float((await tr.ex.public.fetch_ticker(sym)).get("quoteVolume") or 0)
+        maint = await tr.ex.maint_margin(sym, e["amount"] * px)   # the symbol's leverage bracket
         try:
-            check_open_short(ShortRequest(sym, e["amount"] * px, px, e["stop_price"], int(e["leverage"]), qv),
+            check_open_short(ShortRequest(sym, e["amount"] * px, px, e["stop_price"], int(e["leverage"]), qv, maint),
                              AccountState(acct.equity, (), 0.0, acct.day_pnl), tr.ex.limits)
         except RiskViolation as x:
             return {"ok": False, "rejected_by_risk": x.reasons}, seen

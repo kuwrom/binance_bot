@@ -37,8 +37,9 @@ def _on_tick(px: float, tick: float) -> bool:
 class FakeCcxt(Engine):
     def __init__(self, price=1.0, equity=10_000.0, hedged=False):
         self.equity, self.hedged = equity, hedged
-        self.sym: dict[str, dict] = {}
-        self.markets: dict[str, dict] = {}
+        self.sym: dict[str, dict] = {}        # the exchange's listing
+        self.markets: dict[str, dict] = {}    # the client's loaded markets (load_markets, fake_engine.py)
+        self.market_loads, self.brackets = 0, {}   # brackets: per-symbol leverage brackets (default BRACKETS)
         self.stops: dict[str, float] = {}     # open closePosition stops: id -> trigger
         self.prearms: dict[str, float] = {}   # open reduce-only stops placed before a position exists
         self.algo: dict[str, dict] = {}       # every conditional order: symbol, qty, trigger, client id, algoStatus
@@ -63,13 +64,15 @@ class FakeCcxt(Engine):
 
     def add_symbol(self, s, price, tick=0.0001, step=0.1, min_notional=5.0, quote_volume=100e6):
         """A perp on the demo account. ccxt TICK_SIZE precision: prices round to `tick`, amounts truncate to `step`;
-        `min_notional` is the MIN_NOTIONAL filter. lev 20 is a fake default (the real one varies by symbol)."""
+        `min_notional` is the MIN_NOTIONAL filter. lev 20 is a fake default (the real one varies by symbol). Listed
+        after the client's first load_markets, the client knows it only after a reload."""
         self.sym[s] = {"price": price, "qty": 0.0, "entry": 0.0, "lev": 20, "tick": tick, "step": step,
                        "min": min_notional, "qv": quote_volume}
-        self.markets[s] = {"active": True}
+        if not self.market_loads:
+            self.markets[s] = {"active": True}
 
     def _spec(self, s) -> dict:
-        if s not in self.sym:   # ccxt market(): unknown symbol
+        if s not in self.sym or s not in self.markets:   # ccxt market(): a symbol the client hasn't loaded
             raise ccxt.BadSymbol(f"binanceusdm does not have market symbol {s}")
         return self.sym[s]
 
@@ -96,9 +99,12 @@ class FakeCcxt(Engine):
                          "availableBalance": str(round(self.available(), 8))}}
 
     async def fetch_positions(self):
-        return [{"symbol": s, "contracts": b["qty"], "side": "short", "entryPrice": b["entry"],
-                 "markPrice": b["price"], "notional": -b["qty"] * b["price"], "leverage": b["lev"],
-                 "unrealizedPnl": (b["entry"] - b["price"]) * b["qty"], "liquidationPrice": b["entry"] * 1.45}
+        """ccxt 4.5.84 reads GET /fapi/v3/positionRisk (no `leverage`: v3 drops the configuration fields, change
+        log), so `leverage` is None; a market the client hasn't loaded comes keyed by its raw id (safe_market)."""
+        return [{"symbol": s if s in self.markets else raw(s), "contracts": b["qty"], "side": "short",
+                 "entryPrice": b["entry"], "markPrice": b["price"], "notional": -b["qty"] * b["price"],
+                 "leverage": None, "unrealizedPnl": (b["entry"] - b["price"]) * b["qty"],
+                 "liquidationPrice": self.liq_price(s)}
                 for s, b in self.sym.items() if b["qty"]]
 
     async def fetch_position_mode(self, symbol=None):
@@ -163,6 +169,7 @@ class FakeCcxt(Engine):
 
     # --- orders
     async def fetch_open_orders(self, s, params=None):
+        self._spec(s)   # ccxt binance.py fetch_open_orders: self.market(symbol)
         if _trigger(params):   # GET /fapi/v1/openAlgoOrders
             return [self._algo_view(i) for i in [*self.stops, *self.prearms] if self._algo_sym(i) == s]
         return [self._order_view(i) for i, o in self.limits.items() if o["symbol"] == s and o["status"] == "open"]
@@ -369,7 +376,10 @@ class FakeEx:
     async def markets(self):
         return {}
 
-    async def trade_markets(self):
+    async def trade_markets(self, symbol=None):
+        return None
+
+    async def maint_margin(self, symbol, notional):
         return None
 
     async def resync_time(self):

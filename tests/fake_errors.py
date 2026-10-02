@@ -106,3 +106,7 @@ def unavailable(path: str, executed: bool):
 
 def no_api_key():   # ccxt check_required_credentials() on the keyless prod client
     return ccxt.AuthenticationError('binanceusdm requires "apiKey" credential')
+
+
+def invalid_symbol():   # -1121 BAD_SYMBOL (common map -> BadSymbol, ccxt binance.py ~2702): not listed on the account
+    return ccxt.BadSymbol(_body(-1121, "Invalid symbol."))

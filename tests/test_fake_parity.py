@@ -288,3 +288,38 @@ async def test_margin_mode_answers_like_ccxt():
         fake.market("NOPE/USDT:USDT")
     with pytest.raises(ccxt.ExchangeError, match="-4120"):                  # a stop without a trigger price
         await fake.create_order(SYM, "STOP_MARKET", "buy", None, None, {"closePosition": True})
+
+
+async def test_markets_load_once_and_a_perp_listed_since_needs_a_reload():
+    fake, new = FakeCcxt(), "NEW/USDT:USDT"
+    await fake.load_markets()
+    fake.add_symbol(new, 2.0)
+    fake.sym[new].update(qty=10.0, entry=2.0)    # a position opened on it (by another, fresher client)
+    await fake.load_markets()                    # no reload: ccxt returns the snapshot
+    with pytest.raises(ccxt.BadSymbol):
+        fake.price_to_precision(new, 2.2)
+    with pytest.raises(ccxt.BadSymbol):
+        await fake.fetch_open_orders(new, params=TRIG)
+    assert [p["symbol"] for p in await fake.fetch_positions()] == ["NEWUSDT"]   # safe_market: the raw id
+    await fake.load_markets(reload=True)
+    assert [p["symbol"] for p in await fake.fetch_positions()] == [new] and fake.market_loads == 2
+    assert await fake.fetch_open_orders(new, params=TRIG) == []
+
+
+async def test_positions_carry_no_leverage_and_binance_isolated_liquidation_price():
+    fake = FakeCcxt(price=1.0)
+    await fake.set_leverage(10, SYM)
+    await short(fake)
+    p = (await fake.fetch_positions())[0]
+    assert p["leverage"] is None                                         # v3 positionRisk
+    assert p["liquidationPrice"] == pytest.approx(1.1 / 1.01)           # (N/10 + 0 + N) / (Q * 1.01)
+
+
+async def test_leverage_brackets_answer_like_the_doc():
+    fake = FakeCcxt()
+    rows = await fake.fapiPrivateGetLeverageBracket({"symbol": "PUMPUSDT"})
+    assert rows[0]["symbol"] == "PUMPUSDT" and rows[0]["brackets"][0]["maintMarginRatio"] == 0.01
+    with pytest.raises(ccxt.BadSymbol, match="-1121"):
+        await fake.fapiPrivateGetLeverageBracket({"symbol": "NOPEUSDT"})
+    with pytest.raises(ccxt.AuthenticationError):                      # signed: never on the keyless prod client
+        await fake.prod.fapiPrivateGetLeverageBracket({"symbol": "PUMPUSDT"})

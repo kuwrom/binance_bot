@@ -16,6 +16,14 @@ FORGET_MS = 3 * 86_400_000   # Query-Order: an unfilled CANCELED/EXPIRED order i
 # ccxt 4.5.84 parse_order_status() for algoStatus (Query-Algo-Order doc / ALGO_UPDATE statuses)
 ALGO_STATUS = {"NEW": "open", "TRIGGERING": "open", "TRIGGERED": "closed", "FINISHED": "closed",
                "CANCELED": "canceled", "REJECTED": "rejected", "EXPIRED": "expired"}
+# GET /fapi/v1/leverageBracket rows (Notional-and-Leverage-Brackets doc fields) of a 50x alt, as ccxt's own sample
+# (binance.py fetch_leverage_tiers: SUSHIUSDT 50x, 0.01); cum = floor x (rate - previous rate) + previous cum
+BRACKETS = ({"bracket": 1, "initialLeverage": 50, "notionalCap": 50_000, "notionalFloor": 0, "maintMarginRatio": 0.01,
+             "cum": 0.0},
+            {"bracket": 2, "initialLeverage": 25, "notionalCap": 250_000, "notionalFloor": 50_000,
+             "maintMarginRatio": 0.02, "cum": 500.0},
+            {"bracket": 3, "initialLeverage": 10, "notionalCap": 1_000_000, "notionalFloor": 250_000,
+             "maintMarginRatio": 0.05, "cum": 8000.0})
 
 
 def raw(symbol: str) -> str:
@@ -24,7 +32,8 @@ def raw(symbol: str) -> str:
 
 class Engine:
     """State set up by FakeCcxt.__init__: sym[s] = {price, qty, entry, lev, tick, step, min, qv}; limits; stops and
-    prearms (open conditional orders: id -> trigger); algo (every conditional order's meta); fills; income."""
+    prearms (open conditional orders: id -> trigger); algo (every conditional order's meta); fills; income; markets
+    (the client's loaded markets) and market_loads; brackets (per-symbol leverage brackets, default BRACKETS)."""
 
     # ------------------------------------------------------------ clock
     def now_ms(self) -> int:
@@ -164,6 +173,35 @@ class Engine:
     def _check_margin(self, s: str, notional: float) -> None:
         if notional / self.sym[s]["lev"] > self.available() + 1e-9:
             raise err.margin_insufficient()
+
+    def liq_price(self, s: str) -> float:
+        """The short's isolated liquidation price, Binance's one-way formula with TMM = UPNL = 0 (FAQ "How to Calculate
+        Liquidation Price of USDⓈ-M Futures Contracts"): (WB + cum + Q*EP) / (Q*MMR + Q), WB = the isolated margin
+        Q*EP/leverage (fees and added margin are not modelled), MMR and cum of the bracket holding the notional."""
+        b = self.sym[s]
+        n = b["qty"] * b["entry"]
+        row = [r for r in self.brackets.get(s, BRACKETS) if n >= r["notionalFloor"]][-1]
+        return (n / b["lev"] + row["cum"] + n) / (b["qty"] * (1 + row["maintMarginRatio"]))
+
+    # ------------------------------------------------------------ markets
+    async def load_markets(self, reload=False, params=None):
+        """ccxt 4.5.84 (async_support/base/exchange.py load_markets_helper): the first call loads exchangeInfo, later
+        ones return that snapshot unless reload=True. A perp listed since (`add_symbol`) stays unknown to the client
+        until then: market() raises BadSymbol and its position comes back under the raw id (safe_market)."""
+        if reload or not self.market_loads:
+            self.market_loads += 1
+            self.markets = {s: {"active": True} for s in self.sym}
+        return self.markets
+
+    async def fapiPrivateGetLeverageBracket(self, req=None):
+        """GET /fapi/v1/leverageBracket (Notional-and-Leverage-Brackets doc, weight 1): every symbol without `symbol`.
+        The doc's schema is an array or an object; this answers the array. A symbol not listed: -1121."""
+        s = (req or {}).get("symbol")
+        rows = [{"symbol": raw(k), "brackets": [dict(r) for r in self.brackets.get(k, BRACKETS)]}
+                for k in self.sym if s in (None, raw(k))]
+        if s and not rows:
+            raise err.invalid_symbol()
+        return rows
 
 
 class ProdView:

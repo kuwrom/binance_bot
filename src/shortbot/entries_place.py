@@ -166,7 +166,8 @@ class EntryPlacement:
             raise ValueError(f"size {amount * limit:.2f} below exchange minimum {min_cost}")
         lev = int(p.get("leverage") or 3)
         from .risk import est_liquidation_distance_pct
-        if dist * 100 > est_liquidation_distance_pct(lev) - lim.liq_buffer_pct:
+        maint = await tr.ex.maint_margin(sym, amount * limit)   # the symbol's leverage bracket
+        if dist * 100 > est_liquidation_distance_pct(lev, maint, amount * limit) - lim.liq_buffer_pct:
             raise ValueError(f"at {lev}x the stop ({dist * 100:.1f}%) sits beyond liquidation minus buffer")
         px = float(tr.t.price_to_precision(sym, limit))
         from .risk import ShortRequest, check_open_short
@@ -190,7 +191,8 @@ class EntryPlacement:
         acct = type(acct)(acct.equity, acct.open_symbols + tuple(s for s, _ in worst.values()),
                           acct.total_open_notional + sum(n for _, n in worst.values()), acct.day_pnl)
         prod = await tr.ex.public.fetch_ticker(sym)
-        check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0)), acct, lim)
+        check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0), maint),
+                         acct, lim)
         c1h = await tr.ex.public.fetch_ohlcv(sym, "1h", limit=30)   # every read comes BEFORE the intent: a failure
         from .indicators import atr                                   # up to here leaves nothing on the exchange
         a = atr(c1h) or 0.0

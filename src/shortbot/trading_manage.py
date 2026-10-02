@@ -38,7 +38,7 @@ class ManageFlow:
         if not 0 < fraction <= 1:
             return {"ok": False, "error": "fraction must be in (0, 1]"}
         async with self.symbol_lock(symbol, f"close {fraction:g}{' of original' if of_original else ''}: {reason}"):
-            await self.ex.trade_markets()
+            await self.ex.trade_markets(symbol)
             pos = await self.position(symbol)
             if not pos:
                 return {"ok": False, "error": f"no open position in {symbol}"}
@@ -180,7 +180,7 @@ class ManageFlow:
         from .trading import _f
         symbol = to_symbol(symbol)
         async with self.symbol_lock(symbol, f"move stop to {new_stop:g}: {reason}"):
-            await self.ex.trade_markets()
+            await self.ex.trade_markets(symbol)
             pos = await self.position(symbol)
             if not pos:
                 return {"ok": False, "error": f"no open position in {symbol}"}
@@ -210,10 +210,13 @@ class ManageFlow:
 
     async def ensure_stop(self, symbol: str, fallback_pct: float) -> dict | None:
         """Guardian safety net: restore a missing closePosition stop (journal stop, else entry+fallback%), or close the
-        position if price is already beyond the intended stop. Pre-armed stops and bridges don't count (they cover a
-        fixed size); a bridge left by a dead swap goes once a closePosition stop rests (stops.set_stop)."""
+        position if price is already beyond the intended stop. Either sits inside the position's real liquidation price
+        minus liq_buffer_pct (a stop past it never fires: at 10x a short is liquidated ~9% up); a capped plan stop is an
+        urgent alert. Pre-armed stops and bridges don't count (they cover a fixed size); a bridge left by a dead swap
+        goes once a closePosition stop rests (stops.set_stop)."""
         from .trading import _f, _sleep
         async with self.symbol_lock(symbol, "guardian: restore a missing stop"):
+            await self.ex.trade_markets(symbol)   # a perp listed since start is known before anything is sent on it
             close, bridges = await stops.listed(self, symbol)
             if close:
                 if not bridges:
@@ -226,8 +229,16 @@ class ManageFlow:
             # an 'opening' row is protected too: under this lock no entry of this host is in flight (open_short holds
             # it until its stop rests), so the row is a crashed entry or one of unknown outcome that filled late (#9)
             jt = self.j.active_trade(symbol) or {}
-            mark = _f(pos.get("markPrice"))
-            stop = _f(jt.get("stop_price")) or _f(pos.get("entryPrice")) * (1 + fallback_pct / 100)
+            mark, liq, plan = _f(pos.get("markPrice")), _f(pos.get("liquidationPrice")), _f(jt.get("stop_price"))
+            stop = plan or _f(pos.get("entryPrice")) * (1 + fallback_pct / 100)
+            buf = self.ex.limits.liq_buffer_pct
+            if liq > 0 and stop > liq * (1 - buf / 100):
+                if plan:
+                    await self.alert("plan_stop_unreachable", f"plan stop {plan:g} is past liquidation {liq:g} minus "
+                                     f"{buf:g}%: it would never fire. Restored at {liq * (1 - buf / 100):.6g} instead; "
+                                     "fix the plan's stop", symbol, True)
+                stop = liq * (1 - buf / 100)
+            stop = float(self.t.price_to_precision(symbol, stop))
             if stop <= mark:
                 await self._market_close(symbol, _f(pos["contracts"]))
                 if jt:
@@ -242,4 +253,4 @@ class ManageFlow:
                     return None   # one rests after all (placed meanwhile, or the listing lagged)
                 raise RuntimeError(res.get("error") or "stop not placed")
             self.j.log_alert("stop_restored", f"placed missing stop at {stop}", symbol)
-            return {"symbol": symbol, "action": "stop_placed", "stop": stop}
+            return {"symbol": symbol, "action": "stop_placed", "stop": stop, **({"liquidation": liq} if liq else {})}

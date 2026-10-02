@@ -26,7 +26,7 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 from . import clientid, equity_marks, reconcile
-from .exchange import Exchanges
+from .exchange import Exchanges, to_symbol
 from .journal import Journal
 from .risk import AccountState
 from .stops import STOP_TYPES, is_clock_drift, is_protective_stop  # noqa: F401 (re-export)
@@ -92,6 +92,15 @@ class Trader(OpenFlow, ManageFlow):
 
     # ---------------------------------------------------------------- account / positions
     async def _raw_positions(self) -> list[dict]:
+        rows = await self._fetch_positions()
+        unknown = [p["symbol"] for p in rows if p.get("symbol") not in (self.t.markets or {})]
+        if unknown:   # a perp listed after our markets loaded: ccxt keys its position by the raw id until a reload
+            await self.ex.trade_markets(unknown[0])
+            if any(s in (self.t.markets or {}) for s in map(to_symbol, unknown)):
+                rows = await self._fetch_positions()
+        return rows
+
+    async def _fetch_positions(self) -> list[dict]:
         try:
             rows = await self.t.fetch_positions()
         except ccxt.InvalidNonce:  # -1021 clock drift: resync once and retry
@@ -157,11 +166,16 @@ class Trader(OpenFlow, ManageFlow):
         return next((p for p in await self._raw_positions() if p["symbol"] == symbol), None)
 
     async def positions(self) -> list[dict]:
-        """Live positions + the stop actually on the exchange + the journal trade and its plan."""
+        """Live positions + the stop actually on the exchange + the journal trade and its plan. A symbol whose stops
+        can't be read is listed with UNPROTECTED "unknown" and the error: it never costs the other rows. `leverage`:
+        positionRisk v3 has none, so the journal's."""
         out = []
         for p in await self._raw_positions():
-            sym = p["symbol"]
-            stops = await self.stop_orders(sym)
+            sym, err = p["symbol"], None
+            try:
+                stops = await self.stop_orders(sym)
+            except Exception as e:  # noqa: BLE001 - one symbol's failed read never fails the whole list
+                stops, err = [], f"stop read failed: {type(e).__name__}: {e}"
             jt = self.j.active_trade(sym) or {}
             entry, mark = _f(p.get("entryPrice")), _f(p.get("markPrice"))
             stop = min((s["trigger"] for s in stops), default=None)
@@ -170,13 +184,13 @@ class Trader(OpenFlow, ManageFlow):
                 "entry": entry, "mark": mark, "notional": round(abs(_f(p.get("notional"))), 2),
                 "unrealized_pnl": round(_f(p.get("unrealizedPnl")), 2),
                 "pnl_pct": round((entry - mark) / entry * 100, 2) if entry else None,
-                "leverage": p.get("leverage"), "margin_mode": p.get("marginMode"),
+                "leverage": p.get("leverage") or jt.get("leverage"), "margin_mode": p.get("marginMode"),
                 "liquidation": p.get("liquidationPrice"), "exchange_stop": stop,
                 "stop_distance_pct": round((stop - mark) / mark * 100, 2) if stop and mark else None,
-                "UNPROTECTED": stop is None, "trade_id": jt.get("id"), "setup": jt.get("setup"),
+                "UNPROTECTED": "unknown" if err else stop is None, "trade_id": jt.get("id"), "setup": jt.get("setup"),
                 "thesis": jt.get("thesis"), "plan": jt.get("plan"), "opened_at": jt.get("opened_at"),
                 "mae_pct": jt.get("mae_pct"), "mfe_pct": jt.get("mfe_pct"), "targets_hit": jt.get("targets_hit"),
-                "journal_status": jt.get("status", "NOT IN JOURNAL"),
+                "journal_status": jt.get("status", "NOT IN JOURNAL"), **({"error": err} if err else {}),
             })
         return out
 

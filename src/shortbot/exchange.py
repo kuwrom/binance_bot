@@ -6,15 +6,28 @@ Demo trading has no fapiData endpoints, so all analytics always read from prod p
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
 import ccxt.async_support as ccxt
 
 from .config import Settings
+from .risk import bracket_for
 
+log = logging.getLogger("shortbot.exchange")
 NO_DELIVERY = 4133404800000  # Binance's placeholder deliveryDate for perpetuals
 MARKETS_TTL = 3600
+# the trading client's markets: a perp listed since start, a tick/step change or a delisting shows within the TTL; a
+# symbol the client doesn't know reloads at once, at most once a FORCED_RELOAD_MIN_S (a typo must not hammer it)
+TRADE_MARKETS_TTL = 1800
+FORCED_RELOAD_MIN_S = 60
+RELOAD_RETRY_S = 300          # after a failed refresh the cached copy serves until then
+BRACKETS_TTL = 6 * 3600       # leverage brackets per symbol (GET /fapi/v1/leverageBracket, weight 1)
+
+
+async def _sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)  # indirection so tests can skip real waits
 
 
 def to_symbol(s: str) -> str:
@@ -54,6 +67,9 @@ class Exchanges:
         self._markets_at = 0.0
         self._lock = asyncio.Lock()
         self._trade_lock = asyncio.Lock()
+        self._trade_next_load = 0.0   # when the trading client's markets are due a refresh
+        self._trade_tried_at = 0.0    # last load attempt, success or not
+        self._brackets: dict[str, tuple[float, list[dict]]] = {}   # symbol -> (read at, bracket rows)
         self.params = None  # ResearchParams when running as the AI analyst; None = fixed baseline
 
     @property
@@ -106,16 +122,39 @@ class Exchanges:
         m = self.trade.markets.get(to_symbol(symbol))
         return bool(m and m.get("active", True))
 
-    async def trade_markets(self) -> None:
-        """Only what order placement needs (the trading client's own markets). Exits must never
-        depend on the prod analytics metadata; retried because exchangeInfo is large and can time out."""
+    async def trade_markets(self, symbol: str | None = None) -> None:
+        """Only what order placement needs (the trading client's own markets). Exits must never depend on the prod
+        analytics metadata. ccxt loads them once (load_markets without reload returns the cache), so a long-running
+        guardian or MCP server refreshes them every TRADE_MARKETS_TTL, and at once for a `symbol` they don't hold: a
+        perp listed since start is a BadSymbol to ccxt and its position comes keyed by the raw id. The first load is
+        retried and raises; a failed refresh keeps the cached copy (one try: a protective pass never waits three)."""
         t = self.require_trade()
-        if t.markets:
+        unknown = not t.markets or (symbol is not None and to_symbol(symbol) not in t.markets)
+        if self._trade_lock.locked() and not unknown:
+            return   # a refresh is in flight and brings this caller nothing it needs: the cached copy serves
+        if not self._trade_lock.locked() and not self._trade_markets_due(t, symbol):
             return
+        asked = time.time()
         async with self._trade_lock:  # one load even when 25 scan tasks ask at once
-            if t.markets:
+            if t.markets and (self._trade_tried_at >= asked or not self._trade_markets_due(t, symbol)):
                 return
-            await self._load_trade_markets(t)
+            self._trade_tried_at = time.time()
+            if not t.markets:
+                await self._load_trade_markets(t)
+            else:
+                try:
+                    await t.load_markets(reload=True)
+                except Exception as e:  # noqa: BLE001 - stale markets beat none; retried after RELOAD_RETRY_S
+                    log.warning("trade markets refresh failed, keeping the cached copy: %s: %s", type(e).__name__, e)
+                    self._trade_next_load = time.time() + RELOAD_RETRY_S
+                    return
+            self._trade_next_load = time.time() + TRADE_MARKETS_TTL
+
+    def _trade_markets_due(self, t, symbol: str | None) -> bool:
+        now = time.time()
+        unknown = symbol is not None and to_symbol(symbol) not in t.markets
+        return (not t.markets or now >= self._trade_next_load
+                or (unknown and now - self._trade_tried_at >= FORCED_RELOAD_MIN_S))
 
     async def _load_trade_markets(self, t) -> None:
         for i in range(3):
@@ -125,7 +164,28 @@ class Exchanges:
             except Exception:
                 if i == 2:
                     raise
-                await asyncio.sleep(2)
+                await _sleep(2)
+
+    async def maint_margin(self, symbol: str, notional: float) -> tuple[float, float] | None:
+        """(maintenance margin rate, maintenance amount) of the account's leverage bracket holding `notional` on
+        `symbol`, for the liquidation estimate (risk.est_liquidation_distance_pct). GET /fapi/v1/leverageBracket for the
+        one symbol (weight 1; ccxt's fetch_leverage_tiers reads every symbol and drops markets it hasn't loaded),
+        cached BRACKETS_TTL. A failed read serves the stale copy; None without keys or a copy (the estimate then
+        assumes the conservative fallback rate)."""
+        if not self.trade:
+            return None
+        sym, raw = to_symbol(symbol), to_raw(symbol)
+        hit = self._brackets.get(sym)
+        if not hit or time.time() - hit[0] > BRACKETS_TTL:
+            try:
+                r = await self.trade.fapiPrivateGetLeverageBracket({"symbol": raw})
+                rows = r if isinstance(r, list) else [r]   # the doc's schema: an array or an object
+                row = next((x for x in rows if x.get("symbol") == raw and x.get("brackets")), None)
+                if row:
+                    hit = self._brackets[sym] = (time.time(), row["brackets"])
+            except Exception as e:  # noqa: BLE001 - the estimate falls back (stale, else the conservative rate)
+                log.warning("leverage brackets %s: %s: %s", raw, type(e).__name__, e)
+        return bracket_for(hit[1], notional) if hit else None
 
     async def coin_perps(self) -> dict[str, dict]:
         """Crypto USDT perpetuals (no TradFi/stock perps, quarterlies, settling) that are also listed on the
