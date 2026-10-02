@@ -73,9 +73,11 @@ def test_infer_args():
     assert W.infer_args([row(52.0), row(12.3)])["min_change"] == 10
     assert W.infer_args([row(58.3), row(5.49)])["min_change"] == 5
     assert W.infer_args([row(-19.7), row(-5.03)])["direction"] == "losers"
-    both = W.infer_args([row(c) for c in [30, 20, 10, 9, -5, -7]])
+    both = W.infer_args([row(c) for c in [30, 20, 10, 9, -7, -5]])
     assert both["direction"] == "both" and both["min_change"] == 5 and both["inferred"]
-    assert W.infer_args([row(c) for c in [*range(1, 15), -3]])["direction"] == "now"
+    assert W.infer_args([row(c) for c in [*range(14, 0, -1), -3]])["direction"] == "now"      # 14 > 13 per side
+    unsorted = W.infer_args([row(c) for c in [7.6, -42.0, 14.9, -7.5, 1.5, 8.8]])            # ranked by |4h|, not 24h
+    assert unsorted["direction"] == "now" and unsorted["min_change"] == 10.0
     logged = {"direction": "both", "min_change": 3, "depth": 25, "top_n": 10, "groups": None}
     assert W.infer_args([row(4, logged)]) == {**logged, "inferred": False}
 

@@ -111,26 +111,24 @@ THRESHOLDS = (10.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0)
 
 
 def infer_args(rows: list[dict[str, Any]], depth: int = 25) -> dict[str, Any]:
-    """scan_shorts arguments of a logged scan: logged since 2026-10-02 (features.scan), inferred before that.
-    All gains -> gainers, all losses -> losers, both signs with <= depth//2+1 per side -> both, else now. min_change =
-    the largest usual threshold at or below the smallest |24h move| logged."""
+    """scan_shorts arguments of a logged scan: logged since 2026-10-02 (features.scan), inferred before that from the
+    rows in logging order. scan_shorts logs gainers by 24h change descending, then losers ascending: anything else
+    (or more than depth//2+1 per side with both signs) is "now" (ranked by |4h|, MCP default min_change 10).
+    min_change = the largest usual threshold at or below the smallest |24h move| logged."""
     logged = next((r["features"].get("scan") for r in rows if r["features"].get("scan")), None)
     if logged:
         return {**logged, "inferred": False}
     ch = [float(r["features"].get("change_24h") or 0) for r in rows]
-    up, down = [c for c in ch if c >= 0], [c for c in ch if c < 0]
+    k = next((i for i, c in enumerate(ch) if c < 0), len(ch))
+    up, down = ch[:k], ch[k:]
+    ordered = up == sorted(up, reverse=True) and down == sorted(down) and all(c < 0 for c in down)
     side = depth // 2 + 1
-    if not down:
-        direction = "gainers"
-    elif not up:
-        direction = "losers"
-    elif len(up) <= side and len(down) <= side:
-        direction = "both"
-    else:
+    if not ordered or (up and down and (len(up) > side or len(down) > side)):
         direction = "now"
+    else:
+        direction = "losers" if not up else "gainers" if not down else "both"
     smallest = min((abs(c) for c in ch), default=10.0)
-    lim = smallest * 2 if direction == "now" else smallest      # "now" ranks |4h| >= min_change / 2
-    min_change = next(x for x in THRESHOLDS if x <= lim + 1e-9)
+    min_change = 10.0 if direction == "now" else next(x for x in THRESHOLDS if x <= smallest + 1e-9)
     return {"direction": direction, "min_change": min_change, "depth": depth, "top_n": 10, "groups": None,
             "inferred": True}
 
