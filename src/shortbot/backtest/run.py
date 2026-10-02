@@ -4,6 +4,7 @@
     .venv/bin/python -m shortbot.backtest.run --days60        # 60-day history (shortbot.histdata.load60)
     .venv/bin/python -m shortbot.backtest.run --days60 --round1   # + round-1 variants (strategies_v2)
     .venv/bin/python -m shortbot.backtest.run --days60 --long     # the long sleeve only (strategies_long, research)
+    .venv/bin/python -m shortbot.backtest.run --days60 --long2    # long sleeve round 2 (strategies_long2, research)
     .venv/bin/python -m shortbot.backtest.run --days60 --flow     # positioning cards (strategies_flow, research)
     .venv/bin/python -m shortbot.backtest.run --days60 --round2   # + round-2 variants (strategies_v3, report_v3)
     .venv/bin/python -m shortbot.backtest.run --days60 --round3   # + round-3 veto tests (strategies_v4, report_v4)
@@ -192,6 +193,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--round4", action="store_true", help="add the round-4 corrections section (report_v5)")
     ap.add_argument("--compare", type=Path, help="--round4: an earlier results.json to diff every verdict against")
     ap.add_argument("--long", action="store_true", help="ledger = the long sleeve (strategies_long; research)")
+    ap.add_argument("--long2", action="store_true", help="ledger = long sleeve round 2 (strategies_long2; research)")
     ap.add_argument("--trials-asof", type=int, help="read the trial register as of this row id (pins a rerun's N)")
     ap.add_argument("--flow", action="store_true", help="ledger = the positioning cards (strategies_flow; research)")
     given = list(sys.argv[1:] if argv is None else argv)
@@ -217,6 +219,9 @@ def main(argv: list[str] | None = None) -> None:
     if a.long:
         from .strategies_long import trials_long
         led = trials_long()
+    if a.long2:
+        from .strategies_long2 import trials_long2
+        led = trials_long2()
     if a.flow:
         from .strategies_flow import trials_flow
         led = trials_flow()
@@ -265,7 +270,7 @@ def main(argv: list[str] | None = None) -> None:
 def label(a: argparse.Namespace) -> str:
     """bt60_r3, bt10, bt60_long, bt60_r4_legacy...: the default output dir's name."""
     rnd = next((f"_r{k}" for k in (4, 3, 2, 1) if getattr(a, f"round{k}")), "")
-    return (f"bt{60 if a.days60 else 10}{rnd}{'_long' if a.long else ''}"
+    return (f"bt{60 if a.days60 else 10}{rnd}{'_long' if a.long else ''}{'_long2' if a.long2 else ''}"
             f"{'_legacy' if 'legacy' in (a.placebo, a.dsr) else ''}")
 
 
