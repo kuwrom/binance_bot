@@ -52,7 +52,14 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 - **funding_hi / premium_hi:** BIS finds high carry predicts crashes. But on BTC 2019-2026, entries made at the highest funding had the best 30-day forward returns (z > 2.5: +9.87%, 64.5% win). Keep funding_hi to post-pump alts with a price trigger.
 - **squeeze_exhaustion / veto #3:** a capped symbol moves to hourly funding and reverts only after 16 hourly prints under 0.025% (Binance FAQ). That gives a free squeeze-stage feature.
 - **pump_fade:** the MAX effect (1.54%/wk, t=2.68) and daily reversal in illiquid coins (>3,600 coins) support it. BTC/ETH-class coins show momentum instead, consistent with "don't fade majors".
-- **unlock:** no peer-reviewed effect size was retrieved this round, so measure it in the journal. Keyrock's 16k-unlock study is in PLAYBOOK.md.
+- **unlock:** verified 2026-10-02 from Keyrock's study of 16,000 unlock events across 40 tokens (https://keyrock.com/from-locked-to-liquidity-what-16000-token-unlocks-teach-us/):
+  - team unlocks average about −25%;
+  - investor unlocks show minimal, slow declines;
+  - ecosystem unlocks average +1.18%.
+  - Pressure starts ~30 days before and accelerates in the final week; prices stabilise within ~14 days after.
+  - Unlocks of 5–10% of supply drop 2.4× more sharply; >10% behave the same or better, because recipients cannot hedge them fully.
+  - Recipients hedge 1–2 weeks to a month ahead.
+  - This matches the unlock setup: short 2-4 weeks into large team/cliff unlocks and exit around the date. Practitioner data, not peer-reviewed.
 
 ## Index (generated: `python -m shortbot.library_seed`)
 | id | direction | family | grade | fit | file |
