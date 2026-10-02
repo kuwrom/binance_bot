@@ -44,6 +44,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 - Watch `max_adverse_24h` and `squeeze_rate_pct`, not just average return. A short edge that sometimes costs +50% isn't an edge at 3× leverage.
 - Keep one experiment at a time per parameter, so results are attributable.
 - Cite a backtest or study by its stamped dir, `data/research/<UTC date>-<sha7>/...` (code, data fingerprint, window and config in `provenance.json`; docs/BACKTEST.md "Provenance"). Scratchpad and `/tmp` outputs vanish.
+- Every learning has a `kind`: `engineering` (a fix, backed by a test), `statistical` (a claim about outcomes) or `process` (how the desk works). Statistical ones carry `n` (independent observations: episodes, trades or events, never rows), `days` and a `sample` link (`research_report:<date>`, `registry:<id>` or `data/research/<dir>`). `review_by` defaults to the last update + 14 days for a hypothesis and + 30 for a supported statistical learning. The brief and `research_report.learnings` flag what to re-check: review due, supported/adopted on n < 30, and statistics recorded before 2026-10-01 (row counts). Rows recorded before these fields show inferred values marked `?` (`learnings_view.py`); set them with `update_learning`. These are flags, never gates.
 
 ## Risk parameters as experiments
 - **Layers:** baseline limits come from `.env`. The AI may override any of them via `set_risk_params(changes, reasoning, experiment)`, which needs human approval, and only within `BOUND_*` (human-only, `.env`). `reset_risk_params` drops the overrides.

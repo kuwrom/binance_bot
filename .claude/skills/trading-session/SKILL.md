@@ -96,7 +96,7 @@ Present a compact table per candidate:
 
 ## 7. Close the loop
 - `log_decision("session_summary", ...)`: what we did, what we learned, what to check next time.
-- If something looked like a pattern: `add_learning` as a **hypothesis**, with the evidence (trade ids, candidate counts) and its `provenance` (e.g. `["trade:12", "research_report"]`).
+- If something looked like a pattern: `add_learning` as a **hypothesis**, with the evidence (trade ids, candidate counts), its `provenance` (e.g. `["trade:12", "research_report"]`), its `kind` (usually `statistical`) and `n` / `days` (one trade = n 1).
 - Every few sessions, load `research-review`.
 
 ## Hard rules

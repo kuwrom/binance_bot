@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import alerts_view, research
+from . import alerts_view, learnings_view, research
 from .app import get_app
 from .entries import EntryDesk
 from .mcp_server import tool
@@ -112,39 +112,54 @@ async def log_decision(action: str, reasoning: str, symbol: str | None = None) -
 @tool
 async def journal(limit: int = 20) -> dict[str, Any]:
     """Stats (by setup/experiment: win rate, avg R, MAE/MFE), open trades, recent trades/decisions/alerts,
-    and active learnings. Review before trading."""
+    and active learnings (each with an `audit`: kind, n, days, review date, flags; '?' fields are inferred).
+    Review before trading."""
     j = get_app().journal
     return {"stats": j.stats(), "open_trades": j.open_trades(include_opening=True), "recent_trades": j.trades(limit),
             "recent_decisions": j.decisions(limit=limit),
             "recent_alerts": [alerts_view.for_agent(a) for a in j.alerts(limit)],
-            "learnings": j.learnings()}
+            "learnings": learnings_view.annotate(j, j.learnings())}
 
 
 @tool
-async def add_learning(statement: str, evidence: str, provenance: list[str], setup: str | None = None,
-                       status: str = "hypothesis", confidence: str = "low") -> dict[str, Any]:
+async def add_learning(statement: str, evidence: str, provenance: list[str], kind: str, setup: str | None = None,
+                       status: str = "hypothesis", confidence: str = "low", n: float | None = None,
+                       days: int | None = None, sample: str | None = None,
+                       review_by: str | None = None) -> dict[str, Any]:
     """Record a research finding so future sessions start from it. status: hypothesis|supported|rejected|adopted;
     confidence: low|medium|high. Evidence should cite trade ids, research_report numbers or sources.
     provenance (required): where the evidence came from, e.g. ["trade:12", "research_report", "coin_news:QNT",
-    "alert:345"]. Learnings resting on third-party text (news, announcements) are flagged in every brief."""
+    "alert:345"]. Learnings resting on third-party text (news, announcements) are flagged in every brief.
+    kind (required): engineering (a fix, backed by a test) | statistical (a claim about outcomes) | process (how the
+    desk works). For statistical claims give n = independent observations (research_report n = symbol-episodes,
+    trades or events, never scan rows), days = distinct days, sample = where it lives ("research_report:2026-10-02",
+    "registry:lib.x", "data/research/<dir>"). review_by (YYYY-MM-DD; default: 14 days for a hypothesis, 30 for a
+    supported statistical learning): the brief resurfaces it after that date. n < 30 is flagged as an anecdote."""
     if not provenance:
         raise ToolError("provenance is required: name where the evidence came from, e.g. ['trade:12']")
-    return {"ok": True, "learning_id": get_app().journal.add_learning(statement, evidence, setup, status, confidence,
-                                                                      provenance)}
+    return {"ok": True, "learning_id": get_app().journal.add_learning(
+        statement, evidence, setup, status, confidence, provenance, kind=kind, n=n, days=days, sample=sample,
+        review_by=review_by)}
 
 
 @tool
 async def update_learning(learning_id: int, status: str | None = None, evidence: str | None = None,
-                          confidence: str | None = None, provenance: list[str] | None = None) -> dict[str, Any]:
-    """Update a learning as evidence accumulates (evidence and provenance are appended, never overwritten)."""
-    get_app().journal.update_learning(learning_id, status, evidence, confidence, provenance)
+                          confidence: str | None = None, provenance: list[str] | None = None, kind: str | None = None,
+                          n: float | None = None, days: int | None = None, sample: str | None = None,
+                          review_by: str | None = None) -> dict[str, Any]:
+    """Update a learning as evidence accumulates (evidence and provenance are appended, never overwritten; kind, n,
+    days, sample and review_by replace the old value). Setting n on a learning recorded before 2026-10-01 marks its
+    sample as re-checked on the episode basis."""
+    get_app().journal.update_learning(learning_id, status, evidence, confidence, provenance, kind=kind, n=n,
+                                      days=days, sample=sample, review_by=review_by)
     return {"ok": True}
 
 
 @tool
 async def research_report(min_n: int = 5) -> dict[str, Any]:
     """What predicted drops? Labelled scan candidates grouped by tradable/vetoed, veto reason, setup, score bucket
-    and feature tertiles: avg 24h short return, hit rate, squeeze rate. For custom analysis use shortbot.lab."""
+    and feature tertiles: avg 24h short return, hit rate, squeeze rate. `learnings`: statistical learnings with their
+    n, days and sample, and what to re-check (review due, n < 30, pre-episode statistics). Custom: shortbot.lab."""
     return research.report(get_app().journal, min_n)
 
 

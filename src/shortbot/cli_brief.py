@@ -64,10 +64,18 @@ async def brief(app) -> str:
         lines.append(f"### ⚠️ could not load alerts: {type(e).__name__}: {e}")
     ls = j.learnings()
     if ls:
+        from . import learnings_view   # kind / sample / review date (#28): flags, never gates
+        try:
+            ls = learnings_view.annotate(j, ls)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- ⚠️ could not audit learnings: {type(e).__name__}: {e}")
         lines.append("### active learnings")
-        lines += [f"- #{x['id']} [{x['status']}/{x['confidence']}] {x['setup'] or 'all'}: {flat(x['statement'], 300)}"
+        lines += [f"- #{x['id']} [{x['status']}/{x['confidence']}"
+                  + (f" {learnings_view.tag(x['audit'])}" if "audit" in x else "")
+                  + f"] {x['setup'] or 'all'}: {flat(x['statement'], 300)}"
                   + (" ⚠️ evidence from third-party text" if _third_party(j, x.get("provenance")) else "")
                   for x in ls[:10]]
+        lines += learnings_view.brief_lines(ls) if all("audit" in x for x in ls) else []
     from .warmup import desk_clock
     dc = desk_clock(app.settings, j)
     c = dc["clock"]

@@ -18,7 +18,7 @@ The desk learns from three data streams:
    - Which feature tertiles separate winners? These are exploratory (`feature_mining`): confirm on later data.
    - Since 2026-10-01 (`basis`), `n` counts symbol-episodes (rescans of a coin within 24h are one bet), `rows` the raw scan rows and `days` the independent market days. Compare groups by `avg_excess_ret_24h` (vs the median of the same scan) and its `ci95_excess_ret_24h`; `descriptive_only` means fewer than 20 days. Learnings that cite row-based n from before 2026-10-01 overstate their evidence.
 2. `journal`: stats by setup and by experiment. Treat n < 30 as anecdote.
-3. Update learnings (`add_learning` / `update_learning`), citing the numbers and where they came from (`provenance`).
+3. Update learnings (`add_learning` / `update_learning`), citing the numbers and where they came from (`provenance`). Give each a `kind`, and give statistical ones `n`, `days` and `sample`. Work through `research_report.learnings`: `review_due`, `anecdote` (supported/adopted on n < 30), `pre_episodes` (statistics from before 2026-10-01: re-state n on the episode basis) and `?` (inferred) fields. Changing an adopted rule's status is a decision for you or the owner, not for the flag.
 
 ## Ad-hoc questions: code mode
 Use `shortbot.lab` through Bash and print only the conclusion:

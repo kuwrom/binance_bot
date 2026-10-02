@@ -244,10 +244,11 @@ def by_liquidity(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def report(journal, min_n: int = 5) -> dict[str, Any]:
     """What predicted drops? Grouped by tradable/vetoed, veto reason, setup, score bucket, feature tertiles.
     n = symbol-episodes (min_n applies to them); rows = raw scan rows."""
+    from .learnings_view import audit as learnings_audit   # statistical learnings with their n and days (#28)
     rows = [r for r in journal.candidates(labelled_only=True, limit=ALL_ROWS) if r.get("short_ret_24h") is not None]
     if not rows:
         return {"labelled_candidates": 0, "note": "No labelled candidates yet: outcomes are labelled 72h after "
-                "each scan by the guardian. Keep scanning."}
+                "each scan by the guardian. Keep scanning.", "learnings": learnings_audit(journal)}
     for r, e in zip(rows, rs.scan_excess(rows)):
         r["excess_ret_24h"] = e
     by_veto: dict[str, list] = {}
@@ -293,6 +294,7 @@ def report(journal, min_n: int = 5) -> dict[str, Any]:
                                    "show a ci95 excluding 0 by chance alone. Confirm on later data before acting. "
                                    "Buckets are compact (no n_eff, raw-return CI or net): dig with shortbot.lab."},
         "by_feature_tertile": tert,
+        "learnings": learnings_audit(journal),
         "how_to_read": "short_ret > 0 = price fell (short wins). n = independent symbol-episodes (rescans of a coin "
                        "within 24h count once), rows = raw scan rows, days = distinct UTC days. Compare groups by "
                        "avg_excess_ret_24h (vs the same scan's median) and its ci95; descriptive_only = fewer than "

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 RESEARCH_SCHEMA = """
@@ -44,9 +45,16 @@ CANDIDATE_COLUMNS = {"label_v": "INTEGER", "label_tries": "INTEGER", "label_erro
                      "label_retry_ms": "INTEGER"}
 # provenance: JSON list of where the evidence came from ("trade:12", "research_report", "coin_news:QNT", "alert:345"),
 # so a learning planted by third-party text can be traced and flagged (#22). Learnings outlive sessions.
-LEARNING_COLUMNS = {"provenance": "TEXT"}
+# kind / n / days / sample / review_by (#28): what sort of claim it is, and for statistical ones the effective sample
+# (independent observations: episodes, trades or events, never raw scan rows), its days and where it lives
+# ("research_report:2026-10-02", "registry:lib.x", "data/research/<dir>"). NULL on rows recorded before #28:
+# learnings_view infers them for display and never writes them back.
+LEARNING_COLUMNS = {"provenance": "TEXT", "kind": "TEXT", "n": "REAL", "days": "INTEGER", "sample": "TEXT",
+                    "review_by": "TEXT"}
 LEARNING_STATUS = ("hypothesis", "supported", "rejected", "adopted")
 CONFIDENCE = ("low", "medium", "high")
+LEARNING_KINDS = ("engineering", "statistical", "process")
+SAMPLE_MAX = 120
 
 
 class ResearchStore:
@@ -139,31 +147,40 @@ class ResearchStore:
 
     # ------------------------------------------------------------ learnings
     def add_learning(self, statement: str, evidence: str = "", setup: str | None = None,
-                     status: str = "hypothesis", confidence: str = "low", provenance: list[str] | None = None) -> int:
+                     status: str = "hypothesis", confidence: str = "low", provenance: list[str] | None = None,
+                     kind: str | None = None, n: float | None = None, days: int | None = None,
+                     sample: str | None = None, review_by: str | None = None) -> int:
+        """kind is required by the add_learning tool; it stays optional here for older callers (CLI, imports)."""
         _check(status, confidence)
         prov = json.dumps(_tags(provenance)) if provenance is not None else None
+        f = _fields(kind=kind, n=n, days=days, sample=sample, review_by=review_by)
         return self._insert(
-            "INSERT INTO learnings (created_at, updated_at, setup, statement, evidence, status, confidence, provenance)"
-            " VALUES (datetime('now'), datetime('now'), ?,?,?,?,?,?)",
-            (setup, statement, evidence, status, confidence, prov))
+            "INSERT INTO learnings (created_at, updated_at, setup, statement, evidence, status, confidence, provenance,"
+            " kind, n, days, sample, review_by) VALUES (datetime('now'), datetime('now'), ?,?,?,?,?,?,?,?,?,?,?)",
+            (setup, statement, evidence, status, confidence, prov, *(f.get(k) for k in SAMPLE_FIELDS)))
 
     def update_learning(self, lid: int, status: str | None = None, evidence: str | None = None,
-                        confidence: str | None = None, provenance: list[str] | None = None) -> None:
+                        confidence: str | None = None, provenance: list[str] | None = None,
+                        kind: str | None = None, n: float | None = None, days: int | None = None,
+                        sample: str | None = None, review_by: str | None = None) -> None:
+        """Evidence and provenance are appended; kind, n, days, sample and review_by replace what was there."""
         cur = self._rows("SELECT * FROM learnings WHERE id=?", (lid,))
         if not cur:
             raise ValueError(f"no learning #{lid}")
         row = cur[0]
         status, confidence = status or row["status"], confidence or row["confidence"]
         _check(status, confidence)
+        f = _fields(kind=kind, n=n, days=days, sample=sample, review_by=review_by)
         ev = row["evidence"] or ""
         if evidence:
             ev = f"{ev}\n- {evidence}".strip()
         prov = json.loads(row.get("provenance") or "[]")
         if provenance is not None:
             prov += [t for t in _tags(provenance) if t not in prov]
-        self.db.execute("UPDATE learnings SET status=?, confidence=?, evidence=?, provenance=?, "
+        sets = "".join(f", {k}=?" for k in f)
+        self.db.execute(f"UPDATE learnings SET status=?, confidence=?, evidence=?, provenance=?{sets}, "
                         "updated_at=datetime('now') WHERE id=?",
-                        (status, confidence, ev, json.dumps(prov) if prov else row.get("provenance"), lid))
+                        (status, confidence, ev, json.dumps(prov) if prov else row.get("provenance"), *f.values(), lid))
         self.db.commit()
 
     def learnings(self, active_only: bool = True, setup: str | None = None) -> list[dict[str, Any]]:
@@ -176,6 +193,8 @@ class ResearchStore:
         rows = self._rows(q + " ORDER BY updated_at DESC", tuple(args))
         for r in rows:
             r["provenance"] = json.loads(r["provenance"]) if r.get("provenance") else None
+            if isinstance(r.get("n"), float) and r["n"].is_integer():
+                r["n"] = int(r["n"])
         return rows
 
 
@@ -187,6 +206,33 @@ def _tags(provenance: list[str]) -> list[str]:
     if not tags:
         raise ValueError("provenance must name where the evidence came from, e.g. ['trade:12', 'coin_news:QNT']")
     return tags[:20]
+
+
+SAMPLE_FIELDS = ("kind", "n", "days", "sample", "review_by")
+
+
+def _fields(**given: Any) -> dict[str, Any]:
+    """The #28 fields that were given (None = leave as is), validated and normalised."""
+    out = {k: v for k, v in given.items() if v is not None}
+    if "kind" in out and out["kind"] not in LEARNING_KINDS:
+        raise ValueError(f"kind must be one of {LEARNING_KINDS}")
+    if "n" in out and (isinstance(out["n"], bool) or not isinstance(out["n"], (int, float)) or out["n"] < 0):
+        raise ValueError("n must be a number >= 0: independent observations (episodes, trades, events), not rows")
+    if "days" in out and (isinstance(out["days"], bool) or not isinstance(out["days"], int) or out["days"] < 0):
+        raise ValueError("days must be a whole number >= 0")
+    if "sample" in out:
+        out["sample"] = " ".join(str(out["sample"]).split())
+        if len(out["sample"]) > SAMPLE_MAX:
+            raise ValueError(f"sample is a short link (<= {SAMPLE_MAX} chars), e.g. 'research_report:2026-10-02', "
+                             "'registry:lib.x' or 'data/research/<dir>'")
+        if not out["sample"]:
+            del out["sample"]
+    if "review_by" in out:
+        try:
+            out["review_by"] = date.fromisoformat(str(out["review_by"])[:10]).isoformat()
+        except ValueError:
+            raise ValueError("review_by must be a date, YYYY-MM-DD") from None
+    return out
 
 
 def _check(status: str, confidence: str) -> None:

@@ -168,11 +168,12 @@ async def test_learning_provenance_is_stored_merged_and_flagged_in_the_brief(mon
     j = a.journal
     news_alert = j.log_alert("news_on_position", f"QNT {EVIL}", SYM)
     monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(journal=j))
-    own = (await mcp_research.add_learning("fades after lower highs", "trades 3,7", ["trade:3", "trade:7"]))
-    news = (await mcp_research.add_learning("delistings dump", "QNT headline", ["coin_news:QNT"]))
-    via_alert = (await mcp_research.add_learning("headline says so", "alert", [f"alert:{news_alert}"]))
+    own = (await mcp_research.add_learning("fades after lower highs", "trades 3,7", ["trade:3", "trade:7"],
+                                                "statistical"))
+    news = (await mcp_research.add_learning("delistings dump", "QNT headline", ["coin_news:QNT"], "statistical"))
+    via_alert = (await mcp_research.add_learning("headline says so", "alert", [f"alert:{news_alert}"], "process"))
     with pytest.raises(Exception, match="provenance"):
-        await mcp_research.add_learning("no source", "trust me", [])
+        await mcp_research.add_learning("no source", "trust me", [], "process")
     await mcp_research.update_learning(own["learning_id"], evidence="research_report n=40",
                                        provenance=["research_report"])
     rows = {r["id"]: r for r in j.learnings()}

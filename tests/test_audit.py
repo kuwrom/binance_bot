@@ -106,7 +106,7 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
     monkeypatch.setattr(mcp_research, "get_app", lambda: _app(jm))
     sid = (await mcp_research.start_session("audit test"))["session_id"]
     await mcp_research.log_decision("watch", "lower high forming", "QNT/USDT:USDT")
-    await mcp_research.add_learning("pumps fade", "trades 1-3", ["trade:1"])
+    await mcp_research.add_learning("pumps fade", "trades 1-3", ["trade:1"], "statistical")
     # a CLI command the same Claude session runs through Bash: another process, another Journal
     audit.set_process("cli")
     jc = Journal(db)
