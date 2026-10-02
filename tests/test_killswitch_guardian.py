@@ -1,14 +1,20 @@
-"""Kill switch in the guardian: HALTED sweep, fills while not ACTIVE, auto-trips (daily loss, drawdown, long,
-untracked), the stale-heartbeat auto-clear, the loosening tripwire, and hooks that never fail the protective pass."""
+"""Kill switch in the guardian: HALTED sweep, fills while not ACTIVE, auto-trips (daily loss on equity marks, drawdown,
+long, untracked), the stale-heartbeat auto-clear, the loosening tripwire (across restarts too), and hooks that never
+fail the protective pass."""
 
+import asyncio
 import json
 import time
+from datetime import datetime, timezone
 
 import pytest
 
+from shortbot import equity_marks as em
+from shortbot import guardian_positions as gp
 from shortbot import killswitch as ks
 from shortbot.entries import EntryDesk
 from shortbot.journal import now_iso
+from shortbot.guardian_loop import guarded
 from shortbot.guardian_positions import UNTRACKED_GRACE_S
 from shortbot.killswitch import ACTIVE, HALTED, REDUCING, STALE
 from tests.fakes import SYM, FakeCcxt
@@ -66,13 +72,53 @@ async def test_every_fill_while_reducing_is_alerted_including_a_late_oco_sibling
     assert kinds(g).count("fill_while_reducing") == 2 and list(fake.stops.values()) == [1.10]
 
 
+def day_mark(g, equity, late=False):
+    """Today's equity mark, as the first guardian pass after 00:00 UTC (or a late one) recorded it."""
+    key, start = em.period_starts(datetime.now(timezone.utc))["day"]
+    g.j.set(f"eq_mark:day:{key}", json.dumps({"equity": equity, "ts": start + (3_600_000 if late else 60_000)}))
+
+
+def realized_today(fake, usdt):   # an earlier trade's result today: in the old day P&L (income since 00:00)
+    fake.income.append({"symbol": "PUMPUSDT", "incomeType": "REALIZED_PNL", "income": str(usdt), "asset": "USDT",
+                        "time": int(time.time() * 1000)})
+
+
 async def test_daily_loss_breach_trips_reducing_and_records_the_limit_used():
     g, fake = guardian()
-    fake.income.append({"symbol": "PUMPUSDT", "incomeType": "REALIZED_PNL", "income": "-400", "asset": "USDT",
-                        "time": int(time.time() * 1000)})   # an earlier trade's loss today
+    day_mark(g, fake.equity + 400)                          # equity is 400 below today's mark
+    realized_today(fake, -400)
     await g.check_positions()
     st = ks.read(g.j)
     assert st["state"] == REDUCING and st["cause"] == "daily_loss" and ".env baseline" in st["reason"]
+    ev = json.loads(g.j.decisions()[0]["snapshot"])["evidence"]
+    assert ev["day_pnl"] == -400 and ev["old_day_pnl"] == -400 and not ev["late"]["day"] and not ev["degraded"]
+
+
+async def test_a_loss_carried_over_midnight_no_longer_trips_the_daily_loss():
+    g, fake = guardian()
+    day_mark(g, fake.equity)                                # no change since 00:00
+    realized_today(fake, -400)                              # the old definition: -4% "today"
+    await g.check_positions()
+    assert ks.read(g.j)["state"] == ACTIVE
+
+
+async def test_a_late_mark_or_a_hung_income_read_falls_back_to_the_old_day_pnl(monkeypatch):
+    g, fake = guardian()
+    day_mark(g, fake.equity, late=True)                     # the guardian slept across midnight
+    realized_today(fake, -400)
+    await g.check_positions()
+    assert ks.read(g.j)["cause"] == "daily_loss"
+    g2, fake2 = guardian()
+    day_mark(g2, fake2.equity)
+    realized_today(fake2, -400)
+
+    async def hung(*a, **k):
+        await asyncio.sleep(60)
+    monkeypatch.setattr(em, "gather", hung)
+    monkeypatch.setattr(gp, "MARKS_TIMEOUT_S", 0.01)
+    await g2.check_positions()
+    assert ks.read(g2.j)["cause"] == "daily_loss"
+    assert json.loads(g2.j.decisions()[0]["snapshot"])["evidence"]["degraded"]
 
 
 @pytest.mark.parametrize("explained_by", ["pending", "placing", "unknown", "external", "external_filled"])
@@ -138,6 +184,33 @@ async def test_guardian_lifts_a_stale_halt_and_flags_a_clear_that_bypassed_admin
     assert a["kind"] == "kill_switch_loosened" and "NOT via shortbot-admin" in a["message"]
 
 
+async def test_a_loosening_while_the_guardian_was_down_is_announced_when_it_starts():
+    g, fake = guardian()
+    await ks.trip(g.j, SETTINGS, REDUCING, "guardian", "daily loss")
+    await g.check_entries()                                   # seen (and persisted) as REDUCING
+    g.kill_seen = None                                        # the guardian restarts...
+    g.j.set(ks.KV_KEY, json.dumps({"state": ACTIVE, "by": "agent", "reason": "sneaky", "at": "now"}))   # ...late
+    await g.check_entries()
+    a = g.j.alerts(1)[0]
+    assert a["kind"] == "kill_switch_loosened" and "NOT via shortbot-admin" in a["message"]
+    assert "guardian was down" in a["message"]
+    await ks.trip(g.j, SETTINGS, REDUCING, "guardian", "drawdown")
+    await g.check_entries()
+    g.kill_seen = None
+    await ks.clear(g.j, SETTINGS, ACTIVE, "human:kibrom (tty)", "reviewed", g.j.get(ks.KV_KEY))
+    await g.check_entries()
+    a = g.j.alerts(1)[0]
+    assert a["kind"] == "kill_switch_loosened" and "NOT via shortbot-admin" not in a["message"]
+
+
+async def test_an_unreadable_last_seen_state_counts_as_never_seen():
+    g, fake = guardian()
+    g.j.set(g.j.mode_key(gp.SEEN_KEY), "garbage")
+    await ks.trip(g.j, SETTINGS, REDUCING, "guardian", "daily loss")
+    await g.check_entries()
+    assert g.j.alerts(1)[0]["kind"] == "kill_switch_state"
+
+
 async def test_a_stale_halt_lifting_back_to_a_sticky_trip_is_not_a_tamper_alarm():
     g, fake = guardian()
     await ks.trip_on_daily_loss(g.j, SETTINGS, 9_600, -400)
@@ -165,3 +238,15 @@ async def test_kill_switch_hooks_never_fail_the_protective_pass(monkeypatch):
     await g.check_positions()
     assert list(fake.stops.values()) == [1.10] and "stop_missing" in kinds(g)
     assert "guardian_error:kill_switch" in kinds(g)
+
+
+async def test_guarded_returns_the_hook_result_or_none_when_it_failed():
+    g, fake = guardian()
+
+    async def hit():
+        return {"changed": True}
+
+    async def broken():
+        raise RuntimeError("database is locked")
+    assert await guarded("kill_switch", hit(), g.n) == {"changed": True}
+    assert await guarded("kill_switch", broken(), g.n) is None and "guardian_error:kill_switch" in kinds(g)

@@ -15,16 +15,21 @@ watchdog). Loosening it is human-only (`shortbot-admin clear`, from a real termi
 caused only by a stale guardian heartbeat (laptop sleep, an outage) clears itself back to what it replaced once the
 heartbeat is fresh again; every other cause is sticky. Each change writes a decision row and an alert. The state is
 one journal kv row shared by guardian, MCP server and CLI, changed only by compare-and-swap, so two processes
-tripping at once can never lower it or lose a cause.
+tripping at once can never lower it or lose a cause. An unreadable row (or prior state) is REDUCING everywhere.
+A human clear holds the loss trips at what the human accepted (killswitch_rearm.py).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
 
+from . import killswitch_rearm as rearm
+
+log = logging.getLogger("shortbot.killswitch")
 ACTIVE, REDUCING, HALTED = "ACTIVE", "REDUCING", "HALTED"
 LEVEL = {ACTIVE: 0, REDUCING: 1, HALTED: 2}
 KV_KEY = "trading_state"
@@ -53,6 +58,11 @@ def _parse(raw: str | None) -> dict[str, Any] | None:
         return None
 
 
+def _unreadable(raw: Any, what: str = "state row") -> dict[str, Any]:
+    return {"state": REDUCING, "level": 1, "by": "kill switch", "at": None, "cause": "unreadable",
+            "reason": f"{what} unreadable ({str(raw)[:60]!r}): failing closed"}
+
+
 def read(j) -> dict[str, Any]:
     """The current state; no row = ACTIVE. An unreadable row fails closed (REDUCING)."""
     raw = j.get(KV_KEY)
@@ -61,16 +71,18 @@ def read(j) -> dict[str, Any]:
         return {**st, "level": LEVEL[st["state"]]}
     if raw is None:
         return {"state": ACTIVE, "level": 0, "by": None, "reason": None, "at": None, "cause": None}
-    return {"state": REDUCING, "level": 1, "by": "kill switch", "at": None, "cause": "unreadable",
-            "reason": f"state row unreadable ({str(raw)[:60]!r}): failing closed"}
+    return _unreadable(raw)
 
 
-def _cas(j, old: str | None, new: dict[str, Any]) -> bool:
-    """Write `new` only if the row still holds `old` (one statement: atomic across processes)."""
+def _cas(j, old: str | None, new: dict[str, Any], also: dict[str, str] | None = None) -> bool:
+    """Write `new` only if the row still holds `old` (one statement: atomic across processes); `also` (kv rows) is
+    written in the same transaction, and only when the swap happened."""
     if old is None:
         n = j.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (KV_KEY, json.dumps(new))).rowcount
     else:
         n = j.db.execute("UPDATE kv SET v=? WHERE k=? AND v=?", (json.dumps(new), KV_KEY, old)).rowcount
+    for k, v in (also or {}).items() if n else ():
+        j.db.execute("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", (k, v))
     j.db.commit()
     return n > 0
 
@@ -92,8 +104,8 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
            "cause": cause}
     for _ in range(5):
         raw = j.get(KV_KEY)
-        parsed = _parse(raw)   # an unreadable row is overwritten by any trip
-        cur = parsed or {"state": ACTIVE}
+        parsed = _parse(raw)   # an unreadable row (REDUCING) is overwritten by any trip
+        cur = parsed or ({"state": ACTIVE} if raw is None else _unreadable(raw))
         if parsed and LEVEL[cur["state"]] >= LEVEL[state]:
             if cur.get("cause") != STALE or cause == STALE:
                 return {"ok": True, "changed": False, **read(j)}
@@ -118,22 +130,26 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
     return {"ok": True, "changed": True, **new}
 
 
-async def clear(j, settings, state: str, by: str, reason: str, shown: str | None) -> dict[str, Any]:
+async def clear(j, settings, state: str, by: str, reason: str, shown: str | None,
+                hold: dict[str, Any] | None = None) -> dict[str, Any]:
     """Loosen (or set) the state. Human-only: called by shortbot-admin after its terminal confirmation, never by an
     MCP tool or a `shortbot` subcommand (the agent's allowlist covers those). `shown` is the raw row the human
-    confirmed: if a trip landed meanwhile, nothing changes and they re-run against the new state."""
+    confirmed: if a trip landed meanwhile, nothing changes and they re-run against the new state. `hold` is the
+    loss-trip hold they confirmed (killswitch_rearm.preview); it replaces any earlier hold in the same transaction."""
     if state not in LEVEL or not (reason or "").strip():
         raise ValueError("clear needs a state (ACTIVE/REDUCING/HALTED) and a reason")
     prev = read(j)
     row = {"state": state, "level": LEVEL[state], "by": by, "reason": reason.strip(), "at": _now_iso(),
            "cause": "human", "prev": prev["state"]}
-    if not _cas(j, shown, row):
+    stored = rearm.encode(hold, by, row["at"])
+    if not _cas(j, shown, row, also={j.mode_key(rearm.KV_HOLD): stored}):
         return {"ok": False, "error": f"the kill-switch state changed while you were confirming (now {prev['state']} "
                                       f"by {prev.get('by')}: {prev.get('reason')}): nothing changed, re-run"}
     j.log_decision("kill_switch_clear", f"{prev['state']} -> {state} by {by}: {reason}", None,
-                   snapshot={**row, "cleared": {k: prev.get(k) for k in (*_KEEP, "since")}})
+                   snapshot={**row, "cleared": {k: prev.get(k) for k in (*_KEEP, "since")},
+                             "rearm": json.loads(stored)})
     await notify(j, settings, "kill_switch_clear", f"{prev['state']} -> {state} by {by}: {reason}", urgent=False)
-    return {"ok": True, **row}
+    return {"ok": True, **row, "rearm": json.loads(stored)}
 
 
 def _fresh_passes(j, now: float | None) -> int:
@@ -166,8 +182,10 @@ async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, A
     if _fresh_passes(j, now) < AUTO_CLEAR_CHECKS:
         return None
     age = heartbeat_age(j, now) or 0.0
-    back = max(reversed([st.get("prev_row") or {"state": ACTIVE}, *st.get("since", [])]),
-               key=lambda r: LEVEL.get(r.get("state"), 0))
+    since = st.get("since") or []
+    rows = [r if isinstance(r, dict) and r.get("state") in LEVEL else _unreadable(r, "the state before the halt")
+            for r in (st.get("prev_row"), *(since if isinstance(since, list) else [since]))]
+    back = max(reversed(rows), key=lambda r: LEVEL[r["state"]])
     if back["state"] == ACTIVE:
         new = {"state": ACTIVE, "by": "guardian watchdog", "at": _now_iso(), "cause": "auto_clear",
                "reason": f"guardian heartbeat fresh again ({age:.0f} s) after the stale-heartbeat halt"}
@@ -255,27 +273,50 @@ def effective_limits(settings, j):
     return p.effective(), src
 
 
-async def trip_on_daily_loss(j, settings, equity: float, day_pnl: float) -> dict[str, Any] | None:
-    """Day P&L (realized since 00:00 UTC + all unrealized) against START-of-day equity, as governor.daily_cap."""
+async def _loss_trip(j, settings, cond: str, loss_pct: float, limit: float, src: str, why: str, evidence: dict,
+                     now: datetime | None) -> dict[str, Any] | None:
+    """Trip REDUCING once `loss_pct` reaches the limit, or while a human clear holds `cond`, its re-arm point."""
+    loss_pct = round(loss_pct, 4)
+    try:
+        rearm.observe(j, cond, loss_pct, limit, now)
+        at, hold = rearm.trip_at(j, cond, loss_pct, limit, now)
+    except Exception:  # noqa: BLE001 - a broken hold never stops a trip
+        log.exception("kill-switch hold for %s unreadable: plain limit", cond)
+        at, hold = limit, None
+    if loss_pct < at:
+        return None
+    if hold:
+        why += (f"; past the {hold['rearm_at_pct']:.2f}% re-arm of the clear at {hold['baseline_pct']:.2f}% "
+                f"by {hold.get('cleared_by')}")
+    return await trip(j, settings, REDUCING, "guardian", why, {**evidence, "limit_pct": limit, "limit_source": src,
+                      "rearm": hold}, cause=cond)
+
+
+async def trip_on_daily_loss(j, settings, equity: float, day_pnl: float, marks: dict | None = None,
+                             now: datetime | None = None) -> dict[str, Any] | None:
+    """Day P&L against START-of-day equity, as governor.daily_cap. The guardian passes the equity-mark day P&L
+    (equity_marks.py: a loss carried over midnight isn't today's; a late or degraded mark keeps the old, worse one);
+    `marks` is recorded as evidence."""
     lim, src = effective_limits(settings, j)
     start = equity - day_pnl
     day_pct = day_pnl / start * 100 if start > 0 else 0.0
-    if not equity or day_pct > -lim.daily_loss_limit_pct:
+    if not equity:
         return None
-    return await trip(j, settings, REDUCING, "guardian", f"daily loss {day_pct:+.2f}% hit the "
-                      f"-{lim.daily_loss_limit_pct}% limit ({src})", {"equity": equity, "day_pnl": day_pnl,
-                      "limit_pct": lim.daily_loss_limit_pct, "limit_source": src}, cause="daily_loss")
+    return await _loss_trip(j, settings, rearm.DAILY, -day_pct, lim.daily_loss_limit_pct, src,
+                            f"daily loss {day_pct:+.2f}% hit the -{lim.daily_loss_limit_pct}% limit ({src})",
+                            {"equity": equity, "day_pnl": day_pnl, **(marks or {})}, now)
 
 
-async def trip_on_drawdown(j, settings, drawdown_pct: float | None) -> dict[str, Any] | None:
-    """The governor's dd_stop ('halt until a human review') made sticky: the clear is the review."""
+async def trip_on_drawdown(j, settings, drawdown_pct: float | None,
+                           now: datetime | None = None) -> dict[str, Any] | None:
+    """The governor's dd_stop ('halt until a human review') made sticky: the clear is the review. Drawdown is from
+    the transfer-adjusted peak (equity_marks.py; `shortbot-admin equity-peak reset` moves it to today's equity)."""
     lim, src = effective_limits(settings, j)
-    if drawdown_pct is None or drawdown_pct < lim.dd_stop_pct:
+    if drawdown_pct is None:
         return None
-    return await trip(j, settings, REDUCING, "guardian", f"drawdown {drawdown_pct:.1f}% >= dd_stop "
-                      f"{lim.dd_stop_pct}% ({src}): review before any new trade",
-                      {"drawdown_pct": drawdown_pct, "limit_pct": lim.dd_stop_pct, "limit_source": src},
-                      cause="drawdown")
+    return await _loss_trip(j, settings, rearm.DRAWDOWN, drawdown_pct, lim.dd_stop_pct, src,
+                            f"drawdown {drawdown_pct:.1f}% >= dd_stop {lim.dd_stop_pct}% ({src}): review before any "
+                            "new trade", {"drawdown_pct": drawdown_pct}, now)
 
 
 # ------------------------------------------------------------ visibility
@@ -286,7 +327,7 @@ def status(j, now: float | None = None) -> dict[str, Any]:
             "guardian_heartbeat_age_s": None if age is None else round(age),
             "guardian_alive": age is not None and age <= STALE_HEARTBEAT_S,
             "allowed": "everything (risk checks still apply)" if st["state"] == ACTIVE else ALLOWED,
-            "clear": how_to_clear(st)}
+            "clear": how_to_clear(st), "rearm": rearm.holding(j)}
 
 
 def brief_line(j, now: float | None = None) -> str:

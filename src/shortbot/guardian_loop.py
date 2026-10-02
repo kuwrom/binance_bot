@@ -177,10 +177,11 @@ async def supervised(name: str, run: Callable[[], Awaitable[Any]], notifier, res
         await asyncio.sleep(restart_s)
 
 
-async def guarded(name: str, coro: Awaitable[Any], notifier) -> None:
-    """A one-shot background coroutine whose exception is logged and alerted instead of lost with the task."""
+async def guarded(name: str, coro: Awaitable[Any], notifier) -> Any:
+    """A one-shot background coroutine whose exception is logged and alerted instead of lost with the task. Returns
+    its result, or None when it failed."""
     try:
-        await coro
+        return await coro
     except Exception as e:  # noqa: BLE001
         log.exception("%s failed", name)
         await send_safe(notifier, f"guardian_error:{name}", f"{type(e).__name__}: {e}", cooldown_s=ERROR_COOLDOWN_S)

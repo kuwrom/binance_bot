@@ -1,18 +1,15 @@
-"""Kill switch: the persisted state, the gate on every opening path, and the human-only clear (shortbot-admin)."""
+"""Kill switch: the persisted state (an unreadable one fails closed everywhere), the gate on every opening path, and
+the clear (the shortbot-admin side: test_admin.py)."""
 
-import io
 import json
-import re
 import time
-from types import SimpleNamespace
 
 import pytest
 
-from shortbot import admin
 from shortbot import killswitch as ks
 from shortbot.entries import EntryDesk
 from shortbot.journal import Journal
-from shortbot.killswitch import ACTIVE, HALTED, REDUCING
+from shortbot.killswitch import ACTIVE, HALTED, REDUCING, STALE
 from shortbot.positioning import PositionOps
 from shortbot.trading import Trader
 from tests.fakes import SYM, FakeCcxt, FakeEx, neutral_budget, ok_prechecks
@@ -75,8 +72,36 @@ async def test_an_unreadable_row_fails_closed_and_the_next_trip_repairs_it():
     j = Journal(":memory:")
     j.set(ks.KV_KEY, "garbage")
     assert ks.read(j)["state"] == REDUCING
-    assert (await ks.trip(j, SETTINGS, REDUCING, "guardian", "x"))["changed"]
-    assert ks.read(j)["reason"] == "x"
+    r = await ks.trip(j, SETTINGS, REDUCING, "guardian", "x")
+    assert r["changed"] and r["prev"] == REDUCING and ks.read(j)["reason"] == "x"
+
+
+async def stale_passes(j, now):
+    for age in (5, 1):   # two distinct fresh guardian passes
+        j.set(ks.HEARTBEAT_KEY, str(now - age))
+        await ks.auto_clear_stale(j, SETTINGS, now)
+
+
+async def test_a_stale_halt_over_an_unreadable_row_lifts_back_to_reducing_not_active():
+    now, j = time.time(), Journal(":memory:")
+    j.set(ks.KV_KEY, "garbage")
+    r = await ks.trip(j, SETTINGS, HALTED, "session watchdog", "stale", cause=STALE)
+    assert r["prev"] == REDUCING and r["prev_row"]["state"] == REDUCING
+    await stale_passes(j, now)
+    st = ks.read(j)
+    assert st["state"] == REDUCING and st["cause"] == "unreadable" and st["restored_at"]
+
+
+@pytest.mark.parametrize("prev_row", [None, {"state": "BOGUS"}, "junk"])
+async def test_a_stale_halt_with_no_readable_prior_state_lifts_to_reducing(prev_row):
+    now, j = time.time(), Journal(":memory:")
+    row = {"state": HALTED, "level": 2, "by": "session watchdog", "reason": "stale", "at": "t", "cause": STALE,
+           "since": [{"state": "NOPE"}]}
+    if prev_row is not None:
+        row["prev_row"] = prev_row
+    j.set(ks.KV_KEY, json.dumps(row))
+    await stale_passes(j, now)
+    assert ks.read(j)["state"] == REDUCING
 
 
 async def test_clear_loosens_and_keeps_what_it_cleared():
@@ -194,55 +219,3 @@ async def test_ladder_opt_in_refused_and_its_add_becomes_a_skip(monkeypatch):
     monkeypatch.setattr(la, "build_ladder", fake_ladder)
     r = await la.apply(t, SYM, dry_run=True)
     assert [a["kind"] for a in r["actions"]] == ["skip_add"] and "REDUCING" in r["actions"][0]["why"]
-
-
-# ------------------------------------------------------------ shortbot-admin (human-only clear)
-class Tty(io.StringIO):
-    """A terminal whose human types `answer`, or reads the code off the screen and types it."""
-    def __init__(self, answer=None):
-        super().__init__()
-        self.answer = answer
-
-    def readline(self, *a):
-        return (self.answer or re.search(r"type (\w{4}) to confirm", self.getvalue()).group(1)) + "\n"
-
-
-def clear_args(to=ACTIVE):
-    return SimpleNamespace(cmd="clear", to=to, reason="reviewed the trip")
-
-
-async def test_admin_clear_needs_a_human_at_a_real_terminal(monkeypatch):
-    j = Journal(":memory:")
-    await ks.trip(j, SETTINGS, HALTED, "guardian", "drawdown")
-    monkeypatch.setenv("CLAUDECODE", "1")
-    assert "Claude Code" in (await admin.run(clear_args(), SETTINGS, j))["error"]
-    monkeypatch.delenv("CLAUDECODE")
-
-    def no_tty():
-        raise OSError(6, "Device not configured")
-    monkeypatch.setattr(admin, "_tty", no_tty)
-    assert "interactive terminal" in (await admin.run(clear_args(), SETTINGS, j))["error"]
-    monkeypatch.setattr(admin, "_tty", lambda: Tty("ABCD"))
-    assert "did not match" in (await admin.run(clear_args(), SETTINGS, j))["error"]
-    assert ks.read(j)["state"] == HALTED
-    monkeypatch.setattr(admin, "_tty", lambda: Tty())
-    r = await admin.run(clear_args(REDUCING), SETTINGS, j)
-    assert r["ok"] and ks.read(j)["state"] == REDUCING and ks.read(j)["by"].startswith("human:")
-    assert "not a loosening" in (await admin.run(clear_args(REDUCING), SETTINGS, j))["error"]
-
-
-async def test_admin_clear_fails_if_a_trip_lands_while_the_human_types(monkeypatch):
-    monkeypatch.delenv("CLAUDECODE", raising=False)
-    j = Journal(":memory:")
-    await ks.trip(j, SETTINGS, REDUCING, "guardian", "daily loss -3.1%", cause="daily_loss")
-
-    class Busy(Tty):   # another process escalates between the prompt and the answer
-        def readline(self, *a):
-            j.set(ks.KV_KEY, json.dumps({"state": HALTED, "by": "agent (MCP)", "reason": "squeeze", "at": "t",
-                                         "cause": "manual"}))
-            return super().readline()
-    monkeypatch.setattr(admin, "_tty", lambda: Busy())
-    r = await admin.run(clear_args(), SETTINGS, j)
-    assert not r["ok"] and "re-run" in r["error"] and ks.read(j)["reason"] == "squeeze"
-    monkeypatch.setattr(admin, "_tty", lambda: Tty())   # the re-run shows (and clears) the new state
-    assert (await admin.run(clear_args(), SETTINGS, j))["ok"] and ks.read(j)["state"] == ACTIVE

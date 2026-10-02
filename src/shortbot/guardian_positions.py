@@ -6,13 +6,14 @@ here."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
 
 from . import indicators as ind
 from . import killswitch as ks
-from . import entry_intents, news, reconcile, stops
+from . import entry_intents, equity_marks, news, reconcile, stops
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -31,6 +32,8 @@ FALLBACK_STOP_PCT = 10.0
 MAX_STOP_RESTORE_FAILS = 3
 UNTRACKED_GRACE_S = 120     # untracked this long (and no limit of ours resting on it) = reconciliation trip
 HALT_SWEEP_TIMEOUT_S = 60   # a hung cancel must not hold up the fill poll behind it
+MARKS_TIMEOUT_S = 30        # the day-P&L income read; on timeout the daily-loss trip uses the old (worse) day P&L
+SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mode_key): the tripwire survives restarts
 
 
 class PositionChecks:
@@ -61,8 +64,6 @@ class PositionChecks:
         if acct["equity"] and acct["day_pnl"] / acct["equity"] * 100 <= -lim.daily_loss_limit_pct:
             await self.n.send("daily_loss_limit", f"Day PnL {acct['day_pnl']} USDT. New shorts are blocked until "
                               "00:00 UTC. Review open positions.", urgent=True, cooldown_s=6 * 3600)
-        await guarded("kill_switch", ks.trip_on_daily_loss(self.j, self.app.settings, acct["equity"],
-                                                           acct["day_pnl"]), self.n)   # effective limit, sticky
         held = await tr.positions()
         for p in held:
             sym = p["symbol"]
@@ -79,6 +80,22 @@ class PositionChecks:
                                     f"failures ({r[1] / 60:.0f} min)", sym, cooldown_s=0)
         self.pos_streak.forget(set(self.pos_streak.fails) - {p["symbol"] for p in held})   # closed meanwhile
         self.untracked_since = {s: t for s, t in self.untracked_since.items() if s in {p["symbol"] for p in held}}
+        day_pnl, marks = await self._marks_day_pnl(acct)   # after the stops: it reads income
+        await guarded("kill_switch", ks.trip_on_daily_loss(self.j, self.app.settings, acct["equity"], day_pnl, marks),
+                      self.n)   # effective limit, sticky; a human clear holds it (killswitch_rearm.py)
+
+    async def _marks_day_pnl(self, acct: dict) -> tuple[float, dict]:
+        """(day P&L from the equity marks, evidence) (equity_marks.py: a loss carried over midnight isn't today's).
+        One income read per pass, after the position checks so it never delays a stop. Late, degraded or timed out:
+        the old day P&L, which never misses a loss. Never raises.
+        TODO(#9 follow-up): drop this read once trading.account() returns the mark-based day P&L."""
+        old = acct["day_pnl"]
+        try:
+            per = await asyncio.wait_for(equity_marks.gather(self.app.trader.t, self.j, acct["equity"], old, old),
+                                         MARKS_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 (incl. TimeoutError) - conservative fallback
+            per = {"day_pnl": old, "late": {}, "degraded": True}
+        return per["day_pnl"], {"old_day_pnl": old, "late": per.get("late", {}), "degraded": per.get("degraded", False)}
 
     async def _position_failed(self, sym: str, e: Exception) -> None:
         """One symbol's failure stays out of the pass result, but a streak of them escalates (ONDO, -1021)."""
@@ -261,25 +278,36 @@ class PositionChecks:
     async def _kill_watch(self) -> str | None:
         """Each 5 s tick: lift a stale-heartbeat halt once protection works again (this guardian's own heartbeat),
         and announce every loosening. That is the tripwire: a clear that bypassed shortbot-admin still reaches the
-        human. Returns the state, or None if it can't be read (the fill poll runs regardless)."""
+        human, also one made while the guardian was down (the last state seen is kept in kv). Returns the state, or
+        None if it can't be read (the fill poll runs regardless)."""
         try:
             await ks.auto_clear_stale(self.j, self.app.settings)
-            st, seen = ks.read(self.j), self.kill_seen
+            st, started = ks.read(self.j), self.kill_seen is None
+            seen = self._last_seen() if started else self.kill_seen
             self.kill_seen = st
-            if seen is None and st["state"] != ACTIVE:
-                await send_safe(self.n, "kill_switch_state", f"guardian started with the kill switch {st['state']} "
-                                f"since {st.get('at')} ({st.get('by')}: {st.get('reason')})", cooldown_s=0)
-            elif seen and st["level"] < seen["level"]:
+            if (seen or {}).get("state") != st["state"] or (seen or {}).get("at") != st.get("at"):
+                self.j.set(self.j.mode_key(SEEN_KEY),
+                           json.dumps({k: st.get(k) for k in ("state", "by", "reason", "at", "cause")}))
+            if seen and st["level"] < seen["level"]:
                 sanctioned = (st.get("cause") == "auto_clear" or bool(st.get("restored_at"))   # stale halt lifted
                               or str(st.get("by")).startswith("human:"))
                 await send_safe(self.n, "kill_switch_loosened", f"{seen['state']} -> {st['state']} by {st.get('by')}: "
-                                f"{st.get('reason')}" + ("" if sanctioned else ". NOT via shortbot-admin: check who "
-                                                         "changed it"), urgent=not sanctioned, cooldown_s=0)
+                                f"{st.get('reason')}" + (" (while the guardian was down)" if started else "")
+                                + ("" if sanctioned else ". NOT via shortbot-admin: check who changed it"),
+                                urgent=not sanctioned, cooldown_s=0)
+            elif started and st["state"] != ACTIVE:
+                await send_safe(self.n, "kill_switch_state", f"guardian started with the kill switch {st['state']} "
+                                f"since {st.get('at')} ({st.get('by')}: {st.get('reason')})", cooldown_s=0)
             return st["state"]
         except Exception as e:  # noqa: BLE001 - never fail the protective pass (it would stall the heartbeat)
             log.exception("kill-switch watch failed")
             await send_safe(self.n, "guardian_error:kill_switch", f"{type(e).__name__}: {e}", cooldown_s=1800)
             return None
+
+    def _last_seen(self) -> dict | None:
+        """The state the previous guardian run last saw; unreadable = never seen."""
+        st = ks._parse(self.j.get(self.j.mode_key(SEEN_KEY)))
+        return {**st, "level": ks.LEVEL[st["state"]]} if st else None
 
     async def _halt_sweep(self) -> None:
         try:
