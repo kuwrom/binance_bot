@@ -43,15 +43,24 @@ ALIASES = {"BTC": ["Bitcoin"], "ETH": ["Ethereum", "Ether"], "SOL": ["Solana"], 
            "ARB": ["Arbitrum"], "OP": ["Optimism"], "INJ": ["Injective"], "TIA": ["Celestia"], "SEI": ["Sei Network"]}
 _MULTIPLIER = re.compile(r"^(1000000|100000|10000|1000|1M)(?=[A-Z])")
 _cache: dict[str, tuple[float, Any]] = {}
+_locks: dict[tuple[str, int], asyncio.Lock] = {}
+LISTING_TTL, LISTING_PAGES = 6 * 3600, 2
 
 
 async def _cached(key: str, ttl: float, fn):
     hit = _cache.get(key)
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
-    val = await fn()
-    _cache[key] = (time.time(), val)
-    return val
+    # one fetch per key at a time: a scan's ~25 coin contexts arriving together share it (no stampede);
+    # locks are per event loop so separate loops (tests, CLI runs) never share one
+    lock = _locks.setdefault((key, id(asyncio.get_running_loop())), asyncio.Lock())
+    async with lock:
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        val = await fn()
+        _cache[key] = (time.time(), val)
+        return val
 
 
 def normalize_base(base: str) -> str:
@@ -91,6 +100,23 @@ async def binance_announcements(per_catalog: int = 15) -> list[dict]:
                                     "url": ANNOUNCE_URL.format(code=a["code"])})
         return sorted(out, key=lambda x: x["time"], reverse=True)
     return await _cached("ann", 120, fetch)
+
+
+async def listing_announcements(pages: int = LISTING_PAGES) -> list[dict]:
+    """The new-listing catalog, deeper than binance_announcements (pages x 50 items, about 1-2 months), cached 6h:
+    the source of a listing (HODLer airdrop, Launchpool, Seed tag, futures-only...) for signals/supply.py."""
+    async def fetch():
+        out: list[dict] = []
+        async with httpx.AsyncClient(headers=UA, timeout=15) as c:
+            for page in range(1, pages + 1):
+                r = await c.get(CMS_LIST, params={"type": 1, "catalogId": 48, "pageNo": page, "pageSize": 50})
+                r.raise_for_status()
+                for cat in r.json().get("data", {}).get("catalogs", []):
+                    for a in cat.get("articles", []):
+                        out.append({"title": a["title"], "time": _iso(a["releaseDate"] / 1000),
+                                    "url": ANNOUNCE_URL.format(code=a["code"])})
+        return sorted(out, key=lambda x: x["time"], reverse=True)
+    return await _cached("ann_listing", LISTING_TTL, fetch)
 
 
 async def rss_headlines(max_age_h: float = 48) -> list[dict]:

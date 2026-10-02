@@ -148,6 +148,17 @@ class MarketContext:
         from .. import news as _news
         return await self._get(("news",), "news", lambda: _news.news_for(self.base), {})
 
+    async def listing_news(self) -> list[dict]:
+        """New-listing announcements naming this coin (news.listing_announcements, one cached fetch per 6h for
+        every coin). Futures titles name the contract ('XYZUSDT'), so that counts as a mention too."""
+        from .. import news as _news
+
+        async def fetch():
+            raw = f"{_news.normalize_base(self.base)}USDT"
+            return [a for a in await _news.listing_announcements()
+                    if _news.mentions(a["title"], self.base) or raw in a["title"]]
+        return await self._get(("listing_news",), "listing_news", fetch, None) or []
+
     # ---------------------------------------------------------------- tape feeds
     async def flow_candles(self, tf: str = "5m", limit: int = 288) -> list[list[float]]:
         """[ts, o, h, l, c, vol, taker_buy_vol] - CVD / taker imbalance / sweeps with volume."""

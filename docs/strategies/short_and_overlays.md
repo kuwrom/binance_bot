@@ -26,6 +26,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - grade: Practitioner-data
 - risks: overlaps listing_fade; violent squeezes in thin floats; the effect weakened in H2-2025
 - fit: High — a source tag for the listing_fade pipeline, using data we already fetch
+- logged: since 2026-10-02 every scan logs `listing_source` (hodler_airdrop / launchpool / megadrop / alpha / seed_spot / spot / futures_only) for perps listed <= 90 days, via signals/supply.py; zero score impact until research_report shows an effect
 
 ### lowfloat_highfdv_decay_short — Low-float, high-FDV decay
 - direction: short
@@ -37,6 +38,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - grade: Practitioner-data
 - risks: thin float means violent squeezes; overlaps listing_fade and unlock
 - fit: High — a float/FDV ranking feature for listing_fade and unlock candidates
+- logged: since 2026-10-02 every scan logs `float_ratio`, `fdv_usd`, `mcap_usd`, `fdv_mcap` (CoinGecko weekly cache, signals/supply.py); zero score impact
 
 ### upbit_warning_short — Upbit/Bithumb "investment warning" short
 - direction: short
@@ -59,6 +61,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - grade: Working-paper
 - risks: n=49; many hacked tokens have no perp or get halted; reimbursements and bounties cause violent squeezes; funding goes deeply negative
 - fit: Med — rare but large, and our news tools already see it
+- logged: since 2026-10-02 every scan logs `hack_flag` with the matched headline, source, URL, age and a reimbursement flag (signals/hack.py, 72h window); shadow only
 
 ### eth_exchange_inflow_short — ETH exchange inflows, short ETH
 - direction: short

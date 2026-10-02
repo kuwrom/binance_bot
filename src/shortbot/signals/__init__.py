@@ -1,6 +1,7 @@
 """Signal plug-ins. Importing a module registers its signals; list them here so they are always loaded."""
 
-from . import controller, core, depth, events, lifecycle, robust, sector, session, social, tape  # noqa: F401  (importing registers the signals)
+from . import (  # noqa: F401  (importing registers the signals)
+    controller, core, depth, events, hack, lifecycle, robust, sector, session, social, supply, tape)
 from .base import REGISTRY, Evaluation, SignalOut, evaluate, select, signal
 
 __all__ = ["REGISTRY", "Evaluation", "SignalOut", "evaluate", "select", "signal"]
