@@ -85,10 +85,13 @@ Which long strategies the desk follows, and how. Every rule here comes from a pr
 4. **Costs and funding are included.** Longs pay positive funding; the results already net it out.
 
 ## Forward test (fixed now, before the first long)
-- Demo, C size, mechanical, for 12 weeks or until 60 L1 name-weeks and 60 L2 trades, whichever is later.
+- **Shadow from day one** (`long_shadow.py`, docs/LONG_BUILD.md phase 0). Every L1/L2 signal is a shadow trade at the daily close, the backtest's own fill assumption. The test starts 2026-09-01, the first day after the backtest's data; the rules were fixed without seeing any of it.
+- **Demo trades at C size** follow, mechanically, once the long order path exists (phase 2). Shadow and demo results are reported separately. Demo measures what shadow can't: fills, slippage and the guardian's exits.
+- Duration: 12 weeks or until 60 L1 name-weeks and 60 L2 trades (gate-on), whichever is later.
 - **Pass:** forward mean excess > 0, and above the lower end of the backtest's 95% interval scaled to the forward sample (one-sided 5%).
 - **Fail:** two consecutive 4-week blocks below −2× the backtest's per-block standard deviation pause the setup (the setup ladder's halving logic). After that, a retest on new data.
 - Live sizing above C needs the pass plus ≥ 30 trades with a proven edge (the governor's 1.5x rule, applied to longs).
+- **Read the forward numbers through the tail.** With a median trade near −2%, a few weeks will look bad and a few great. The first shadow month (September) had L1 at +10.4% mean / −12.8% median over 15 name-weeks and L2 at −1.7% over 39 trades. That is noise at this n; only the acceptance rules decide.
 
 ## Implications for the short book (hypotheses, not yet tested as shorts)
 - Hourly volume breakouts underperform the same-hour placebo, which is consistent with fading hourly pumps (pump_fade).

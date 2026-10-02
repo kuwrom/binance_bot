@@ -142,13 +142,13 @@ Each test was fixed before its run. "Excess" means against the unconditional ret
 | cycle_low_accumulation | > 20% under the 200DMA, 30d funding < 0, > 40% below the ATH → long | 3 (2021-07, 2022-11, 2026-02) | 90d +35.8% vs +12.6%; 180d +36.3% vs +31.3%. Anecdote |
 | dominance_rotation_long | ETH/BTC above its 50DMA and BTC lagging the alts → top-5 residual-strength alts, 7d | 113 on / 221 off weeks | regime on +1.77%/wk vs off +2.10%: **the regime adds nothing**. The top-5 residual-strength alts beat the basket by +1.1-1.3%/wk in both regimes (residual momentum, long side) |
 
-**Hourly (60 days; t clustered by event hour):**
+**Hourly (60 days; t of the pooled mean, clustered by event hour and by day: #31 re-run 2026-10-02):**
 
 | card | result |
 |---|---|
-| funding_settlement_drift | Into a print with \|funding\| ≥ 0.1%: payer side −0.19%, t −0.72, i.e. no effect. **2h after the print the payer side GAINS +0.29% (t −3.67, 1,046 prints)**: high funding keeps trending past the print, the opposite of the card. Rule: don't short a high-funding coin right after the print |
+| funding_settlement_drift | Prints with \|funding\| ≥ 0.1% (1,046 prints, 3,803 coin-hours). **Into the print the payer side GAINS +0.19% (t −2.69 by hour, −2.71 by day). In the 2h after, it gains +0.29% (t −3.14 / −2.77).** High funding keeps trending through the print, the opposite of the card. Rule: don't short a high-funding coin into or right after the print. (Before #31 the into-print t read −0.72.) |
 | intraday_hour_seasonality | UTC 04 / 11 / 16 / 23 are positive (hour 16 = +21bp, day-clustered t 3.9); the hourly profile correlates 0.48 between halves. About 10-20bp against ~10bp taker round trip, so a timing tweak only |
-| btc_alt_lead_lag | Alts' next hour after a BTC +1% hour: +0.26% (t 1.78, only 20 BTC hours); after a BTC −1% hour: +0.14% (t 0.58). Weak, consistent with the existing veto on new shorts in a BTC up-impulse |
+| btc_alt_lead_lag | Alts' next hour after a BTC +1% hour: +0.26% (t 1.78 by hour, 2.11 by day; only 20 BTC hours); after a BTC −1% hour: +0.14% (t 0.58). Weak, consistent with the existing veto on new shorts in a BTC up-impulse |
 
 **Not testable with our data:** etf_flow_follow, cme_gap_fill, usdt/eth_exchange_inflow, upbit_warning_short, buyback_burn_long, liquidation_magnet, attention/adoption. Each needs an external feed we don't record.
 
