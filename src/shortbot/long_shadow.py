@@ -193,6 +193,27 @@ def _meta(db: sqlite3.Connection, key: str) -> str | None:
     return r[0] if r else None
 
 
+SETTLE_MS = 10 * 60_000   # Binance finalises the daily bar shortly after 00:00 UTC; wait 10 minutes
+
+
+def due(now_ms: int, path: Path | str | None = None) -> bool:
+    """A new daily bar has closed (and settled) since the last run: the cheap check the guardian polls."""
+    today = now_ms // DAY * DAY
+    if now_ms < today + SETTLE_MS:
+        return False
+    p = Path(path or db_path())
+    if not p.exists():
+        return True
+    db = sqlite3.connect(str(p), timeout=15)
+    try:
+        last = _meta(db, "last_day")
+    except sqlite3.Error:
+        return True
+    finally:
+        db.close()
+    return last is None or int(last) < today - DAY
+
+
 async def run(ex, path: Path | str | None = None) -> dict[str, Any]:
     """The daily job: open the signals of every day since the last run, close what is due, return the summary."""
     db = connect(path)

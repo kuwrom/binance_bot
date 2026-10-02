@@ -236,6 +236,13 @@ class MarketJobs:
             except Exception:  # noqa: BLE001 - research logging never blocks the guardian
                 log.exception("ladder %s failed", p["symbol"])
 
+    async def long_shadow(self) -> None:
+        """Phase 0 of the long build (docs/LONG_BUILD.md): the playbook's forward test as shadow trades. No orders.
+        Polled every 15 min; works once per daily close (long_shadow.due)."""
+        from . import long_shadow
+        if long_shadow.due(int(time.time() * 1000)):
+            log.info("long shadow: %s", await long_shadow.run(self.ex))
+
     async def laggard_study(self) -> None:
         """Shadow study (docs/LADDER.md A): log sector-leader breakdowns with their laggards and a random control."""
         from .laggard import detect

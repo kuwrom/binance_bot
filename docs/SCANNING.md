@@ -172,3 +172,10 @@ Replay of the move and volume rules (`scan_triggers.py`) on real 15m bars from `
 - Fat tails make |z| ≥ 2 rarer than the Gaussian 4.6% (1.5% for 1h moves): σ is inflated by the outliers.
 - **Persistence:** 84% of 4h-move triggers and 60% of 1h-move triggers also fired the window before. `select(recent=...)` therefore skips a coin re-triggering with no new rule within RESCORE_S (1 h).
 - Funding/premium deciles, liquidation bursts and the lower-high rule aren't replayed yet (no stored 15m premium history); their counts get logged live from day one.
+
+## Tier-2 order book: depth stays at limit 500 (measured 2026-10-02)
+The depth signal (`signals/depth.py`) sums the book within ±1% of mid. A 500-level book costs 10 weight; 100 levels cost 5. Of the ~29 weight a deep score costs (binance-bot-99's #72 measurement), 10 is the book.
+- Live books for 57 coins, limit 500 against its first 100 levels: the first 100 levels miss part of the ±1% band on **10 of the 15 top-volume coins**, capturing BTC 13%, ETH 12%, HYPE 7%, ENA 32%.
+- They also miss on 6 of 15 coins ranked 60-75, 2 of 15 ranked 150-165, and **4 of today's 15 biggest movers** (MOVR 21%, ZRO 33%, MAGMA 51%).
+- The movers are what tier 2 scores, so limit 100 would bias the depth feature research_report tests against squeezes.
+- A fetch-100-then-500 fallback would save about 2 weight per coin (~8%). Not worth the code at ~1.7% of the budget.

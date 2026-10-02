@@ -113,3 +113,16 @@ def test_job_runs_on_a_fake_exchange(tmp_path, monkeypatch):
     assert all(c["interval"] == "1d" and c["limit"] == S.HISTORY_D + 5 for c in ex.public.calls)   # 4 catch-up days + the forming bar
     again = asyncio.run(S.run(ex, tmp_path / "s.db"))
     assert again["opened"] == 0 and again["signals"] == []                # same day: nothing new
+
+
+def test_due_once_per_settled_daily_close(tmp_path):
+    path = tmp_path / "s.db"
+    day = DS + DAY                                                        # a UTC midnight
+    assert not S.due(day + 5 * 60_000, path)                              # the bar hasn't settled yet
+    assert S.due(day + S.SETTLE_MS, path)                                 # no store yet: due
+    db = S.connect(path)
+    with db:
+        db.execute("INSERT INTO meta VALUES ('last_day', ?)", (str(day - DAY),))   # yesterday's bar evaluated
+    db.close()
+    assert not S.due(day + 3_600_000, path)
+    assert S.due(day + DAY + S.SETTLE_MS, path)                           # the next close
