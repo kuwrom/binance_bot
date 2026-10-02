@@ -195,6 +195,18 @@ Pooled long trades: +0.01R. Same-coin placebo: +0.02R. Same-hour placebo: +0.00R
 - Shadow-log the long side of premium_discount, the only variant worth it.
 - Retest all four on a new window before any long is considered.
 
+### Round 2 (task #32, `strategies_long2.py`, `run --days60 --long2`)
+Hourly versions of the two daily long edges (docs/REGIME_STUDIES.md §5): 6 pre-registered trials, effective N 3.
+
+| strategy (picked on IS) | n | avg R | OOS R | vs same-hour placebo, paired (t_day) | stress R | verdict |
+|---|---|---|---|---|---|---|
+| breakout_continuation (168h high, 3× volume, 72h) | 748 | +0.04 | −0.00 | −0.07 (−1.4); the 72h-high variants −0.08/−0.09 (t −2.1) | −0.00 | fails |
+| rs_leader_pullback (top 10 by 168h residual, EMA20 dip) | 327 | +0.01 | −0.03 | −0.02 (−0.2) | −0.03 | fails |
+
+**Read:**
+- Buying hourly volume breakouts is *worse* than buying a random coin in the same hour, which fits the short book's pump fades.
+- The daily edges don't survive translation to hourly triggers. Longs act on daily closes only (docs/LONG_PLAYBOOK.md).
+
 ## Positioning cards (research, 2026-10-02, task #16)
 `run --days60 --flow` runs five pre-registered strategies from the library (`strategies_flow.py`: 10 param sets, effective N 7). They use the hourly OI, long/short ratios and taker ratio from data.binance.vision metrics.
 

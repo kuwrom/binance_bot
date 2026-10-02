@@ -152,10 +152,46 @@ Each test was fixed before its run. "Excess" means against the unconditional ret
 
 **Not testable with our data:** etf_flow_follow, cme_gap_fill, usdt/eth_exchange_inflow, upbit_warning_short, buyback_burn_long, liquidation_magnet, attention/adoption. Each needs an external feed we don't record.
 
+## 5. The long-side battery (task #32, `backtest/long_studies.py`, `long_stats.py`)
+**Question:** which long strategies could the desk follow? 19 pre-registered trials (rules in the module docstring), daily 2020-2026.
+- Universe: point-in-time top 50 perps by 30-day volume.
+- Every trade nets 10 bp and funding. Excess is measured against the equal-weight universe over the same days.
+- t is clustered two ways, by entry time block (≥ the hold) and by coin.
+- Tail diagnostics and a 4-week block bootstrap were added after the first run; same variants.
+
+| study | variant | n | excess | t (2-way) | bootstrap 95% CI | median | top 5% share | verdict |
+|---|---|---|---|---|---|---|---|---|
+| residual momentum, top 5 of 30, 7d | lb28 | 1,658 | **+1.76%** | 2.40 | [+0.57, +3.20]% | −2.4% | 2.35 | **edge (tail)** |
+| | lb7 / lb14 | 1,658 / 1,659 | +1.54% / +1.54% | 2.20 / 2.15 | [+0.54, +2.67]% / [+0.54, +2.65]% | −2.3% / −2.4% | 2.5 | same |
+| 20d breakout | hold 5d | 2,007 | **+1.54%** | 2.18 | [+0.28, +2.99]% | −2.2% | 2.70 | **edge (tail)** |
+| | hold 10d / 20d | 2,002 / 1,980 | +0.80% / +0.86% | 1.09 / 0.93 | include 0 | −3.3% / −4.3% | 5.7 / 7.1 | decays |
+| | chandelier 3×ATR | 1,984 | +0.71% | 0.71 | includes 0 | −4.9% | 9.2 | worse |
+| alt negative funding z ≤ −1.5 | | 4,338 | +0.15% | 0.57 | [−0.31, +0.64]% | −0.6% | 13 | null |
+| coin-specific capitulation | hold 3 / 7 / 14d | 423 / 422 / 417 | −0.9% / −1.1% / −1.9% | −0.9 / −0.9 / −1.0 | include 0 | −2.2 / −3.0 / −5.7% | n/a | loses |
+
+**Splits by the gate (BTC 60d return > 0):**
+- Breakout 5d: gate-on +1.81% (t 2.0), gate-off +0.94% (t 0.9).
+- Residual momentum lb28: gate-on +1.38% (t 1.4), gate-off +2.20% (t 2.1).
+- Capitulation: gate-on −2.8% / −2.1% / −6.4% (t −2.1 / −1.1 / −2.5); gate-off ≈ 0.
+
+**Trend gate (tsmom):**
+- Gating long BTC by its 60-day return keeps the mean (+0.108%/day vs +0.115%) with 55% exposure. Sharpe rises 0.69 → 0.93; max drawdown improves −79% → −61%.
+- On the top-30 basket: Sharpe 0.44 → 0.63, drawdown −92% → −74%.
+- Next-day return on vs off: BTC +0.20% vs +0.01% (t 1.4); basket +0.19% vs 0.00% (t 1.0).
+- Weekly forward basket returns don't differ by gate (t ≈ 0). The gate is mostly a risk cut.
+
+**Conclusions:**
+- Two long edges survive at daily and weekly horizons: residual-strength leaders and 5-day breakouts. Both are stable across halves (2020-22 vs 2023-26 both positive) and positive in 6 of 7 years (2022 ≈ 0).
+- **Both live entirely in the tail.** The median trade loses about 2.2% vs the market, the 5%-trimmed mean is negative, and the top 5% of trades supply 235-270% of the total. Execution must take every signal, size equally and never cap winners.
+- Not deflation-proof against the whole register (N_eff 270: the noise maximum is t ≈ 3.3). They pass within the long family (bootstrap p 0.001-0.008 against about 6 effective long trials).
+- **Buying coin-specific crashes loses**, most in uptrends.
+- The playbook built on this is docs/LONG_PLAYBOOK.md.
+
 ## Rerun
 ```
 .venv/bin/python -m shortbot.backtest.carry_regime --record     # JSON + provenance.json in data/research/<date>-<sha7>/carry_regime/
 .venv/bin/python -m shortbot.backtest.funding_events --record
 .venv/bin/python -m shortbot.backtest.xs_factors --record
 .venv/bin/python -m shortbot.backtest.card_tests            # and --hourly
+.venv/bin/python -m shortbot.backtest.long_studies
 ```

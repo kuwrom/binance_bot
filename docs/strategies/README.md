@@ -37,10 +37,10 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 |---|---|---|---|
 | 1 | high_funding_trend_confirm | short sizing | **tested**: top-quintile aggregate carry = alt shorts -4.4%/7d (t -3.1); cut broad alt short size, never short on funding alone |
 | 2 | liquidation_wick_harvest | short exits | nearly free; monetises 10-Oct-type wicks |
-| 3 | premium_index_reversion (long side) | long | **tested**: the only "promising" long (+0.03R vs placebo, t 2.6; stress < 0): shadow-log it |
+| 3 | beta_hedged_rs_pair, breakout_20d_overlay | long | **tested (daily, 2020-2026)**: RS leaders +1.76%/wk excess (t 2.4), 5-day breakouts +1.54% (t 2.2), both tail-driven (median < 0); hourly versions fail. Playbook L1/L2, demo forward test: docs/LONG_PLAYBOOK.md |
 | 4 | airdrop_hodler_supply_short, lowfloat_highfdv_decay_short, supply_overhang_short | short | ~-70% listing cohort; tags for listing_fade |
-| 5 | tsmom_trend_following | gate / long core | peer-reviewed; "only short downtrends" veto |
-| 6 | long_liq_flush_reclaim_long, oversold_bounce_majors, capitulation_forced_selling_long | long | **tested, fail** in the 60-day window (no edge over same-hour placebos); retest on new data |
+| 5 | tsmom_trend_following | gate / long core | **tested**: BTC 60d > 0 gate keeps the mean, cuts drawdown −79% → −61% (alts −92% → −74%): gate G for every long |
+| 6 | long_liq_flush_reclaim_long, oversold_bounce_majors, capitulation_forced_selling_long | long | **tested, fail**: no edge over same-hour placebos (60 days); daily coin-specific capitulation loses, −2.8% to −6.4% in uptrends (§5) |
 | 7 | carry_momo_breakout_blend | long / both | **tested**: net Sharpe 0.61 (t 1.55), long leg only; CTREND failed to replicate on liquid perps |
 | 8 | hack_exploit_short | short | NY Fed: -27% 24h CAR |
 | 9 | premium_index_reversion, funding_interval_switch | both | same code path as premium_hi / squeeze_exhaustion |
