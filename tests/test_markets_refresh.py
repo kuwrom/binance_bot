@@ -28,7 +28,7 @@ def real_ex(fake: FakeCcxt) -> Exchanges:
 async def started() -> tuple[FakeCcxt, Exchanges]:
     """A long-running process that loaded its markets; then a perp is listed on the exchange."""
     fake = FakeCcxt()
-    fake.markets = {}                                            # a fresh ccxt client: nothing loaded yet
+    fake.markets = None                                          # a fresh ccxt client: markets is None until loaded
     ex = real_ex(fake)
     await ex.trade_markets()
     ex._trade_tried_at -= 600                                    # ... ten minutes ago
@@ -95,7 +95,7 @@ async def test_a_failed_refresh_keeps_the_cache_and_backs_off():
 
 async def test_the_first_load_still_retries_then_raises(monkeypatch):
     fake = FakeCcxt()
-    fake.markets = {}                                            # nothing loaded yet
+    fake.markets = None                                          # nothing loaded yet (a fresh ccxt client)
     ex = real_ex(fake)
 
     async def down(reload=False, params=None):
@@ -151,3 +151,13 @@ async def test_one_symbols_failed_stop_read_never_fails_the_others():
     await g.check_positions()
     assert [fake.algo[i]["symbol"] for i in fake.stops] == [SYM]          # the other symbol still got its stop
     assert ("position_check_error", NEW) in [(a["kind"], a["symbol"]) for a in g.j.alerts(100)]
+
+
+async def test_a_fresh_process_asking_for_a_symbol_loads_markets_first():
+    """A one-shot CLI (move-stop, close) asks for a symbol before anything loaded: ccxt's `markets` is None then.
+    Seen live 2026-10-02 (demo drill #65): `in None` raised TypeError before any order was sent."""
+    fake = FakeCcxt()
+    fake.markets = None
+    ex = real_ex(fake)
+    await ex.trade_markets(SYM)
+    assert fake.markets and SYM in fake.markets

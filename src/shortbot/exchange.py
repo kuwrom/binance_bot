@@ -151,9 +151,11 @@ class Exchanges:
             self._trade_next_load = time.time() + TRADE_MARKETS_TTL
 
     def _trade_markets_due(self, t, symbol: str | None) -> bool:
+        if not t.markets:   # a fresh ccxt client holds None until its first load (a one-shot CLI process)
+            return True
         now = time.time()
         unknown = symbol is not None and to_symbol(symbol) not in t.markets
-        return (not t.markets or now >= self._trade_next_load
+        return (now >= self._trade_next_load
                 or (unknown and now - self._trade_tried_at >= FORCED_RELOAD_MIN_S))
 
     async def _load_trade_markets(self, t) -> None:
