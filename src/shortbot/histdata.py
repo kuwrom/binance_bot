@@ -15,7 +15,6 @@ import argparse
 import asyncio
 import json
 import logging
-import re
 import sqlite3
 import time
 from pathlib import Path
@@ -110,7 +109,9 @@ async def _exchange_info(ex: Exchanges) -> dict[str, dict]:
 
 
 def _is_coin_perp(raw: str, inf: dict | None) -> bool:
-    if not re.fullmatch(r"[A-Z0-9]+USDT", raw) or raw in INDEX_PERPS:
+    """A USDT coin perpetual. Names may be non-ASCII (牛来USDT): only quarterlies (BTCUSDT_261225) and composite
+    indices are excluded by name; exchangeInfo, when it still lists the symbol, decides the rest."""
+    if len(raw) <= 4 or not raw.endswith("USDT") or "_" in raw or raw in INDEX_PERPS:
         return False
     if inf is None:
         return True

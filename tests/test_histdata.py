@@ -1,6 +1,7 @@
 """histdata: parsers on samples copied from real data.binance.vision files, hourly metrics aggregation, file planning,
 S3 listing pagination, the 1000X spot multiplier and the load60 shape."""
 
+import asyncio
 import json
 
 import httpx
@@ -159,3 +160,21 @@ def test_trim_dead_cuts_flat_bars_after_delisting_and_purges_long_dead_coins(tmp
     assert db.execute("SELECT COUNT(*) FROM bars WHERE symbol='AGIXUSDT'").fetchone()[0] == 0
     assert HD.trim_dead(db, "GONEUSDT", None, start) == T0 + 3 * H              # not in exchangeInfo: last trade + 1h
     assert HD.trim_dead(db, "GONEUSDT", {"status": "TRADING"}, start) is None
+
+
+def test_coin_perps_with_non_ascii_names_are_in_the_universe():
+    """Binance lists coin perps named in Chinese (牛来USDT, 我踏马来了USDT...): the live scanner ranks them, so the
+    history must hold them too (task #73; the ASCII-only pattern dropped them from hist.db and daily.db)."""
+    coin = {"contractType": "PERPETUAL", "underlyingType": "COIN", "quoteAsset": "USDT"}
+    assert HD._is_coin_perp("牛来USDT", None) and HD._is_coin_perp("牛来USDT", coin)
+    assert HD._is_coin_perp("1000PEPEUSDT", coin) and HD._is_coin_perp("ETHUSDT", None)
+    assert not HD._is_coin_perp("BTCUSDT_261225", None)                 # quarterly
+    assert not HD._is_coin_perp("BTCDOMUSDT", coin)                     # composite index
+    assert not HD._is_coin_perp("XAUUSDT", {**coin, "underlyingType": "COMMODITY"})
+    assert not HD._is_coin_perp("ETHBTC", None) and not HD._is_coin_perp("USDT", None)
+
+    class F:
+        async def list(self, prefix, marker="", delimiter=None, max_keys=None):
+            return [], [f"{prefix}{r}/" for r in ("牛来USDT", "AAAUSDT", "BTCUSDT_261225")]
+    assert asyncio.run(HD.universe(F(), {"BBBUSDT": {**coin, "status": "TRADING"}})) == [
+        "AAAUSDT", "BBBUSDT", "牛来USDT"]
