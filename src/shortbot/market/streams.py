@@ -32,6 +32,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from .. import clock as market_clock   # market time (a replay pins it)
+
 log = logging.getLogger("shortbot.streams")
 BASE = "wss://fstream.binance.com/market/stream?streams="
 DB_PATH = "data/streams.db"
@@ -269,7 +271,7 @@ def candles(symbol: str, tf: str, n: int, path: str | Path = DB_PATH,
     finally:
         db.close()
     step = TF_MS[tf]
-    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    now = now_ms if now_ms is not None else market_clock.now_ms()
     closed = [r for r in rows if r[6]]
     if not closed or closed[0][0] < now // step * step - 2 * step:   # last closed bar more than 1 bar old
         return None
@@ -287,7 +289,7 @@ def freshness(path: str | Path = DB_PATH, now_ms: int | None = None) -> dict[str
     db = _ro(path)
     if db is None:
         return None
-    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    now = now_ms if now_ms is not None else market_clock.now_ms()
     try:
         return {stream: {"symbols": n, "oldest_s": round((now - lo) / 1000), "newest_s": round((now - hi) / 1000)}
                 for stream, n, lo, hi in db.execute("SELECT stream, COUNT(*), MIN(ts), MAX(ts) FROM fresh "
@@ -303,7 +305,7 @@ def stale(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int
     db = _ro(path)
     if db is None:
         return []
-    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    now = now_ms if now_ms is not None else market_clock.now_ms()
     try:
         return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND ts < ? ORDER BY symbol",
                                          (stream, now - max_age_s * 1000))]
@@ -317,7 +319,7 @@ def latest(kind: str, path: str | Path = DB_PATH, max_age_s: float = 120,
     db = _ro(path)
     if db is None:
         return {}
-    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    now = now_ms if now_ms is not None else market_clock.now_ms()
     try:
         return {s: json.loads(d) for s, d in db.execute("SELECT symbol, data FROM latest WHERE kind=? AND ts >= ?",
                                                         (kind, now - max_age_s * 1000))}
