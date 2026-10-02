@@ -9,8 +9,8 @@ from shortbot.backtest import replay_bars as RB
 from shortbot.backtest.replay_store import Store, daily_from_inputs
 
 MIN, HOUR, DAY = RB.MIN, RB.HOUR, RB.DAY
-T0 = 1_790_208_000_000                                  # 2026-09-25T00:00Z
-T = T0 + 2 * DAY + 14 * HOUR + 36 * MIN + 40_000          # 2026-09-27T14:36:40Z
+T0 = 1_790_208_000_000                                  # 2026-09-24T00:00Z
+T = T0 + 2 * DAY + 14 * HOUR + 36 * MIN + 40_000          # 2026-09-26T14:36:40Z
 END = T0 + 3 * DAY
 
 

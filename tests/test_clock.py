@@ -12,7 +12,7 @@ from shortbot.market.events import EventStore
 from shortbot.market.liquidations import LiquidationStore
 from shortbot.market.social import SocialStore
 
-T = 1_790_000_000_000          # 2026-09-21T13:33:20Z
+T = 1_790_000_000_000          # 2026-09-21T14:13:20Z
 SRC = Path(__file__).resolve().parents[1] / "src" / "shortbot"
 
 

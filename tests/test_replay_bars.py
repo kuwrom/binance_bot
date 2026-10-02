@@ -6,7 +6,7 @@ import pytest
 from shortbot.backtest import replay_bars as RB
 from shortbot.backtest.replay_bars import DAY, HOUR, MIN
 
-T0 = 1_790_208_000_000          # 2026-09-25T00:00Z (day- and hour-aligned)
+T0 = 1_790_208_000_000          # 2026-09-24T00:00Z (day- and hour-aligned)
 
 
 def minute(ts, px, v=10.0, tb=6.0):
