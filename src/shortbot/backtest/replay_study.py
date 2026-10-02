@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -98,9 +97,13 @@ def candidates(db_path: Path) -> list[dict[str, Any]]:
 
 
 def merge(worlds: list[Path], dest: Path) -> Path:
-    """One journal with every worker's candidates (research.report reads a Journal)."""
-    shutil.copyfile(worlds[0], dest)
+    """One journal with every worker's candidates (research.report reads a Journal). The sqlite backup API, not a
+    file copy: a worker's WAL may still hold rows that are not in the main file yet."""
+    W._remove(dest)
+    src = sqlite3.connect(str(worlds[0]))
     db = sqlite3.connect(str(dest))
+    src.backup(db)
+    src.close()
     cols = [r[1] for r in db.execute("PRAGMA table_info(candidates)") if r[1] != "id"]
     for i, w in enumerate(worlds[1:]):
         db.execute(f"ATTACH DATABASE ? AS w{i}", (str(w),))
@@ -162,6 +165,7 @@ def _scan_worker(a: argparse.Namespace) -> int:
     asyncio.run(run_scans(rex, j, part))
     end = W._ms(a.until) + LABEL_AFTER_MS
     print(f"chunk {i}: labelled {asyncio.run(label_all(rex, j, end))}", flush=True)
+    j.db.close()                                   # checkpoints the WAL into the file
     return 0
 
 
