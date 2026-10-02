@@ -33,18 +33,22 @@ from pathlib import Path
 from typing import Any
 
 from .. import provenance as P
+from ..config import RiskLimits
 from .features import Market, features
 from .sim import COSTS, FREE, Costs, simulate
 
 STRESS = Costs(taker_bps=7.5, maker_bps=3.0, slip_k_bps=40.0, stop_overshoot=0.1)   # 1.5x fees, 2x slippage
 from .stats import day_of
-from .strategies import Trial, trials
+from . import strategies as S
+from .strategies import Trial, set_min_vol24, trials
 from .placebo import matched_signals
 from .strategies_more import RANDOM, placebo_signals
 
 H = 3_600_000
 OPEN_KEYED = ("premium",)                                          # keyed by the bar's open time, like the bars
 END_KEYED = ("oi", "ls_top", "ls_top_acct", "ls_global", "taker_ratio")   # keyed by the hour's END
+
+LIVE_FLOOR = RiskLimits().min_quote_volume_24h   # the live code default; .env may override it on the desk
 
 
 def source(days60: bool, db: Path | None = None) -> tuple[Path, list[str] | None]:
@@ -175,7 +179,6 @@ def run_all(m: Market, costs: Costs = COSTS, placebo_per: int = 3, controls: boo
 
 
 def main(argv: list[str] | None = None) -> None:
-    from .report import build, markdown
     ap = argparse.ArgumentParser()
     ap.add_argument("--days60", action="store_true")
     ap.add_argument("--db", type=Path, help="input DB (default: <data dir>/hist.db with --days60, else the journal)")
@@ -196,8 +199,20 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--long2", action="store_true", help="ledger = long sleeve round 2 (strategies_long2; research)")
     ap.add_argument("--trials-asof", type=int, help="read the trial register as of this row id (pins a rerun's N)")
     ap.add_argument("--flow", action="store_true", help="ledger = the positioning cards (strategies_flow; research)")
+    ap.add_argument("--min-vol24", type=float, default=LIVE_FLOOR,
+                    help="tradability floor at the signal, $ 24h quote volume (default: the live floor; 1e6 = rounds 0-4)")
     given = list(sys.argv[1:] if argv is None else argv)
     a = ap.parse_args(given)
+    prev = S.MIN_VOL24
+    set_min_vol24(a.min_vol24)
+    try:
+        _run(a, given)
+    finally:
+        set_min_vol24(prev)          # the floor is module state: never leak a run's floor into the caller
+
+
+def _run(a: argparse.Namespace, given: list[str]) -> None:
+    from .report import build, markdown
     path, tables = source(a.days60, a.db)
     fp = P.fingerprint(path, tables, file_hash=tables is None)
     raw = window(load_coins(a.days60, path), a.t0, a.t1)
@@ -270,8 +285,10 @@ def main(argv: list[str] | None = None) -> None:
 def label(a: argparse.Namespace) -> str:
     """bt60_r3, bt10, bt60_long, bt60_r4_legacy...: the default output dir's name."""
     rnd = next((f"_r{k}" for k in (4, 3, 2, 1) if getattr(a, f"round{k}")), "")
+    floor = getattr(a, "min_vol24", LIVE_FLOOR)
     return (f"bt{60 if a.days60 else 10}{rnd}{'_long' if a.long else ''}{'_long2' if a.long2 else ''}"
-            f"{'_legacy' if 'legacy' in (a.placebo, a.dsr) else ''}")
+            f"{'_legacy' if 'legacy' in (a.placebo, a.dsr) else ''}"
+            f"{'' if floor == LIVE_FLOOR else f'_floor{floor / 1e6:g}m'}")
 
 
 def _iso(ms: int) -> str:

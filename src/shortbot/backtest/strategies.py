@@ -19,7 +19,8 @@ from .features import Coin, Market
 from .sim import Plan
 
 WARMUP = 72                  # bars of history before any entry (72h beta / features)
-MIN_VOL24 = 1e6              # tradability floor at the signal ($ 24h quote volume); liquidity is split in the report
+MIN_VOL24 = 1e6              # tradability floor at the signal ($ 24h quote volume); run.py --min-vol24 sets it (#73)
+LEGACY_MIN_VOL24 = 1e6       # the floor of rounds 0-4
 FADE_TARGETS = ((1.0, 0.5), (2.0, 0.5))   # (R multiple, fraction): half at 1R, rest at 2R
 ASIA_LATE_WKND = ("asia", "late")         # + every *_wknd bucket
 
@@ -71,6 +72,12 @@ def plan(coin: Coin, i: int, stop: float, time_stop: int, targets=None, limit_px
     meta = {"stop_atr": (stop - ref) / a if a else None,
             "targets_r": tuple(((ref - px) / (stop - ref), f) for px, f in tg)}
     return Plan(stop=stop, targets=tg, time_stop=time_stop, meta=meta, **kw)
+
+
+def set_min_vol24(v: float) -> None:
+    """The floor every strategy reads at signal time (the live default is RiskLimits().min_quote_volume_24h)."""
+    global MIN_VOL24
+    MIN_VOL24 = float(v)
 
 
 def tradable(coin: Coin, i: int) -> bool:

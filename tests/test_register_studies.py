@@ -15,7 +15,7 @@ from tests.test_backtest_fixes import _market
 SRC = Path(__file__).resolve().parents[1] / "src" / "shortbot"
 RECORDERS = {"record", "record_backtest", "record_study"}
 # every study entry point: module -> the function that must record its trials
-ENTRY = {"backtest/run.py": "main", "backtest/carry_regime.py": "main", "backtest/funding_events.py": "main",
+ENTRY = {"backtest/run.py": "_run", "backtest/carry_regime.py": "main", "backtest/funding_events.py": "main",
          "backtest/hedge_report.py": "main", "backtest/rungs.py": "main", "backtest/trail5m.py": "main",
          "backtest/xs_factors.py": "main", "backtest/card_tests.py": "main", "backtest/long_studies.py": "main", "lifecycle_report.py": "main",
          "registry.py": "add_trial", "cli.py": "_study"}

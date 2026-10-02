@@ -21,6 +21,7 @@ walk-forward and a multiple-testing haircut. Read-only: it never touches the exc
 **Flags that change results** (defaults are the round-4 corrections; `--placebo=legacy --dsr=legacy` reproduces rounds 0–3 exactly):
 - `--placebo=matched|legacy`: the same-hour placebo drawn from the donor's ATR% decile × 24h-volume bucket at that hour (nearest coins when the cell is empty), entered at the fill bar for resting entries, with the donor's funding budget; or the legacy random-coin draw.
 - `--dsr=clustered|legacy`: effective N (trials whose daily R correlates > 0.7 are one family) and V[SR] across families with n ≥ 100; or raw N and V[SR] over every trial with n ≥ 10.
+- `--min-vol24`: the tradability floor at the signal, $ 24h quote volume. Default the live floor (`RiskLimits().min_quote_volume_24h`, 20M; #73); `--min-vol24 1e6` reproduces rounds 0–4, which ran at $1M. A non-default floor adds `_floor<N>m` to the output dir.
 
 ## Provenance (`provenance.py`)
 
@@ -62,7 +63,7 @@ Every run writes `report.md`, `results.json`, `trades.json` and `provenance.json
 **Rules against fooling ourselves:**
 - Every grid is fixed in `strategies.trials()` before any run. Every param set counts in the ledger, including the ones that produced 0 trades.
 - One open trade per coin per trial. An entry is dropped when its exit window runs past the data, so censored trades never flatter the result.
-- A $1M/24h volume floor applies at the signal. Liquidity is a split, not a filter.
+- A volume floor applies at the signal: $1M in rounds 0–4, the live floor (20M) since #73 (`--min-vol24`). Liquidity is also a split in the report.
 - **Two placebos for every trial, with the donor trade's exits** (stop in ATR, targets in R, same time stop, breakeven, trail and funding budget):
   - (a) the same coin at random hours;
   - (b) the same hour on other coins. This one cancels the market regime. Since round 4 the coins come from the donor's own ATR% decile and 24h-volume bucket at that hour: signal coins are 2–3× as volatile as a random coin, so an unmatched placebo pays about twice the R of the same costs and inflates the net edge. On pump_fade and post_pump_decay that cost gap was nearly all of the legacy edge (see ROUND4).

@@ -20,8 +20,14 @@ from typing import Any
 
 from .features import Coin, Market
 from .sim import H, Plan
-from .strategies import MIN_VOL24, WARMUP, Trial, atr_abs, plan, tradable
+from . import strategies as _S
+from .strategies import WARMUP, Trial, atr_abs, plan, tradable
 
+
+
+def floor() -> float:
+    """strategies.MIN_VOL24 as set now (run.py --min-vol24), not as imported."""
+    return _S.MIN_VOL24
 
 def _cum_qv(m: Market, coin: Coin) -> list[float]:
     key = ("cumqv", coin.symbol)
@@ -64,7 +70,7 @@ def laggard(m: Market, p: dict) -> Iterable[tuple[Coin, int, Plan]]:
         last_ev = -10 ** 15
         for ts in clock[WARMUP:]:
             live = [(c, c.pos[ts]) for c in members if ts in c.pos and c.pos[ts] >= WARMUP]
-            live = [(c, i) for c, i in live if vol24_at(m, c, i) >= MIN_VOL24]
+            live = [(c, i) for c, i in live if vol24_at(m, c, i) >= floor()]
             if len(live) < 4 or ts - last_ev < 4 * H:
                 continue
             lc, li = max(live, key=lambda x: vol24_at(m, x[0], x[1]))
