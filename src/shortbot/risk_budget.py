@@ -10,6 +10,7 @@ current situation, not a fixed number.
 - tilt:     conviction x regime-cell, evidence-gated (tilts.py), capped at max_conviction_mult
 - m_gov:    account breakers (governor.py): halts block, drawdown/loss-streak halve; the risk of a new trade is
             also capped at what is left under today's loss cap, so one stop-out can never breach it
+- m_ladder: the setup's own drawdown ladder (setup_ladder.py, docs/PROPOSALS.md P2): NORMAL 1, HALF 0.5, SHADOW 0
 Conviction "M" (moonshot) ignores the multipliers above: 25% of a ring-fenced bucket (moonshot_bucket_pct of
 equity, minus this quarter's moonshot losses), still under the governor and the heat caps.
 The pure part (`compute_budget`) is unit-tested; `gather_inputs` pulls live data.
@@ -33,6 +34,7 @@ from .signals.core import MAJORS
 from .tilts import cell_mult, conviction_mult, regime_cell
 
 _vol_cache: tuple[float, float, float, list[float]] | None = None  # (ts, vol_now, vol_target, btc daily closes)
+_dup_cache: dict[str, tuple[float, dict[str, float]]] = {}       # setup -> (ts, registry overlaps), 1h
 MOON_SHARE = 0.25
 
 
@@ -60,6 +62,7 @@ class BudgetInputs:
     sector: str | None = None
     pause: list[str] = field(default_factory=list)               # market-map pause (BTC/ETH impulse, squeeze)
     book_rho: float | None = None                                # measured mean pairwise corr (informational)
+    ladder: dict[str, Any] | None = None                         # setup_ladder.status() for the new trade's setup
 
 
 def clip(x: float, lo: float, hi: float) -> float:
@@ -94,6 +97,10 @@ def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, convictio
         reasons += [n for n in (note, cell_note if m_cell != 1.0 else "") if n]
         risk_usd = eq * limits.risk_per_trade_pct * m_dd * m_vol * m_regime * m_corr * tilt * m_gov / 100
 
+    lad = inp.ladder or {}
+    m_ladder = float(lad.get("mult", 1.0))
+    risk_usd *= m_ladder
+    reasons += list(lad.get("reasons") or [])
     # book level (learning #30): resting entries of other symbols can fill, so they are heat too; a new trade gets
     # at most one slot of the cluster budget; a repeated driver is the same bet; no new risk into a market pause
     # while the book already holds several alt shorts
@@ -123,7 +130,7 @@ def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, convictio
         "risk_usd": round(capped, 2), "risk_pct": round(capped / eq * 100, 3) if eq else 0.0,
         "base_pct": limits.risk_per_trade_pct, "drawdown_pct": round(dd, 2), "conviction": eff, "cell": inp.cell,
         "multipliers": {"m_dd": round(m_dd, 3), "m_vol": round(m_vol, 3), "m_regime": m_regime, "m_corr": m_corr,
-                        "tilt": round(tilt, 3), "m_gov": m_gov, "m_div": m_div},
+                        "tilt": round(tilt, 3), "m_gov": m_gov, "m_ladder": m_ladder, "m_div": m_div},
         "slot_cap_usd": round(slot_cap(eq, limits, cl), 2),
         "heat_pct": round(heat / eq * 100, 3) if eq else None,
         "pending_heat_pct": round(sum(inp.pending_risks.values()) / eq * 100, 3) if eq else None,
@@ -220,12 +227,33 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
         b["sector"] = sector_of(b["symbol"])
     syms = sorted({b["symbol"] for b in book} | ({symbol} if symbol else set()))
     rho = await measured_corr(trader.ex.public, syms) if len(syms) >= 2 else None
+    ladder = _ladder(trader.j, setup)
     return BudgetInputs(eq, peak, regime, vnow, tgt, risks, govern(lim, gin), cell,
                         [r["r_multiple"] for r in s_rows],
                         [r["r_multiple"] for r in s_rows if cell and r["regime_cell"] == cell],
                         sum(r["pnl"] for r in rows if r["conviction"] == "M" and r["closed_at"] >= qs),
                         pend, book, setup, sector_of(symbol) if symbol else None,
-                        list((m.get("vetoes") or {}).get("pause") or []), rho)
+                        list((m.get("vetoes") or {}).get("pause") or []), rho, ladder)
+
+
+def _ladder(journal, setup: str | None) -> dict[str, Any] | None:
+    """The setup's ladder, with its epoch = the setup's current registry version and the registry's >= 70% episode
+    overlaps as roll-up candidates. A failure is reported, never silently treated as NORMAL."""
+    if not setup:
+        return None
+    try:
+        from . import registry as R
+        from .setup_ladder import status
+        p = R.latest(journal.db, f"setup.{setup}")
+        hit = _dup_cache.get(setup)
+        if not hit or time.time() - hit[0] > 3600:      # registry.duplicates scans every pattern's episodes
+            dups = {d["id"].split(".", 1)[1]: d.get("overlap", 0.0) for d in R.duplicates(journal.db, f"setup.{setup}")
+                    if str(d.get("id", "")).startswith("setup.")} if p else {}
+            hit = _dup_cache[setup] = (time.time(), dups)
+        dups = hit[1]
+        return status(journal, setup, epoch=(p or {}).get("created_at"), overlaps=dups)
+    except Exception as e:  # noqa: BLE001 - sizing must not crash; the reason says the ladder is unknown
+        return {"state": "UNKNOWN", "mult": 1.0, "reasons": [f"setup ladder unavailable ({type(e).__name__})"]}
 
 
 async def governor_status(trader, regime: str, limits: RiskLimits | None = None) -> dict[str, Any]:

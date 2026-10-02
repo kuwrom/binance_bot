@@ -69,3 +69,19 @@
   - No fresh reading means nothing is held. Every clear replaces the hold; the decision row records it.
   - After a drawdown clear the governor still halts new entries while drawdown ≥ `dd_stop_pct`. To resume, the human resets the peak: `.venv/bin/shortbot-admin equity-peak reset --reason ...` (live equity becomes the peak; tty code; swaps only the peak shown).
 - **Fail closed:** an unreadable state row, or an unreadable state before a stale-heartbeat halt, is REDUCING everywhere, so the auto-clear never restores ACTIVE from it. The guardian keeps the last state it saw in kv, so a loosening while it was down is announced when it starts.
+
+## Setup ladder (2026-10-02; `setup_ladder.py`, spec in [PROPOSALS.md](PROPOSALS.md) P2, learning #43)
+- **What it is:** a per-setup drawdown brake, run like a pod. Its `m_ladder` multiplier sits next to `m_gov` in `risk_budget`.
+- **States:**
+  - NORMAL is 1×.
+  - At `halve`, HALF is 0.5×; it recovers at halve/2.
+  - At `stop`, SHADOW is 0×: no new entries, while scans keep logging.
+- **Drawdown** is measured in net R from the high-water mark since the setup's current registry version.
+- **Thresholds** are the 80% / 95% quantiles of the 100-trade max drawdown of a setup earning +0.10R/trade.
+  - Below 50 trades: the prior table.
+  - From 50 trades: a bootstrap of the setup's own residual R, clamped to [0.75×, 1.5×] of the prior.
+- **Re-enable:**
+  - Re-enable criteria are frozen at the stop (30 shadow episodes on ≥ 10 days, mean > 0, day-clustered t ≥ 1) and evaluated by code, never by the proposing agent.
+  - Live mode also needs a human clear (EU RTS 6 Art. 15(3), FIA 2024 §3.2).
+  - The setup returns at HALF.
+- **Roll-up:** variants with daily-R correlation ≥ 0.5 over ≥ 20 common days, or ≥ 70% registry episode overlap, share the ladder.

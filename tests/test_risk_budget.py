@@ -15,7 +15,7 @@ def b(**kw):
 
 def test_neutral_budget_is_base():
     r = b()
-    assert r["risk_usd"] == 100 and r["multipliers"] == {"m_dd": 1.0, "m_vol": 1.0, "m_regime": 1.0, "m_corr": 1.0, "tilt": 1.0, "m_gov": 1.0, "m_div": 1.0}
+    assert r["risk_usd"] == 100 and r["multipliers"] == {"m_dd": 1.0, "m_vol": 1.0, "m_regime": 1.0, "m_corr": 1.0, "tilt": 1.0, "m_gov": 1.0, "m_ladder": 1.0, "m_div": 1.0}
 
 
 def test_drawdown_scales_down_and_stops_at_max():
