@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-import ccxt.async_support as ccxt
+from .steps import floor_amount
 
 RECENT_CHANGE_S = 300
 SIZE_EVENTS = ("partial_close", "close_incomplete", "tranche_fill", "sibling_fill", "add", "widen_stop",
@@ -33,17 +33,6 @@ def still_due(fraction: float, orig: float, size: float) -> float:
     12.399999999999999 in binary floats, and the step floor would make it 12.3)."""
     d = Decimal(str(orig))
     return float(Decimal(str(fraction)) * d - (d - Decimal(str(size))))
-
-
-def floor_amount(t, symbol: str, x: float) -> float:
-    """x truncated to the symbol's step size; 0.0 below one step (ccxt 4.5.84 base/exchange.py amount_to_precision
-    raises InvalidOrder on a '0' result instead)."""
-    if x <= 0:
-        return 0.0
-    try:
-        return float(t.amount_to_precision(symbol, x))
-    except ccxt.InvalidOrder:
-        return 0.0
 
 
 def recent_change(j, symbol: str, trade: dict | None, now: datetime | None = None) -> dict[str, Any] | None:

@@ -22,6 +22,7 @@ from .entry_intents import HINTS, ON_BOOK, SendUnknown
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .setups import resolve
+from .steps import floor_amount, too_small
 
 MIN_TTL_S = 660
 MAX_TTL_H = 24.0
@@ -162,10 +163,9 @@ class EntryPlacement:
         size_mult = min(size_mult, fm)
         share = float(p.get("risk_share", 1.0))   # a split-entry leg risks its share of ONE budget
         notional = min(budget["risk_usd"] * size_mult * share / dist, lim.max_position_notional * share) * 0.98
-        amount = float(tr.t.amount_to_precision(sym, notional / limit))
-        min_cost = tr.t.market(sym)["limits"]["cost"]["min"] or 0
-        if amount * limit < min_cost:
-            raise ValueError(f"size {amount * limit:.2f} below exchange minimum {min_cost}")
+        amount = floor_amount(tr.t, sym, notional / limit)
+        if small := too_small(tr.t, sym, amount, limit):   # nothing sent (#71)
+            raise ValueError(small)
         lev = int(p.get("leverage") or 3)
         from .risk import est_liquidation_distance_pct
         maint = await tr.ex.maint_margin(sym, amount * limit)   # the symbol's leverage bracket

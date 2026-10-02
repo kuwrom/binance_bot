@@ -21,6 +21,7 @@ from . import indicators as ind
 from .audit import refusals
 from .exchange import to_symbol
 from .risk import AddRequest, RiskViolation, check_add
+from .steps import floor_amount
 
 
 def _r_initial(trade: dict) -> float:
@@ -228,7 +229,7 @@ class PositionOps:
         from .tranches import pending_legs
         if pending_legs(tr.j, symbol):   # the resting leg IS the planned add; both would break the 1R budget
             return {"ok": False, "error": "a split-entry leg is still resting for this symbol: that is the add"}
-        add_qty = float(tr.t.amount_to_precision(symbol, notional / mark))
+        add_qty = floor_amount(tr.t, symbol, notional / mark)   # 0.0 under one step: check_add refuses it (#71)
         new_avg = (entry * qty + mark * add_qty) / (qty + add_qty)
         worst = (new_stop - new_avg) * (qty + add_qty)
         r1 = _r_initial(trade)

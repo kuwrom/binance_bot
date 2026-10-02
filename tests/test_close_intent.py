@@ -30,6 +30,15 @@ def desk(tmp_path):
     return g, session, fake
 
 
+@pytest.fixture
+def market_fallback(monkeypatch):
+    """No target rests at entry (as when its sync there fails, #71), so a crossed target is the guardian's market
+    close: the path these races are about."""
+    async def none(*a, **k):
+        return None
+    monkeypatch.setattr("shortbot.targets_sync.at_entry", none)
+
+
 async def short_with_targets(session):
     r = await session.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100, plan=PLAN)
     assert r["ok"] and r["amount"] == 100, r
@@ -40,6 +49,7 @@ def closes(fake):
     return [o for o in fake.orders if o[0] == "market" and o[1] == "buy"]
 
 
+@pytest.mark.usefixtures("market_fallback")
 async def test_partial_close_right_after_the_guardian_took_the_target_is_refused(tmp_path):
     g, s, fake = desk(tmp_path)
     await short_with_targets(s)
@@ -114,6 +124,7 @@ async def test_the_session_waits_for_the_guardian_then_rechecks(tmp_path):
     assert not r["ok"] and "position is 50" in r["error"] and fake.position == 50 and len(closes(fake)) == 1
 
 
+@pytest.mark.usefixtures("market_fallback")
 async def test_guardian_rechecks_its_plan_under_the_lock(tmp_path):
     """The guardian's snapshot says target 1 is due; while it waits for the lock the session takes T1 by hand. Under
     the lock the guardian re-reads and re-plans: the target is done, nothing more is closed."""
@@ -140,6 +151,7 @@ async def test_guardian_rechecks_its_plan_under_the_lock(tmp_path):
     assert 0.95 in s.j.get_trade(tid)["targets_hit"]
 
 
+@pytest.mark.usefixtures("market_fallback")
 async def test_guardian_skips_a_busy_symbol_and_escalates_only_when_it_stays_busy(tmp_path, monkeypatch):
     g, s, fake = desk(tmp_path)
     await short_with_targets(s)

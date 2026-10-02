@@ -13,6 +13,7 @@ inside the symbol's lock (taken here; reentrant for a caller that holds it, syml
 - settle_flat (guardian, before reconcile): symbols with live target rows but no position: pulled, so the fills that
   closed the trade are journalled as targets before reconcile finalizes it.
 - clear_stale: the re-entry guard. A new short on a symbol cancels any target of another trade first.
+- at_entry: sync right after an entry's stop rests (open_short, a limit-entry fill), never failing the entry (#71).
 - due: the guardian's lock-free check, so its 60 s pass takes the lock only when something is to settle or change.
 Binance behaviour the docs leave open (whether an untriggered bridge or pre-arm takes part in the reduce-only
 competition; what a non-order position cut, e.g. a partial ADL, does to them) is covered by re-listing every pass."""
@@ -27,7 +28,7 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 from . import clientid, targets
-from .close_intent import floor_amount
+from .steps import floor_amount
 from .stops import is_clock_drift
 from .symlock import SymbolBusy
 
@@ -279,6 +280,23 @@ async def after(tr, symbol: str, why: str) -> dict[str, Any]:
         return await sync(tr, symbol, why)
     except Exception as e:  # noqa: BLE001 - targets never cost the change that called this
         log.warning("targets on %s after %s: %s: %s", symbol, why, type(e).__name__, e)
-        await tr.alert("target_sync_error", f"targets not synced after {why} ({type(e).__name__}: {e}); the guardian "
-                       "retries within a minute", symbol, False)
+        try:
+            await tr.alert("target_sync_error", f"targets not synced after {why} ({type(e).__name__}: {e}); the "
+                           "guardian retries within a minute", symbol, False)
+        except Exception:  # noqa: BLE001 - logged above; an alert outage must not cost the change either
+            pass
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def at_entry(tr, symbol: str, why: str) -> dict[str, Any] | None:
+    """A fill's targets right after its stop rests, under the caller's symbol lock (#71): they rest from the entry, not
+    at the guardian's next pass (up to 60 s later). None when the open trade's plan doesn't rest targets (nothing
+    listed). Never raises (after()): the guardian's pass retries a failure."""
+    try:
+        plan = (tr.j.active_trade(symbol) or {}).get("plan") or {}
+    except Exception as e:  # noqa: BLE001 - the entry stands; the guardian's pass reads it again
+        log.warning("targets on %s at %s: %s: %s", symbol, why, type(e).__name__, e)
+        return {"error": f"{type(e).__name__}: {e}"}
+    if not (plan.get("auto") or {}).get("targets"):
+        return None
+    return await after(tr, symbol, why)

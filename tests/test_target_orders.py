@@ -32,6 +32,13 @@ async def desk(tmp_path, plan=PLAN):
     return g, fake, r["trade_id"]
 
 
+def placed_by_the_guardian(monkeypatch):
+    """No target rests at entry (as when its sync there fails, #71): the guardian's pass makes the first placement."""
+    async def none(*a, **k):
+        return None
+    monkeypatch.setattr("shortbot.targets_sync.at_entry", none)
+
+
 def resting(fake):
     return sorted(((o["price"], o["amount"] - o["filled"], o["cid"]) for o in fake.limits.values()
                    if o["status"] == "open" and o["side"] == "buy"), reverse=True)
@@ -150,7 +157,9 @@ async def test_a_restart_adopts_the_book_and_replaces_a_target_it_has_no_row_for
 
 
 async def test_a_lost_answer_is_resolved_by_client_id_never_resent_blind(tmp_path, monkeypatch):
+    placed_by_the_guardian(monkeypatch)
     g, fake, tid = await desk(tmp_path)
+    assert resting(fake) == []
     fake.ack_lost = 1                                           # the first target lands, its answer is lost
     await g.check_positions()
     assert [(p, q) for p, q, _ in resting(fake)] == [(0.95, 50), (0.9, 50)]
@@ -158,6 +167,7 @@ async def test_a_lost_answer_is_resolved_by_client_id_never_resent_blind(tmp_pat
 
 
 async def test_a_send_that_never_landed_waits_out_the_grace_then_is_placed_again(tmp_path, monkeypatch):
+    placed_by_the_guardian(monkeypatch)
     g, fake, tid = await desk(tmp_path)
     fake.ack_lost_unsent = 1                                    # -1007, and it did NOT run
     await g.check_positions()

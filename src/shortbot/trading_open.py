@@ -4,7 +4,8 @@ market SELL that is only kept once its stop is on the exchange.
 The SELL carries a client id journalled in the 'opening' row first (entry_features.client_id, #9). An ambiguous answer
 is settled by that id and the position, never re-sent; one that stays unknown keeps the row 'opening' (a late fill is
 never untracked) and the symbol refuses new entries until reconcile settles it. Once filled, the stop always goes on,
-even if the position can't be read.
+even if the position can't be read; then the plan's resting targets, still under the symbol lock (#71; a failure there
+is alerted and never fails the entry: the guardian's pass retries). A size under one step is refused, nothing sent.
 
 One trade per symbol (#12): no market short beside an order resting on the symbol (ours, of unknown outcome, or one
 the desk didn't place): its fill would join this position as a second trade and every USDT would count twice. It is
@@ -32,6 +33,7 @@ from .plans import build_plan, validate_plan
 from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier,
                    max_notional_for_risk)
 from .setups import resolve
+from .steps import floor_amount, too_small
 
 
 def _reason(x: str | None) -> str | None:
@@ -131,10 +133,9 @@ class OpenFlow:
             errs = validate_plan(tp, price, stop_price)
             if errs:
                 return {"ok": False, "plan_errors": errs}
-            amount = float(self.t.amount_to_precision(symbol, notional / price))
-            min_cost = self.t.market(symbol)["limits"]["cost"]["min"] or 0
-            if amount * price < min_cost:
-                return {"ok": False, "error": f"size {amount * price:.2f} USDT below exchange minimum {min_cost}"}
+            amount = floor_amount(self.t, symbol, notional / price if price else 0)
+            if small := too_small(self.t, symbol, amount, price):   # nothing sent (#71)
+                return {"ok": False, "error": small}
             if blocked := await killswitch.gate(self, "open_short"):   # again: a trip during the checks above
                 return blocked
             async with self.symbol_lock(symbol, f"open short ({setup})"):
@@ -232,6 +233,7 @@ class OpenFlow:
                     "stop_order_id": stop.get("id"), "warnings": warnings}
         self.j.activate_trade(tid, fill, size, round(size * fill, 2))
         fill_quality.record(self, tid, "entry", "market", order, px=fill, qty=size, snap=ref)
+        resting = await targets_sync.at_entry(self, symbol, "entry")   # stop on, trade open; still under its lock
         risk_usdt = size * (stop_price - fill)
         liq = _f((pos or {}).get("liquidationPrice")) or None
         if liq and stop_price >= liq * (1 - lim.liq_buffer_pct / 100):
@@ -245,7 +247,8 @@ class OpenFlow:
         return {"ok": True, "trade_id": tid, "symbol": symbol, "amount": size, "fill": fill, "client_id": cid,
                 "notional": round(size * fill, 2), "auto_sized": sized, "leverage": leverage,
                 "stop": stop_price, "stop_order_id": stop.get("id"), "liquidation": liq,
-                "risk_at_stop_usdt": round(risk_usdt, 2), "warnings": warnings}
+                "risk_at_stop_usdt": round(risk_usdt, 2), "warnings": warnings,
+                **({"resting_targets": resting} if resting is not None else {})}
 
     async def _fill_position(self, symbol: str, tries: int = 4) -> tuple[dict | None, Exception | None]:
         """The position a fill made, read up to `tries` times: (position, None), (None, None) when it reads flat, or

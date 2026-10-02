@@ -18,7 +18,7 @@ Mechanics (Binance USDⓈ-M, verified in docs/ccxt 2026-09):
   resolved by that id, never by resending (entry_intents.py). Such a row ('unknown': no order id, no pre-armed stop)
   is looked up by that id on every 5 s poll and cancelled with its group like any order that may rest (#60)
 - a fill is protected AND journalled inside the symbol lock: a session's close never finds the position without
-  its trade (#60)
+  its trade (#60); its plan's resting targets follow in the same lock (#71, targets_sync.at_entry)
 Every entry row is research data: fill rate, time-to-fill, level type, and unfilled counterfactuals.
 
 This module: entry rows and their lifecycle (fill, expiry, cancel rules). Placement is mixed in from entries_place.py
@@ -257,8 +257,9 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                 await fills.plan_stop(self, e, cps)
                 trades = await fills.history(tr.t, e, o)
                 done = fills.adopt(self, e, o, pos, trades) if pos else None
-                if pos:   # another trade's targets never meet this fill (#65)
+                if pos:   # another trade's targets never meet this fill (#65); its own rest at once (#71)
                     await targets_sync.clear_stale(tr, sym, (self.j.active_trade(sym) or {}).get("id"))
+                    await targets_sync.at_entry(tr, sym, f"entry #{e['id']} filled")
         if rest == "unknown":
             return await self._rest_unknown(e)
         if not pos:   # filled and closed again before this poll (its pre-armed stop): rebuild it from history
