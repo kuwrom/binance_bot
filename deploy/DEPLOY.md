@@ -47,7 +47,11 @@ ssh -i ~/.ssh/<key>.pem ubuntu@<elastic-ip>
 tmux new -A -s desk          # the session survives disconnects
 cd ~/binance_bot && claude   # first run: log in; approve the project's 'shortbot' MCP server
 ```
-Then say "run a trading session". Claude loads the `trading-session` skill. `open_short`, `close_position`, `update_plan` and `set_risk_params` are flagged `requiresUserInteraction`, so Claude Code asks you on **every** call, even in auto or bypass mode. That needs Claude Code v2.1.199 or later; check with `claude --version`. Claude is also denied read and write access to `.env` (`.claude/settings.json`). Shell deny rules are best-effort, so don't give Claude a shell on a box with live keys if you don't trust the session.
+Then say "run a trading session". Claude loads the `trading-session` skill.
+- **Approval prompts.** Nine MCP tools that change money at risk are flagged `requiresUserInteraction`: `open_short`, `propose_entries`, `close_position`, `add_to_winner`, `widen_stop`, `amend_entry`, `update_plan`, `set_risk_params` and `flatten_all`. Claude Code asks you on **every** call, even in auto or bypass mode, and dontAsk mode denies them. That needs Claude Code v2.1.199 or later; check with `claude --version`.
+- **The CLI.** `.claude/settings.json` allowlists `.venv/bin/shortbot *`. The CLI runs the same actions with the same checks and audit trail, and it doesn't ask. Only `update_plan` and `set_risk_params` have no CLI form.
+- **Secrets.** Claude is denied read and write access to `.env` (`.claude/settings.json`). Shell deny rules are best-effort, so don't give Claude a shell on a box with live keys if you don't trust the session.
+- **Kill switch.** Claude may trip it (`halt_trading`, `shortbot kill-switch`), and the guardian trips it on its loss limits. Only you clear it, from your own terminal: `.venv/bin/shortbot-admin clear --reason ...` (docs/RISK_GOVERNANCE.md).
 
 **After a code change** (a merge in the checkout the editable install points at, or `deploy/sync.sh`), the long-lived processes keep running the code they imported at startup, without any fix merged since:
 - restart the guardian (Mac: `pkill -f shortbot-guardian`, then the `nohup` line in section 4; Linux: `docker compose up -d --build`);

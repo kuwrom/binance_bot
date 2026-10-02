@@ -94,6 +94,8 @@ Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill
   - A resting stop past liquidation minus `liq_buffer_pct` is tightened there (`Trader.cap_stop`). This is the cap `ensure_stop` restores at, shared and rounded down to the tick. It tightens only, never loosens, and the journal's plan stop stays. Price already past the cap closes the short, as the restore does. The alert is urgent `plan_stop_unreachable`, once per cooldown.
 
 ## P2. Per-setup drawdown ladder ("pods"): research result (task #21, 2026-10-02)
+**Status:** implemented (`setup_ladder.py`, `m_ladder` in `risk_budget`). The rules as built are in [RISK_GOVERNANCE.md](RISK_GOVERNANCE.md) "Setup ladder".
+
 **Sources:**
 - Literature: scratchpad r7 → summarised here. [V] means read from the source this session.
 - Own numbers: `backtest/drawdown.py` on the selected trades of the 60-day ledger, per-trade R block-bootstrapped with its fat tails and serial correlation.

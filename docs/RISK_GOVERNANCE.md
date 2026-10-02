@@ -88,12 +88,14 @@
   - NORMAL is 1×.
   - At `halve`, HALF is 0.5×; it recovers at halve/2.
   - At `stop`, SHADOW is 0×: no new entries, while scans keep logging.
+  - UNKNOWN (the ladder can't be replayed) fails closed: 0× if the frozen stop record shows an unreleased stop, else 0.5×. It never withdraws resting entries.
 - **Drawdown** is measured in net R from the high-water mark since the setup's current registry version.
+- **State** lives in one journal kv row per setup and mode. A stop survives an epoch reset and a new registry version.
 - **Thresholds** are the 80% / 95% quantiles of the 100-trade max drawdown of a setup earning +0.10R/trade.
   - Below 50 trades: the prior table.
   - From 50 trades: a bootstrap of the setup's own residual R, clamped to [0.75×, 1.5×] of the prior.
 - **Re-enable:**
   - Re-enable criteria are frozen at the stop (30 shadow episodes on ≥ 10 days, mean > 0, day-clustered t ≥ 1) and evaluated by code, never by the proposing agent.
-  - Live mode also needs a human clear (EU RTS 6 Art. 15(3), FIA 2024 §3.2).
+  - A SHADOW setup is re-enabled only by the human, with `.venv/bin/shortbot-admin ladder-clear --setup X --reason ...` in a real terminal, and only once the frozen criteria pass (EU RTS 6 Art. 15(3), FIA 2024 §3.2). `shortbot-admin ladder-status` shows each setup's state and its criteria.
   - The setup returns at HALF.
 - **Roll-up:** variants with daily-R correlation ≥ 0.5 over ≥ 20 common days, or ≥ 70% registry episode overlap, share the ladder.

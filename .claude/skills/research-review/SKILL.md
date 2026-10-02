@@ -17,8 +17,9 @@ The desk learns from three data streams:
    - Which vetoes save us (the vetoed coins squeeze) and which cost us (the vetoed coins dropped anyway)?
    - Which feature tertiles separate winners? These are exploratory (`feature_mining`): confirm on later data.
    - Since 2026-10-01 (`basis`), `n` counts symbol-episodes (rescans of a coin within 24h are one bet), `rows` the raw scan rows and `days` the independent market days. Compare groups by `avg_excess_ret_24h` (vs the median of the same scan) and its `ci95_excess_ret_24h`; `descriptive_only` means fewer than 20 days. Learnings that cite row-based n from before 2026-10-01 overstate their evidence.
-2. `journal`: stats by setup and by experiment. Treat n < 30 as anecdote.
-3. Update learnings (`add_learning` / `update_learning`), citing the numbers and where they came from (`provenance`). Give each a `kind`, and give statistical ones `n`, `days` and `sample`. Work through `research_report.learnings`: `review_due`, `anecdote` (supported/adopted on n < 30), `pre_episodes` (statistics from before 2026-10-01: re-state n on the episode basis) and `?` (inferred) fields. Changing an adopted rule's status is a decision for you or the owner, not for the flag.
+   - `forward`: each registry node's pre-registered forward test. It is the only evidence that promotes a node (docs/REGISTRY.md); everything else above is exploration.
+2. `journal`: stats by setup and by experiment. Treat n < 30 as anecdote. `stats.fill_quality` compares demo fills with the mainnet price at each fill (bps) and with the backtest's slippage model: check it before trusting demo R.
+3. Update learnings (`add_learning` / `update_learning`), citing the numbers and where they came from (`provenance`). Give each a `kind`, and give statistical ones `n`, `days` and `sample`. Work through `research_report.learnings` (the brief's "learnings to re-check" section): `review_due`, `anecdote` (supported/adopted on n < 30), `pre_episodes` (statistics from before 2026-10-01: re-state n on the episode basis) and `?` (inferred) fields. Changing an adopted rule's status is a decision for you or the owner, not for the flag.
 
 ## Ad-hoc questions: code mode
 Use `shortbot.lab` through Bash and print only the conclusion:
@@ -33,7 +34,7 @@ PY
 Also available: `lab.ohlcv`, `lab.oi_history`, `lab.funding_history`, `lab.taker_ratio`, `lab.tickers`, `lab.snapshot`, `lab.metrics` (guardian history), `lab.trades`, `lab.report`, plus the indicators `lab.rsi/ema/atr/vwap_bands`. The module is read-only: no orders.
 
 ## Acting on findings
-Propose changes to the human first. Code changes need tests (`.venv/bin/pytest -q`).
+Settle each change with the data, not by asking the owner which option they prefer: run the study, record it, change it openly, then tell the owner what changed and why. Ask only on a genuine risk-appetite trade-off, with each option quantified. Code changes need tests (`.venv/bin/pytest -q`).
 - **A threshold looks wrong**: open a named experiment with `set_risk_params` (risk limits), or propose a code change to the signal in `signals/*.py` (score points and vetoes).
 - **A new signal**: write one `@signal(...)` function in `src/shortbot/signals/` (data via the MarketContext, which adds a getter in `market/hub.py` if a new feed is needed). Its features are logged and reported automatically. Give it points or vetoes only when the data supports it (`research_report.by_feature_tertile`).
 - **A new tape state**: add one `TapeRule` in `src/shortbot/tape.py`.
