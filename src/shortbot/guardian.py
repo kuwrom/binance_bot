@@ -22,8 +22,10 @@ from .app import close_app, get_app
 from .entries import EntryDesk
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
+from .guardian_margin import MarginChecks
 from .guardian_positions import PositionChecks
 from .guardian_watch import WatchChecks
+from .margin import ADL_PERSIST_PASSES
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
 from .notify import Notifier
@@ -36,14 +38,14 @@ log = logging.getLogger("shortbot.guardian")
 PROTECTIVE = {"entries": (5, 240), "positions": (60, 240), "entry_reconcile": (60, 240)}
 WATCH = {"watch": (60, 240)}   # streaks escalate too (silent squeeze checks matter on a short book); no heartbeat
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
-           "housekeeping": (86400, 240), "processes": (3600, 240)}
+           "housekeeping": (86400, 240), "processes": (3600, 240), "margin_mode": (300, 240)}
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600)}
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
 TICK_S = 1.0
 
 
-class Guardian(PositionChecks, WatchChecks, MarketJobs):
+class Guardian(PositionChecks, WatchChecks, MarginChecks, MarketJobs):
     """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
     the kill-switch loss trips (daily loss, dd_stop) and the governor verdict (its halt withdraws resting entries,
     entry_gates.py) follow an active experiment's limits, the ones the session places and sizes under."""
@@ -59,6 +61,8 @@ class Guardian(PositionChecks, WatchChecks, MarketJobs):
         self.pos_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed checks per symbol
         self.watch_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed watch passes per symbol (#57)
         self.pnl_streak = Streak(ESCALATE_AFTER_FAILS)     # consecutive passes without a day P&L (income unreadable)
+        self.adl_streak = Streak(ADL_PERSIST_PASSES)       # consecutive watch passes in the top ADL quantile (#64)
+        self._adl_logged: dict[str, tuple[int, float]] = {}
         self.pnl_tripped = False                           # this outage already tripped REDUCING (once per outage)
         self.untracked_since: dict[str, float] = {}       # symbol -> first seen without a journal trade
         self.kill_seen: dict | None = None                # last kill-switch state seen (loosening tripwire)
@@ -77,7 +81,7 @@ class Guardian(PositionChecks, WatchChecks, MarketJobs):
                "entry_reconcile": self.reconcile_entries, "watch": self.watch_positions,
                "governor": self.check_governor, "announcements": self.check_announcements,
                "social": self.record_social, "refresh": self.research_refresh, "housekeeping": self.housekeeping,
-               "processes": self.check_processes,
+               "processes": self.check_processes, "margin_mode": self.check_margin_mode,
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
                "ladder": self.ladder_shadow, "laggard": self.laggard_study}
@@ -88,8 +92,8 @@ class Guardian(PositionChecks, WatchChecks, MarketJobs):
                                    escalate_note="Fills and stops are NOT being checked: check positions and stops "
                                                  "on the exchange.", on_pass=self._heartbeat),
                 "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS,
-                              escalate_note="Squeeze, funding and news alerts on open shorts are NOT running: "
-                                            "watch the positions yourself."),
+                              escalate_note="Squeeze, funding, news and ADL alerts on open shorts are NOT "
+                                            "running: watch the positions yourself."),
                 "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH)}
 
     def _heartbeat(self) -> None:

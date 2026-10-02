@@ -11,7 +11,8 @@
   GTD under 10 min (-5040), a client id that an OPEN order already uses (-4116)
 - fault injection: answers lost after the order ran (-1007 / 503), 503 before it ran, -1021 around cancels
 - `fake.prod` is the separate keyless prod client (`ex.public`): its prices can diverge from the demo book
-- fills and income (REALIZED_PNL / COMMISSION) so PnL reconciliation can be tested; userTrades in 7-day windows (fake_engine)"""
+- fills and income (REALIZED_PNL / COMMISSION) so PnL reconciliation can be tested; userTrades in 7-day windows (fake_engine)
+- positions, margin type, Multi-Assets mode, ADL quantile and Binance's own closes (fake_account.py)"""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import ccxt
 
 from shortbot.config import RiskLimits, Settings
 from tests import fake_errors as err
+from tests.fake_account import Account
 from tests.fake_engine import ALGO_STATUS, SYM, Engine, ProdView, raw
 
 STOP_TYPES = ("STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET")
@@ -34,7 +36,7 @@ def _on_tick(px: float, tick: float) -> bool:
     return Decimal(str(px)) % Decimal(str(tick)) == 0
 
 
-class FakeCcxt(Engine):
+class FakeCcxt(Account, Engine):
     def __init__(self, price=1.0, equity=10_000.0, hedged=False):
         self.equity, self.hedged = equity, hedged
         self.sym: dict[str, dict] = {}        # the exchange's listing
@@ -59,6 +61,7 @@ class FakeCcxt(Engine):
         self.ack_lost_503 = 0       # orders that EXECUTE, then answer 503 "Unknown error" (status unknown)
         self.unavailable_503 = 0    # orders refused with 503 "Service Unavailable." (nothing ran)
         self.ack_lost_unsent = 0    # orders that answer -1007 and did NOT run: "unknown" cuts both ways
+        self.multi_assets, self.adl_answer, self.force_orders = False, None, []   # fake_account.py
         self.prod = ProdView(self)
         self.add_symbol(SYM, price)
 
@@ -98,15 +101,6 @@ class FakeCcxt(Engine):
         return {"info": {"totalMarginBalance": str(self.equity), "totalWalletBalance": str(self.equity),
                          "availableBalance": str(round(self.available(), 8))}}
 
-    async def fetch_positions(self):
-        """ccxt 4.5.84 reads GET /fapi/v3/positionRisk (no `leverage`: v3 drops the configuration fields, change
-        log), so `leverage` is None; a market the client hasn't loaded comes keyed by its raw id (safe_market)."""
-        return [{"symbol": s if s in self.markets else raw(s), "contracts": b["qty"], "side": "short",
-                 "entryPrice": b["entry"], "markPrice": b["price"], "notional": -b["qty"] * b["price"],
-                 "leverage": None, "unrealizedPnl": (b["entry"] - b["price"]) * b["qty"],
-                 "liquidationPrice": self.liq_price(s)}
-                for s, b in self.sym.items() if b["qty"]]
-
     async def fetch_position_mode(self, symbol=None):
         return {"hedged": self.hedged}
 
@@ -114,12 +108,6 @@ class FakeCcxt(Engine):
         if hedged == self.hedged:
             raise err.position_mode_already_set()
         self.hedged = hedged
-
-    async def set_margin_mode(self, m, s):
-        if any(o["symbol"] == s and o["status"] == "open" for o in self.limits.values()):
-            raise err.open_orders_block_margin_mode()
-        # ccxt 4.5.84 set_margin_mode() swallows -4046 (MarginModeAlreadySet) and returns this instead
-        return {"code": -4046, "msg": "No need to change margin type."}
 
     async def set_leverage(self, lev, s):
         self._spec(s)["lev"] = lev

@@ -53,18 +53,28 @@ Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill
 
 **Fakes first:** `fake_engine` never fills BUY limits on the way down, and refuses TAKE_PROFIT below price.
 
-### P1b. ADL watch
-- Poll the position ADL quantile (`GET /fapi/v1/adlQuantile`, USER_DATA) every 5 min while a position is open. Poll every 60 s while BTC has moved > 3% in 1h or the liquidation stream bursts.
-- The response format, weight and quantile range must be **verified against the official docs before building**. Web access was exhausted in this session; the endpoint is named in Binance's ADL FAQ.
-- When a short is in the top ADL bucket:
-  - alert `adl_risk` with a suggestion to take a partial profit;
-  - if `plan.auto.adl` is set, close 25-50% so effective leverage falls.
-- Log effective leverage = |notional| / (isolated margin + uPnL) in the guardian marks. It rises as a short wins, which is exactly when ADL ranks it first.
+### P1b. ADL watch: built (#64, `guardian_margin.py`, facts and sources in `margin.py`)
+- **Endpoint** (Binance's SDK carries the doc text; JKorf/Binance.Net #1107 for the shape): `GET /fapi/v1/adlQuantile`, weight 5, values update every 30 s, 0-4 = queue position low to high. One-way Mode answers LONG, SHORT and BOTH (ours: BOTH). Without `symbol` a list (`[]` when flat, demo read 2026-10-02), with one a single object. A populated answer is still unverified on demo: the parser is tolerant, anything unexpected is logged as an ERROR with the raw answer, and the first non-empty answer is kept in kv `adl_sample`.
+- **Cadence:** one read per watch pass (60 s) for every short. At weight 5 a minute, the 5 min / 60 s switching wasn't worth its code.
+- **Alert:** quantile 4 (the top bucket) sends `adl_risk` (routine, 1 h cooldown) with effective leverage and "consider a partial take-profit". 15 passes in a row at 4 send one urgent `adl_risk_persistent`, and its end `adl_risk_cleared`.
+  - Why only the top bucket: ranking = PnL% x effective leverage, so winning shorts sit high as a rule. For a short, ADL is an exit at the bankrupt long's price plus cancelled orders on the symbol: lost upside, not a loss.
+- **Failure:** an answer without a held short's quantile is a watch failure (`position_watch_error`, the watch streak, #57).
+- **Effective leverage** = |notional| / isolatedMargin, logged on a change and every 15 min, beside positionRisk v3's own `adl` field (compare them on demo). Binance's isolatedMargin is already wallet + uPnL, so the earlier "(isolated margin + uPnL)" counted uPnL twice.
+- **Not built:** the `plan.auto.adl` partial close (alert-only by decision).
+- **Exits:** a close Binance made itself is journalled with exit_reason `adl: ...` or `liquidation: ...`. Its exit order is listed by `GET /fapi/v1/forceOrders` (autoCloseType ADL / LIQUIDATION, weight 20).
 
-### P1c. Margin asset, mode and buffer checks
-- **Account:** alert, or trip REDUCING, if multi-assets mode is on (`GET /fapi/v1/multiAssetsMargin`) or any margin balance is held in a non-USDT/USDC asset (USDe, BNSOL, WBETH and the like).
-- **Position:** marginMode must be `isolated`. `_prepare` sets it at entry; re-check it in the resync pass and alert on a mismatch.
-- **Margin buffer:** for each isolated short, keep isolated margin ≥ 2× maintenance margin, and keep the liquidation price ≥ `liq_buffer_pct` beyond the stop. On a breach, alert `margin_thin` with "add margin or reduce". This reuses `liquidationPrice` from positions(). There is no new endpoint unless the maintenance margin rate is needed (leverage brackets).
+### P1c. Margin asset, mode and buffer checks: built (#64)
+- **Account:** the monitor job `margin_mode` (5 min) reads `GET /fapi/v1/multiAssetsMargin` (weight 30). If on, it sends urgent `multi_assets_mode`. Isolated margin is refused under it (-4168), so every entry already fails loudly; no REDUCING trip.
+  - Non-USDT balances in single-asset mode are no margin for USDT perps, so the asset check is per position: `marginAsset` not USDT/USDC sends urgent `margin_asset`.
+- **Position** (protective positions pass, after the stops):
+  - crossed (ccxt: isolatedMargin "0") sends urgent `margin_not_isolated`;
+  - unreadable fields send urgent `margin_check_error`.
+- **`_prepare`:** -4047/-4067 (open orders block the switch; demo answers -4067 whenever an order rests) no longer counts as proof of isolated.
+  - `GET /fapi/v1/symbolConfig` decides: ISOLATED proceeds, CROSSED refuses before any order.
+  - Unreadable: proceeds only when this desk confirmed the symbol isolated within 24 h (kv `isolated_ok:<symbol>`, a split entry's earlier leg), else refuses.
+- **Margin buffer:**
+  - isolatedMargin < 2x maintMargin sends urgent `margin_thin` (alert only; it blocks nothing, see `guardian_margin.py`).
+  - A resting stop past liquidation minus `liq_buffer_pct` is tightened there (`Trader.cap_stop`). This is the cap `ensure_stop` restores at, shared and rounded down to the tick. It tightens only, never loosens, and the journal's plan stop stays. Price already past the cap closes the short, as the restore does. The alert is urgent `plan_stop_unreachable`, once per cooldown.
 
 ## P2. Per-setup drawdown ladder ("pods"): research result (task #21, 2026-10-02)
 **Sources:**

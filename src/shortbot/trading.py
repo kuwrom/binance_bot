@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -26,7 +27,7 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 from . import clientid, equity_marks, reconcile
-from .exchange import Exchanges, to_symbol
+from .exchange import Exchanges, to_raw, to_symbol
 from .journal import Journal
 from .risk import AccountState
 from .stops import STOP_TYPES, is_clock_drift, is_protective_stop  # noqa: F401 (re-export)
@@ -39,6 +40,8 @@ STOP_PARAMS = {"closePosition": True, "workingType": "MARK_PRICE"}
 DEAD = ("canceled", "expired", "rejected")   # final: an order found unfilled in one of these never fills
 Alert = Callable[[str, str, str | None, bool], Awaitable[Any]]
 Prechecks = Callable[[Exchanges, str, dict], Awaitable[dict[str, Any]]]
+ISOLATED_OK_KEY = "isolated_ok:"   # kv (per mode): when this desk last saw the symbol isolated (_prepare)
+ISOLATED_TRUST_S = 86400            # how long that confirmation stands in for an unreadable symbolConfig
 
 
 async def _sleep(seconds: float) -> None:
@@ -203,12 +206,45 @@ class Trader(OpenFlow, ManageFlow):
             self._one_way_ok = True
         try:
             await self.t.set_margin_mode("isolated", symbol)
-        except ccxt.ExchangeError as e:
-            # -4046 already isolated; -4067/-4047 "cannot be changed if there exists open orders": every order we
-            # place went through this call first, so an open order means the symbol is already isolated
-            if not any(c in str(e) for c in ("-4046", "-4047", "-4067", "No need to change margin type")):
-                raise
+            self._isolated(symbol)
+        except ccxt.ExchangeError as e:   # -4046 (ccxt: MarginModeAlreadySet) = isolated already
+            if any(c in str(e) for c in ("-4046", "No need to change margin type")):
+                self._isolated(symbol)
+            elif any(c in str(e) for c in ("-4047", "-4067")):
+                await self._confirm_isolated(symbol, e)
+            else:
+                raise   # incl. -4168: no isolated margin under Multi-Assets mode
         await self.t.set_leverage(leverage, symbol)
+
+    def _isolated(self, symbol: str) -> None:
+        self.j.set(self.j.mode_key(ISOLATED_OK_KEY + symbol), str(time.time()))
+
+    async def _confirm_isolated(self, symbol: str, e: Exception) -> None:
+        """-4047/-4067: open orders block a margin-type change. Demo answers -4067 whenever an order rests, even when
+        nothing would change (MOVR split entry, 2026-10-01), but an order resting on a CROSSED symbol (not ours: ours
+        all went through _prepare) looks the same. GET /fapi/v1/symbolConfig (weight 5) decides: ISOLATED proceeds,
+        anything else refuses before an order is sent. Unreadable: proceeds only when this desk saw the symbol isolated
+        within ISOLATED_TRUST_S (a split entry's earlier leg), else refuses (#64)."""
+        raw = to_raw(symbol)
+        try:
+            rows = await self.t.fapiPrivateGetSymbolConfig({"symbol": raw})
+            row = next((r for r in (rows if isinstance(rows, list) else [rows])
+                        if isinstance(r, dict) and r.get("symbol") == raw and r.get("marginType")), None)
+            why = None if row else f"no marginType for {raw} in {str(rows)[:200]}"
+        except Exception as x:  # noqa: BLE001 - unreadable: the confirmation below decides
+            row, why = None, f"{type(x).__name__}: {x}"
+        if row and str(row["marginType"]).upper() == "ISOLATED":
+            return self._isolated(symbol)
+        if row:
+            raise RuntimeError(f"{symbol} is {row['marginType']} margin and open orders block the switch to isolated "
+                               f"({e}): cancel them (not placed by this desk?) before an entry")
+        seen = _f(self.j.get(self.j.mode_key(ISOLATED_OK_KEY + symbol)))
+        if time.time() - seen < ISOLATED_TRUST_S:
+            log.warning("margin type of %s unreadable (%s) behind open orders: isolated by this desk %.0f min ago, "
+                        "proceeding", symbol, why, (time.time() - seen) / 60)
+            return
+        raise RuntimeError(f"margin type of {symbol} can't be confirmed isolated: open orders block the switch ({e}) "
+                           f"and symbolConfig is unreadable ({why}). No entry")
 
     async def _place_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict:
         """ONE closePosition stop at stop_price, under one client id (clientAlgoId) for all its sends. Returns the stop as

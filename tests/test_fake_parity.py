@@ -279,9 +279,10 @@ async def test_symbols_keep_separate_books():
 async def test_margin_mode_answers_like_ccxt():
     fake = FakeCcxt()
     fake.add_symbol(SYM2, 2.0)
-    assert (await fake.set_margin_mode("isolated", SYM))["code"] == -4046  # ccxt swallows "no need to change"
+    with pytest.raises(ccxt.MarginModeAlreadySet, match="-4046"):            # ccxt 4.5.84 re-raises "no need"
+        await fake.set_margin_mode("isolated", SYM)
     await fake.create_order(SYM2, "limit", "sell", 10, 2.1, gtd())
-    await fake.set_margin_mode("isolated", SYM)                              # another symbol's order: no effect
+    assert (await fake.set_margin_mode("cross", SYM))["code"] == 200        # another symbol's order: no effect
     with pytest.raises(ccxt.OperationRejected, match="-4067"):
         await fake.set_margin_mode("isolated", SYM2)
     with pytest.raises(ccxt.BadSymbol):
@@ -323,3 +324,33 @@ async def test_leverage_brackets_answer_like_the_doc():
         await fake.fapiPrivateGetLeverageBracket({"symbol": "NOPEUSDT"})
     with pytest.raises(ccxt.AuthenticationError):                      # signed: never on the keyless prod client
         await fake.prod.fapiPrivateGetLeverageBracket({"symbol": "PUMPUSDT"})
+
+
+async def test_account_side_answers_like_binance_and_ccxt():
+    fake = FakeCcxt()
+    fake.add_symbol(SYM2, 2.0)
+    assert await fake.fapiPrivateGetAdlQuantile({}) == []                   # flat: demo answers [] (2026-10-02)
+    fake.position, fake.entry, fake.sym[SYM]["adl"] = 100, 1.0, 3
+    (p,) = await fake.fetch_positions()
+    info = p["info"]
+    assert p["marginMode"] == "isolated" and p["notional"] == 100 and p["leverage"] is None
+    assert float(info["isolatedMargin"]) == float(info["isolatedWallet"]) + float(info["unRealizedProfit"])
+    assert float(info["maintMargin"]) == 100 * 0.01 and info["marginAsset"] == "USDT" and info["notional"] == "-100.0"
+    assert await fake.fapiPrivateGetAdlQuantile({}) == [{"symbol": "PUMPUSDT",
+                                                          "adlQuantile": {"LONG": 0, "SHORT": 0, "BOTH": 3}}]
+    assert (await fake.fapiPrivateGetAdlQuantile({"symbol": "PUMPUSDT"}))["adlQuantile"]["BOTH"] == 3   # one object
+    with pytest.raises(ccxt.OperationRejected, match="-4048"):               # a position exists
+        await fake.set_margin_mode("cross", SYM)
+    fake.sym[SYM]["margin"] = "CROSSED"
+    (p,) = await fake.fetch_positions()
+    assert p["marginMode"] == "cross" and p["info"]["isolatedMargin"] == "0"
+    assert [r["marginType"] for r in await fake.fapiPrivateGetSymbolConfig({"symbol": "PUMPUSDT"})] == ["CROSSED"]
+    fake.multi_assets = True
+    assert await fake.fapiPrivateGetMultiAssetsMargin({}) == {"multiAssetsMargin": True}
+    with pytest.raises(ccxt.BadRequest, match="-4168"):
+        await fake.set_margin_mode("isolated", SYM2)
+    fake.sym[SYM]["margin"] = "ISOLATED"
+    i = fake.force_close(SYM, "ADL")
+    (o,) = await fake.fapiPrivateGetForceOrders({"symbol": "PUMPUSDT", "autoCloseType": "ADL"})
+    assert fake.position == 0 and o["orderId"] == int(i) and o["clientOrderId"] == "adl_autoclose"
+    assert await fake.fapiPrivateGetForceOrders({"autoCloseType": "LIQUIDATION"}) == []

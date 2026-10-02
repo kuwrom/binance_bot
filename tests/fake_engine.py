@@ -174,14 +174,24 @@ class Engine:
         if notional / self.sym[s]["lev"] > self.available() + 1e-9:
             raise err.margin_insufficient()
 
+    def bracket(self, s: str, notional: float) -> tuple[float, float]:
+        """(maintMarginRatio, cum) of the leverage bracket holding `notional` on `s`."""
+        row = [r for r in self.brackets.get(s, BRACKETS) if notional >= r["notionalFloor"]][-1]
+        return row["maintMarginRatio"], row["cum"]
+
+    def isolated_wallet(self, s: str) -> float:
+        """The isolated position's wallet: its initial margin Q*EP/leverage plus `wallet_adj` (margin added or removed,
+        funding paid from it; a test sets it). Fees are not modelled."""
+        b = self.sym[s]
+        return b["qty"] * b["entry"] / b["lev"] + b.get("wallet_adj", 0.0)
+
     def liq_price(self, s: str) -> float:
         """The short's isolated liquidation price, Binance's one-way formula with TMM = UPNL = 0 (FAQ "How to Calculate
-        Liquidation Price of USDⓈ-M Futures Contracts"): (WB + cum + Q*EP) / (Q*MMR + Q), WB = the isolated margin
-        Q*EP/leverage (fees and added margin are not modelled), MMR and cum of the bracket holding the notional."""
+        Liquidation Price of USDⓈ-M Futures Contracts"): (WB + cum + Q*EP) / (Q*MMR + Q), WB = the isolated wallet
+        (isolated_wallet), MMR and cum of the bracket holding the notional."""
         b = self.sym[s]
-        n = b["qty"] * b["entry"]
-        row = [r for r in self.brackets.get(s, BRACKETS) if n >= r["notionalFloor"]][-1]
-        return (n / b["lev"] + row["cum"] + n) / (b["qty"] * (1 + row["maintMarginRatio"]))
+        mmr, cum = self.bracket(s, b["qty"] * b["entry"])
+        return (self.isolated_wallet(s) + cum + b["qty"] * b["entry"]) / (b["qty"] * (1 + mmr))
 
     # ------------------------------------------------------------ markets
     async def load_markets(self, reload=False, params=None):

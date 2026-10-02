@@ -19,7 +19,8 @@ URGENT_KINDS = (
     "stop_missing", "stop_restore_failed", "stop_failed", "widen_undone", "position_flip", "bridge_left",
     "bridge_swept", "unexpected_long", "untracked_position", "fill_unresolved", "entry_cancel_failing",
     "zombie_order", "external_order", "daily_loss_limit", "governor_halt", "squeeze_risk", "price_spike",
-    "funding_hourly", "backup_failed",
+    "funding_hourly", "backup_failed", "plan_stop_unreachable", "adl_risk_persistent", "margin_not_isolated",
+    "margin_asset", "margin_thin", "margin_check_error", "multi_assets_mode",
 )
 URGENT_ON_BOOK = ("binance_delisting",)   # urgent when it names a coin on our book (#23: the alert carries its symbol)
 URGENT_CAP = 50

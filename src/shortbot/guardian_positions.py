@@ -36,7 +36,7 @@ SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mod
 
 class PositionChecks:
     """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
-    kill_seen, pnl_streak, pnl_tripped."""
+    kill_seen, pnl_streak, pnl_tripped, and MarginChecks.margin_pass."""
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:
@@ -70,6 +70,7 @@ class PositionChecks:
                 if r:
                     await send_safe(self.n, "guardian_recovered:position", f"position check OK again after {r[0]} "
                                     f"failures ({r[1] / 60:.0f} min)", sym, cooldown_s=0)
+        await self.margin_pass(live, held)   # after the stops, never instead of them (guardian_margin.py, #64)
         self.pos_streak.forget(set(self.pos_streak.fails) - {p["symbol"] for p in held})   # closed meanwhile
         self.untracked_since = {s: t for s, t in self.untracked_since.items() if s in {p["symbol"] for p in held}}
         acct = await self._day_pnl_read()   # after the stops: the pass's one income read

@@ -12,9 +12,11 @@ import would be circular, and would bind `_sleep` before the tests patch `shortb
 
 from __future__ import annotations
 
+from decimal import ROUND_FLOOR, Decimal
+
 import ccxt.async_support as ccxt
 
-from . import clientid, close_intent, fill_quality, reconcile, stops, tranches
+from . import clientid, close_intent, fill_quality, margin, reconcile, stops, tranches
 from .audit import refusals
 from .exchange import to_symbol
 from .stops import is_bridge, is_protective_stop
@@ -219,7 +221,7 @@ class ManageFlow:
         minus liq_buffer_pct (a stop past it never fires: at 10x a short is liquidated ~9% up); a capped plan stop is an
         urgent alert. Pre-armed stops and bridges don't count (they cover a fixed size); a bridge left by a dead swap
         goes once a closePosition stop rests (stops.set_stop)."""
-        from .trading import _f, _sleep
+        from .trading import _f
         async with self.symbol_lock(symbol, "guardian: restore a missing stop"):
             await self.ex.trade_markets(symbol)   # a perp listed since start is known before anything is sent on it
             close, bridges = await stops.listed(self, symbol)
@@ -236,19 +238,16 @@ class ManageFlow:
             jt = self.j.active_trade(symbol) or {}
             mark, liq, plan = _f(pos.get("markPrice")), _f(pos.get("liquidationPrice")), _f(jt.get("stop_price"))
             stop = plan or _f(pos.get("entryPrice")) * (1 + fallback_pct / 100)
-            buf = self.ex.limits.liq_buffer_pct
-            if liq > 0 and stop > liq * (1 - buf / 100):
+            cap = self._liq_cap(symbol, liq)
+            if cap is not None and stop > cap:
                 if plan:
                     await self.alert("plan_stop_unreachable", f"plan stop {plan:g} is past liquidation {liq:g} minus "
-                                     f"{buf:g}%: it would never fire. Restored at {liq * (1 - buf / 100):.6g} instead; "
-                                     "fix the plan's stop", symbol, True)
-                stop = liq * (1 - buf / 100)
+                                     f"{self.ex.limits.liq_buffer_pct:g}%: it would never fire. Restored at {cap:g} "
+                                     "instead; fix the plan's stop", symbol, True)
+                stop = cap
             stop = float(self.t.price_to_precision(symbol, stop))
             if stop <= mark:
-                await self._market_close(symbol, _f(pos["contracts"]))
-                if jt:
-                    await _sleep(1)
-                    await reconcile.finalize(self, jt, f"guardian: unprotected and past stop {stop}")
+                await self._close_past(symbol, pos, jt, f"guardian: unprotected and past stop {stop}")
                 return {"symbol": symbol, "action": "closed", "mark": mark, "stop": stop}
             res = await stops.set_stop(self, symbol, stop, _f(pos["contracts"]))
             if res.get("closed"):
@@ -259,3 +258,49 @@ class ManageFlow:
                 raise RuntimeError(res.get("error") or "stop not placed")
             self.j.log_alert("stop_restored", f"placed missing stop at {stop}", symbol)
             return {"symbol": symbol, "action": "stop_placed", "stop": stop, **({"liquidation": liq} if liq else {})}
+
+    def _liq_cap(self, symbol: str, liq: float) -> float | None:
+        """The highest stop that still fires before this short's liquidation (margin.stop_cap: liq minus
+        liq_buffer_pct), rounded DOWN to the tick: never past the cap, so a stop placed there is never moved again."""
+        cap = margin.stop_cap(liq, self.ex.limits.liq_buffer_pct)
+        tick = self.t.market(symbol)["precision"]["price"]
+        if cap is None or not tick:
+            return cap
+        t = Decimal(str(tick))
+        return float((Decimal(str(cap)) / t).to_integral_value(ROUND_FLOOR) * t)
+
+    async def _close_past(self, symbol: str, pos: dict, jt: dict, reason: str) -> None:
+        """Price is already past the stop this short needs: close it now, as that stop would have (then journal it)."""
+        from .trading import _f, _sleep
+        await self._market_close(symbol, _f(pos["contracts"]))
+        if jt:
+            await _sleep(1)
+            await reconcile.finalize(self, jt, reason)
+
+    async def cap_stop(self, symbol: str) -> dict | None:
+        """A resting closePosition stop past liquidation minus liq_buffer_pct never fires: the isolated short is
+        liquidated first and pays the liquidation fee. Tighten it to _liq_cap (the level ensure_stop restores at), make
+        before break (stops.set_stop), under the symbol lock; price already past that level closes the short, as
+        ensure_stop does. Tighten only, by a tick or more; the journal's plan stop stays (the guardian's alert asks for
+        a fix). None when nothing is due."""
+        from .trading import _f
+        async with self.symbol_lock(symbol, "guardian: stop inside liquidation"):
+            await self.ex.trade_markets(symbol)   # its tick: a perp listed since start is known first
+            close, _ = await stops.listed(self, symbol)
+            pos = await self.position(symbol)
+            if not close or not pos:
+                return None   # no closePosition stop: ensure_stop's; flat: nothing to protect
+            cur, liq = min(stops.trigger_of(o) for o in close), _f(pos.get("liquidationPrice"))
+            cap = self._liq_cap(symbol, liq)
+            tick = _f(self.t.market(symbol)["precision"]["price"])
+            if cap is None or cur - cap < tick / 2:
+                return None   # inside the cap (never loosened), or less than a tick past it
+            out = {"symbol": symbol, "from": cur, "to": cap, "liquidation": liq, "mark": _f(pos.get("markPrice"))}
+            if cap <= out["mark"]:
+                await self._close_past(symbol, pos, self.j.active_trade(symbol) or {},
+                                       f"guardian: stop {cur:g} past liquidation {liq:g}, price past {cap:g}")
+                return {**out, "action": "closed"}
+            res = await stops.set_stop(self, symbol, cap, _f(pos["contracts"]),
+                                       [{"id": o["id"], "trigger": stops.trigger_of(o)} for o in close])
+            return {**out, "action": "closed" if res.get("closed") else "tightened" if res.get("ok") else "failed",
+                    **({} if res.get("ok") else {"error": res.get("error")})}

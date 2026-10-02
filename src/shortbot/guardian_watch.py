@@ -1,7 +1,7 @@
-"""Guardian watch lane: alert-only checks on open shorts (squeeze, funding, news) every 60 s. They read public data
-and third-party feeds, so they run in their own lane and never delay a stop check. A check that can't get its inputs
-is a failure, never a silent skip (#57): alerted, and counted in a per-symbol streak that escalates like the stop
-pass."""
+"""Guardian watch lane: alert-only checks on open shorts (squeeze, funding, news, ADL) every 60 s. They read public
+data and third-party feeds, so they run in their own lane and never delay a stop check. A check that can't get its
+inputs is a failure, never a silent skip (#57): alerted, and counted in a per-symbol streak that escalates like the
+stop pass."""
 
 from __future__ import annotations
 
@@ -33,14 +33,16 @@ def _why(v) -> str:
 
 
 class WatchChecks:
-    """Guardian mixin: needs app, ex, j, n, watch_streak."""
+    """Guardian mixin: needs app, ex, j, n, watch_streak, adl_streak, and MarginChecks (adl_read, adl_check)."""
 
     # ------------------------------------------------------------ watch (alert-only, 60 s, own lane)
     async def watch_positions(self) -> None:
         if not self.ex.trade:
             return
-        shorts = [p["symbol"] for p in await self.app.trader._raw_positions() if p.get("side") == "short"]
-        for sym in shorts:
+        rows = [p for p in await self.app.trader._raw_positions() if p.get("side") == "short"]
+        shorts = [p["symbol"] for p in rows]
+        adl = await self.adl_read() if rows else ({}, [], None)   # one read for every short (guardian_margin.py)
+        for p, sym in zip(rows, shorts):
             errors = []
             for name, check in (("squeeze/funding", self._squeeze_and_funding), ("news", self._news)):
                 try:   # each on its own: a dead feed never hides a squeeze
@@ -48,8 +50,15 @@ class WatchChecks:
                 except Exception as e:  # noqa: BLE001
                     log.error("watch %s %s failed: %s", name, sym, e, exc_info=not isinstance(e, WatchInputError))
                     errors.append(f"{name}: {type(e).__name__}: {e}")
+            try:
+                if why := await self.adl_check(p, *adl):
+                    errors.append(why)
+            except Exception as e:  # noqa: BLE001
+                log.exception("watch adl %s failed", sym)
+                errors.append(f"adl: {type(e).__name__}: {e}")
             await self._watch_result(sym, errors)
-        self.watch_streak.forget(set(self.watch_streak.fails) - set(shorts))   # closed meanwhile
+        for streak in (self.watch_streak, self.adl_streak):   # closed meanwhile
+            streak.forget(set(streak.fails) - set(shorts))
 
     async def _watch_result(self, sym: str, errors: list[str]) -> None:
         """Like the stop pass: each failure alerted (cooldown), one urgent alert per streak, its end announced."""
@@ -63,8 +72,8 @@ class WatchChecks:
         await send_safe(self.n, "position_watch_error", why, sym, cooldown_s=WATCH_ERROR_COOLDOWN_S)
         if self.watch_streak.fail(sym):
             await send_safe(self.n, "guardian_failing:watch", f"watch failed {self.watch_streak.after}x in a row since "
-                            f"{self.watch_streak.started(sym)} (last: {why}). Squeeze and funding alerts on this short "
-                            "are NOT running: watch it yourself.", sym, urgent=True, cooldown_s=0)
+                            f"{self.watch_streak.started(sym)} (last: {why}). Squeeze, funding and ADL alerts on this "
+                            "short are NOT all running: watch it yourself.", sym, urgent=True, cooldown_s=0)
 
     async def _squeeze_and_funding(self, sym: str) -> None:
         """Every check whose inputs arrived runs; then a failed or short input raises WatchInputError."""

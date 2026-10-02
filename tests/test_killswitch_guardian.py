@@ -123,6 +123,7 @@ async def test_a_late_or_unreadable_mark_falls_back_to_the_old_day_pnl(monkeypat
 async def test_untracked_position_trips_after_the_grace_unless_one_of_our_limits_rests(explained_by):
     g, fake = guardian()
     fake.position, fake.entry, fake.stops["s1"] = 50, 1.0, 1.1   # opened in the Binance app, stop set there
+    fake.sym[SYM]["lev"] = 5   # liquidation ~1.19: at the fake's 20x (~1.04) the guardian would tighten that stop (#64)
     await g.check_positions()
     assert ks.read(g.j)["state"] == ACTIVE and SYM in g.untracked_since
     g.untracked_since[SYM] -= UNTRACKED_GRACE_S

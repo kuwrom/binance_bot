@@ -57,6 +57,20 @@ def open_orders_block_margin_mode():
     return ccxt.OperationRejected(_body(-4067, "Position side cannot be changed if there exists open orders."))
 
 
+def margin_mode_already_set():
+    # -4046: ccxt 4.5.84 handle_errors raises MarginModeAlreadySet on this message (binance.py ~12462) and
+    # set_margin_mode re-raises it, as options.setMarginMode.throwMarginModeAlreadySet defaults to True (~1413)
+    return ccxt.MarginModeAlreadySet(_body(-4046, "No need to change margin type."))
+
+
+def margin_type_position_exists():   # -4048 (common map -> OperationRejected)
+    return ccxt.OperationRejected(_body(-4048, "Margin type cannot be changed if there exists position."))
+
+
+def isolated_under_multi_assets():   # -4168 (linear map -> BadRequest, ccxt binance.py ~2191)
+    return ccxt.BadRequest(_body(-4168, "Unable to adjust to isolated-margin mode under the Multi-Assets mode."))
+
+
 def max_stop_orders():   # -4045 MAX_STOP_ORDER_EXCEEDED (error-code page; ccxt common map -> OperationRejected)
     return ccxt.OperationRejected(_body(-4045, "Reach max stop order limit."))
 

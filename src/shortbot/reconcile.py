@@ -8,6 +8,7 @@
   shorted again since; without its exit fill it is never closed. Rows stuck in 'opening' are recovered or aborted.
   An empty positions answer while trades are open proves nothing (a glitch looks the same): no 'opening' row is
   aborted on it, only a trade's own exit fill closes it, and a trade whose history shows it still open alerts.
+  A close Binance made itself (ADL, liquidation) is journalled as such (exit_reason, #64).
 Day / week P&L: Trader.account() (equity_marks.py).
 """
 
@@ -25,6 +26,10 @@ log = logging.getLogger("shortbot.reconcile")
 PNL_TYPES = {"REALIZED_PNL": "gross", "COMMISSION": "fees", "FUNDING_FEE": "funding", "INSURANCE_CLEAR": "liq_fee"}
 OPENING_GRACE_S = 120
 CLOSED_ON_EXCHANGE = "closed on exchange (stop / liquidation / manual)"
+EXIT_ADL = "adl: auto-deleveraged by Binance (closed at the bankrupt counterparty's price)"
+EXIT_LIQUIDATION = "liquidation: force-closed by Binance"
+FORCED_SLACK_MS = 60_000             # a force order's time vs the trade's exit fill
+FORCED_WINDOW_MS = 7 * 86_400_000    # forceOrders reads 7 days back (without startTime: 7 days before endTime)
 EMPTY_KEY = "reconcile:empty_since"   # set while positions answers come back empty with trades open (one alert)
 
 
@@ -122,7 +127,7 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
                 continue   # the live position is the one this trade last saw: nothing to read
             m = await episodes.match(trader, tr)
             if m["state"] == "closed":   # its own exit fill proves it, whatever the positions answer said
-                done.append(await finalize(trader, tr, CLOSED_ON_EXCHANGE, episode=m))
+                done.append(await finalize(trader, tr, await exit_reason(trader.t, tr["symbol"], m), episode=m))
             elif empty:
                 unproven.append(tr)
             elif not p or older:
@@ -135,6 +140,28 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
     if unproven:
         await _empty_answer(trader, unproven)
     return done
+
+
+async def exit_reason(t, symbol: str, ep: dict[str, Any]) -> str:
+    """Why an exchange-side close happened, when Binance made it itself: one of the trade's exit orders is listed by GET
+    /fapi/v1/forceOrders (weight 20 with a symbol) under autoCloseType ADL or LIQUIDATION (their client ids:
+    "adl_autoclose" and "autoclose-..."). Unreadable: the generic reason (a label, never a reason not to close)."""
+    end = int(ep["closed_ms"]) + FORCED_SLACK_MS
+    req = {"symbol": to_raw(symbol), "startTime": max(int(ep["opened_ms"]), end - FORCED_WINDOW_MS), "endTime": end}
+    exits = {str(o) for o in ep.get("exit_orders") or []}
+    for kind, reason in (("ADL", EXIT_ADL), ("LIQUIDATION", EXIT_LIQUIDATION)):
+        try:
+            if forced_by(await t.fapiPrivateGetForceOrders({**req, "autoCloseType": kind}), exits):
+                return reason
+        except Exception as e:  # noqa: BLE001
+            log.warning("forceOrders %s %s unreadable: %s: %s", symbol, kind, type(e).__name__, e)
+            return CLOSED_ON_EXCHANGE
+    return CLOSED_ON_EXCHANGE
+
+
+def forced_by(rows: Any, exits: set[str]) -> bool:
+    """Does a forceOrders answer list one of these exit orders?"""
+    return isinstance(rows, list) and any(isinstance(r, dict) and str(r.get("orderId")) in exits for r in rows)
 
 
 def _same(tr: dict[str, Any], p: dict[str, Any]) -> bool:
