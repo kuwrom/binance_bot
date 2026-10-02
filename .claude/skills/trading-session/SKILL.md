@@ -1,16 +1,27 @@
 ---
 name: trading-session
-description: Run a full short-desk session on Binance futures - review the journal and learnings, check the regime, manage open shorts per their plans, scan 5-10 candidates, and propose trades with plans for human approval.
+description: Run a full short-desk session on Binance futures - review the journal and learnings, check the regime, manage open shorts per their plans, scan 5-10 candidates, and enter the confirmed ones with a plan.
 when_to_use: User says "run a trading session", "let's trade", "check the market", "scan for shorts", "what's happening with my positions".
 ---
 
 # Trading session
 
-The shortbot state was injected at session start (open positions, unacknowledged alerts with urgent ones first, active learnings). If you don't see it, run `.venv/bin/shortbot brief`. Alerts stay listed until `start_session` acknowledges them.
+The shortbot state was injected at session start: kill switch, stale processes, open positions, entry orders, unacknowledged alerts (urgent first) and active learnings. If you don't see it, run `.venv/bin/shortbot brief`.
+
+## 0. Start: session, kill switch, health
+- **`start_session` first, every session.** It acknowledges the alerts the brief listed (and returns them; until then they stay listed). It also links every later row, from the MCP tools and from this Claude session's `shortbot` CLI calls, to the session in the audit trail.
+- **Kill switch** (the brief's first line, `trading_state`, `shortbot kill-switch`):
+  - Not ACTIVE: only reduce risk (close, partial close, tighten a stop, cancel entries, flatten). Entries, adds, risk-raising amends, widening and ladder opt-ins are refused. Never try to clear it or work around it. Only the human clears it, from their own terminal (`shortbot-admin clear`). A HALTED caused by a stale guardian heartbeat lifts itself once the guardian is back.
+  - Trip it yourself when something is wrong, e.g. a stop you can't verify, a position the journal can't explain, fills nobody placed: `halt_trading` (`shortbot kill-switch HALTED --reason ...`). REDUCING stops new risk; HALTED also withdraws resting entries. Protective stops are never touched. Tell the human why.
+  - `flatten_all` (`shortbot flatten --reason ...`) is the emergency exit: HALTED, then every short bought back at market.
+  - The guardian's trips (daily loss, drawdown, `day P&L unverified`, an untracked or long position) are sticky too. While day P&L can't be read (`day_pnl_unverified`), opening paths refuse: wait, don't retry around it.
+- **Stale processes** (brief: `shortbot processes on stale code`): that process runs without the fixes merged since it started. MCP server: ask the human to reconnect shortbot via `/mcp`. Guardian: ask the human to restart it.
+- **Guardian heartbeat** STALE or never seen: nothing guards fills and stops, so entries are refused. Tell the human.
+- **Unexplained change** (a stop moved, an order or decision you don't recognise): `shortbot audit --since 24h` shows who acted (mcp, cli, guardian, admin), from which Claude session and code version.
 
 ## 1. Learn before acting (2 minutes)
-- `start_session`, then `journal`. Read `stats.by_setup` / `by_experiment` (win rate, avg R, MAE/MFE) and the **learnings**.
-- Say in one line which learnings apply today.
+- `journal`: read `stats.by_setup` / `by_experiment` (win rate, avg R, MAE/MFE) and the **learnings**.
+- Say in one line which learnings apply today. A learning the brief lists under "learnings to re-check" (review due, or supported on n < 30) isn't settled: don't lean on it alone. Re-checking is `research-review` work.
 - Run `session_clock` (`shortbot clock`). It shows the UTC session, minutes to funding, macro events and whether the desk is **cold**.
   - Cold means idle ≥ 6h or the first session of the UTC day. Run `warmup_start`, study the tape for 15 minutes (regime, governor, charts), then run `warmup_check`. Trade only coins that persisted.
   - Warm: skip the warm-up.
@@ -18,7 +29,7 @@ The shortbot state was injected at session start (open positions, unacknowledged
 
 ## 2. Regime
 - Run `market_regime`.
-- **hostile** or **unknown**: manage positions only; no new shorts unless the human explicitly wants a research exception (`veto_override`). Sizing above the risk budget is a separate exception (`budget_override`, `open_short` with a notional only). Each override needs its own reason; both are recorded on the trade and alerted. Neither lifts a governor halt or a hard cap.
+- **hostile** or **unknown**: manage positions only. A new short needs a research exception: `veto_override` with a written reason. Sizing above the risk budget is a separate exception (`budget_override`, `open_short` with a notional only). Each override needs its own reason; both are recorded on the trade and alerted, and you tell the human. Neither lifts a governor halt, a SHADOW setup or a hard cap.
 - **caution**: A+ setups only, and consider smaller size.
 - Run `market_map` (`shortbot map`) before judging any single coin. It shows the regime, breadth, and each sector's move after removing BTC's move, plus rotation in/out.
   - Short laggards in weak or rotating-out sectors.
@@ -28,6 +39,10 @@ The shortbot state was injected at session start (open positions, unacknowledged
   - Conviction: C 0.5x, B 1x (default).
   - A 1.5x only once the setup has ≥ 30 trades with a proven edge; the code downgrades it otherwise.
   - M is the moonshot bucket: rare, pre-declared, with a written reason.
+- **Setup ladder** (`m_ladder` in `risk_budget` / `shortbot budget COIN --setup S`): each setup's own drawdown brake (docs/RISK_GOVERNANCE.md).
+  - HALF = 0.5×. SHADOW = no new entries for that setup; scans keep logging it. UNKNOWN (the ladder can't be read) = 0.5×, or 0 if the setup was stopped.
+  - Never relabel a trade's setup to escape it.
+  - You can't re-enable a SHADOW setup. Code checks the criteria frozen at the stop, and only the human clears it: point them to `shortbot-admin ladder-status`.
 
 ## 3. Manage open positions FIRST
 Load the `manage-position` skill, then for each position:
@@ -36,8 +51,9 @@ Load the `manage-position` skill, then for each position:
 - Decide: hold / tighten (`move_stop`) / partial (`close_position` with a fraction and the `expect_contracts` you saw, or `of_original` for a plan target) / exit / change the plan (`update_plan`). Log the reasoning.
 
 ## 4. Scan and shortlist
-- `scan_shorts`: every scored coin is logged for research automatically.
+- `scan_shorts`: every scored coin is logged for research automatically. Keep scanning (about every 30 min) while positions are open, not only when flat.
 - Pick 5-10: the top tradable candidates plus anything interesting from `new_listings_30d` or announcements.
+- `book_plan` (`shortbot book-plan`) ranks which candidates fit the open + resting book: free slots, slots 4-5 for event setups only, half size for a repeated setup+sector (learning #30). Pass its `size_mult` on.
 - `coin_snapshot` each one. Load the skill of each candidate's detected setup (`pump-fade`, `listing-fade`, `delisting-short`, `unlock-short`) and apply its checklist.
 - **Read the tape** (docs/TAPE.md). Every row has a `tape` block with `state`, `stance` and `playbooks`:
   - `stand_aside`: no entry. This covers pump in progress, liquidation cascade, accepted breakout and spot-led rally.
@@ -64,12 +80,14 @@ Load the `manage-position` skill, then for each position:
   - Say which card supports the trade. If none does, size as C.
 
 ## 5. Prefer limit entries at levels (docs/POSITION_MANAGEMENT.md §c)
-Unless the trigger needs an immediate market entry, propose a **group of 3-5 limit shorts**:
-`.venv/bin/shortbot propose '<json list>'`, or `propose_entries`.
+Unless the trigger needs an immediate market entry, place a **group of 3-5 limit shorts**:
+`propose_entries`, or `.venv/bin/shortbot propose '<json list>'`.
 - **Levels:** rest the sell a few ticks below a round number or prior high, or above the stop/liquidation cluster (sweep). Always set `level_type` and `level_reason`.
 - **Stop:** beyond the sweep extreme plus a buffer. Set `cancel_below` where the move would have happened without us.
 - **Expiry and fills:** GTD expiry on the exchange. The first fill cancels the rest, and the guardian protects the fill within 5 s. A sibling that filled before its cancel landed is journaled and protected too, and alerted as over the group's single-bet budget: manage it, don't assume it's gone (`cancel_entry_group` lists it as `filled_first`). Until the guardian adopts such a row, or retries a failed cancel, it still shows in `pending_entries`; "cancel failing ... order still live" means it may still fill. A split leg that fills after its trade closed becomes a new trade (urgent alert).
+- **Cancel failed:** `cancel_entry_group` answers `ok: false` with `cancel_failed` ids when a cancel couldn't land (a busy symbol, a network error). Those orders may still be live and fill. Call it again; don't treat the symbol as clean until it is.
 - **Send status unknown:** a proposal listed under `unknown` (timeout, 5xx) may be resting. Don't re-propose it: `pending_entries` and the brief show it until the guardian resolves it by client id (~3 min: adopted if it rests, else rejected). `warnings` in a result means the orders were placed but the decision log or alert failed.
+- **`unknown: true` from a market entry, close or add** (`open_short`, `close_position`, `add_to_winner` and their CLI forms): the order may have executed. Never re-send it. Re-read `positions` and `pending_entries` in about 3 min. The guardian adopts a late entry fill and protects it at the planned stop, or aborts the row.
 - **External orders** (`external` in `pending_entries` and the brief) aren't the desk's. They are never auto-cancelled, not even when HALTED, and count as exposure with no known stop. Cancel them on Binance or tell the human.
 - **Alerts:** `entry_intent` (an unknown send resolved), `external_order`, `external_while_halted`, `zombie_order` (a dead entry's order still rests), `prearm_unresolved` (check that entry's stop on Binance).
 - **Fills seen late:** an urgent `action_fill` "…was closed … before the poll" is a limit that filled and was stopped out between two polls. It is already journalled closed with exchange PnL; review it like a stop-out. "NOT one bet" means it mixes in orders the desk didn't place. `fill_unresolved`: a fill with no position and no trade history; check Binance, tell the human. `entry_poll_failing`: an entry can't be read, or a fill's whole-position stop failed (its pre-armed stop stays); check that stop on Binance.
@@ -78,6 +96,7 @@ Unless the trigger needs an immediate market entry, propose a **group of 3-5 lim
 - **Pump fades (learning #29):** single limits 4-5% above the market got 0 fills while the fades happened. Prefer a split entry (`tranches`): leg 1 just above the market once the read says short_setup, leg 2 at the structure level. A split is all-or-nothing at placement.
 - **Repricing:** move a pending limit at most once (`amend`). Never chase. Lowering it re-runs the risk check and is refused for a split leg (cancel and re-propose).
 - **Withdrawn by the guardian:** resting entries are cancelled while the governor halts new entries (`governor halt: ...`) or a market pause is on (`market pause: ...`, alert `entries_withdrawn`). An entry placed with a `veto_override` over that same pause stays. Re-propose once it lifts. TTL is at most 24 h.
+- **Resized by the guardian:** an entry sized above today's budget is withdrawn too (`governor resized: ...` when a drawdown tier or loss streak cut size, or the loss-cap room shrank; `setup ladder: ...` when its setup went HALF or SHADOW). Re-propose at the current budget, if the setup still allows it.
 - **One trade per symbol:** `open_short` is refused while any order rests on the symbol. Cancel the group first if you want the market entry.
 - **No resting bounce-sell limits in breakdowns** (learning #20). They fill on exactly the breakdowns that fail. The breakdown short itself is unproven; if taken, enter on resumption below the breakdown low, not on a hoped-for bounce.
 
@@ -85,22 +104,21 @@ Unless the trigger needs an immediate market entry, propose a **group of 3-5 lim
 - Invalidation for a level fade is **acceptance**: 2 consecutive 1h closes beyond the level, or one close beyond the level's measured p90 fake-out (the `sweep_proof` distance).
 - Never a single close a fraction of a percent past it. Fake-outs run 2-5% and can close beyond (ZRO #8, 2026-09-29).
 
-## 6. Propose (never execute unilaterally)
-Present a compact table per candidate:
-
-| coin | setup | trigger confirmed? | entry | stop (tight or wide) | size/risk | plan (targets, time stop, auto flags) | main risk |
-
-- Only propose entries whose trigger is **confirmed**.
-- Everything else goes on the watchlist with `log_decision("watch", ...)`, noting what would confirm it.
-- `open_short` always asks the human (it's flagged as requiring approval). Pass the full plan: trigger, invalidation, targets, time_stop_hours, auto flags.
+## 6. Decide and execute
+You decide and place the trades yourself; there is no approval step. The MCP tools and the `.venv/bin/shortbot` CLI are equivalent: same code, same checks (vetoes, risk budget, governor, setup ladder, kill switch), same audit trail.
+- Enter only when the trigger is **confirmed**. Everything else goes on the watchlist with `log_decision("watch", ...)`, noting what would confirm it.
+- Every entry carries the full plan: trigger, invalidation, targets, time_stop_hours, auto flags. The thesis says why now, what confirmed it and which evidence card supports it.
+- Per candidate, settle: coin | setup | trigger confirmed? | entry | stop (tight or wide) | size/risk | plan | main risk.
 
 ## 7. Close the loop
+- Tell the human what you opened, closed or changed, and why, with that row per trade.
 - `log_decision("session_summary", ...)`: what we did, what we learned, what to check next time.
 - If something looked like a pattern: `add_learning` as a **hypothesis**, with the evidence (trade ids, candidate counts), its `provenance` (e.g. `["trade:12", "research_report"]`), its `kind` (usually `statistical`) and `n` / `days` (one trade = n 1).
 - Every few sessions, load `research-review`.
 
 ## Hard rules
-- Never dodge a rejection (splitting orders, sneaking a limit up). Change parameters openly (`set_risk_params`, needs approval).
+- Never dodge a rejection (splitting orders, sneaking a limit up, relabelling a setup). Change parameters openly (`set_risk_params` with an experiment tag; overrides apply in demo only) and tell the human.
+- Never touch `.env`, never switch to live and never clear the kill switch or a setup stop: those are the human's.
 - Stops only tighten, except ONE `widen-stop` per trade with an automatic size cut (loss stays ≤ 1R). Never average up into a losing short.
 - Negative funding or a 1h funding interval (shorts pay) is a **flag, not a veto** (learning #22, human decision 2026-09-29). The code halves the size, and the plan's funding budget exits once funding paid reaches 0.5R with no follow-through. Positive funding is a tailwind, not a trigger.
 - Skipping is a valid, logged decision.
