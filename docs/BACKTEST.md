@@ -268,3 +268,34 @@ The strategies above are hand-written proxies; none of them runs `signals/`, `ta
 | universe recall / precision per scan | 97.9% / 97.4% |
 
 All 122 scans: row match 84.3%, universe recall 97.0% (ranked scans 96.5%, "now" scans 98.8% with their threshold inferred from the logged count). Remaining differences are data, not code: spot-led-rally, volume-heat and Square-mention vetoes near their thresholds (1m closes instead of live seconds), the predicted funding estimate (51% within 1%), five coins that left the demo list since, and rotation flags (the replay rebuilds fewer maps than the guardian). Two fixes the comparison found: the 4 h / 1 h funding formula (÷ 8/N) and coin perps with Chinese names, which `histdata._is_coin_perp`'s ASCII pattern also drops from hist.db.
+
+## Live-pipeline replay over the hist window (task #73, stage 2)
+`replay_window.py` fills the cache (1m perp bars for every coin perp; 5m mark / premium / spot for the movers; open interest and funding from hist.db, gaps from the archive and REST). `replay_study.py` runs the real scanner every 30 minutes, labels with the guardian's `research.label_outcomes`, runs `research.report` on the replay journal, and enters every tradable setup-episode at +0 / 5 / 15 / 30 minutes through `sim.simulate` (`replay_delays.py`). Each setup × delay is a trial in the register (study `replay`).
+
+    .venv/bin/python -m shortbot.backtest.replay_study all --work $SCRATCH/replay-hist --journal data/shortbot.db \
+        --hist data/hist.db --daily data/daily.db --since 2026-08-03 --until 2026-09-28 --workers 6 --fetch --out DIR
+
+**Run 2026-10-02 (code e6c059c):**
+- Window: 2026-08-03 → 09-28, 2,688 scans. Each scan used both directions, min_change 5 and depth 25 (the desk's most common logged scan).
+- Universe: every coin perp listed at the moment, at the floor in force (20M).
+- Data: 69,188 candidate rows, all labelled; 4,025 symbol-episodes.
+- Plan: the scan's research bracket (stop +1σ√24h, target −2σ√24h) with the setup's time stop (≤ 72 h) and breakeven. After costs. t is clustered two-way by day and coin (`cluster_se`).
+
+| setup | episodes | R at +0 | +5 min | +15 min | +30 min | cost of waiting vs +0 (paired, t) |
+|---|---|---|---|---|---|---|
+| pump_fade | 725 (56 days, 128 coins) | −0.074 (t −2.9) | −0.097 (−3.9) | −0.104 (−4.2) | −0.081 (−2.9) | −0.022 (−2.9), −0.030 (−3.1), −0.008 (−0.6) |
+| breakdown | 323 (55 days, 87 coins) | −0.018 (−0.4) | −0.028 (−0.6) | −0.031 (−0.7) | −0.005 (−0.1) | −0.010 (−0.9), −0.013 (−1.1), +0.013 (0.5) |
+| listing_fade | 12 (2 coins) | +0.27 (0.8) | +0.26 | +0.27 | +0.29 | anecdote |
+| delisting | 1 | | | | | |
+
+**Read:**
+- What the live classifier calls a pump_fade lost R in this window, at every delay. It is significantly negative, not merely flat.
+- A 5–15 minute delay costs another 0.02–0.03 R (paired t ≈ −3).
+- breakdown is flat.
+- On 24h returns (research.report), the tradable episodes did *worse* than the vetoed ones: −1.53% (n 809) versus +0.06% (n 3,813). That is the same alt-up regime the proxy backtest saw: one window, one regime, and nothing here is a forward test.
+
+**Limits:**
+- The plan is the research bracket, not the agent's own plan.
+- listing_fade and unlock holds are cut to 72 h.
+- The archive has no mark / premium klines for the Chinese-named perps, so their predicted funding falls back to the last settled rate.
+- The stage-1 data limits apply too: no order book, news, trending or hype history, and today's tags and supply.
