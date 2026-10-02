@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_gates, entry_intents, reconcile, stops
+from . import entry_gates, entry_intents, reconcile, stops, targets_sync
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -49,6 +49,7 @@ class PositionChecks:
             self._last_resync = time.time()
         t0, verified = time.time(), True   # protection is verified as of this read, not of the pass's end
         live = await tr._raw_positions()
+        await self._targets(targets_sync.settle_flat(tr, live))   # their fills first: a target exit reads as one (#65)
         try:   # journalling closed trades must never cost the stop checks below
             closed = await reconcile.reconcile(tr, live)
         except Exception as e:  # noqa: BLE001

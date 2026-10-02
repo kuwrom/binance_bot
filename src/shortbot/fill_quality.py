@@ -23,7 +23,8 @@ guardian and the MCP server can't lose each other's rows (entry_features is rewr
 One fill = one order (the VWAP of its fills, at its first fill), keyed by order id: an order recorded live is never
 recorded again by the backstop, whichever process gets there first. Raw quotes, not bps, so the reference rule can
 change without re-capturing. leg / type are free strings: entry/market, entry/limit, exit/market (a desk close),
-exit/exchange (a stop-out, liquidation or manual close found in trade history), and what comes next (exit/target).
+exit/exchange (a stop-out, liquidation or manual close found in trade history), exit/target (a resting plan target,
+targets.py: live once its order is final, and labelled so by the backstop too).
 
 Hooks: trading_open._enter (its snap starts at the fill), trading_manage.close / _close_part, entries_fills.adopt
 (limit fills, joined legs), reconcile.finalize with an episode (the backstop: every order of the trade's position
@@ -133,15 +134,20 @@ def record_fills(tr, trade_id: int | None, leg: str, kind: str, rows: list[dict]
         log.warning("fill references for trade #%s not scheduled: %s: %s", trade_id, type(e).__name__, e)
 
 
-def record_episode(tr, trade: dict[str, Any], ep: dict[str, Any]) -> None:
+def record_episode(tr, trade: dict[str, Any], ep: dict[str, Any], kinds: dict[str, str] | None = None) -> None:
     """The backstop at finalize: every order of the trade's position (episodes.span: sells, buys) not yet referenced.
-    Entries are the trade's own entry type; exits found in history are `exchange`, with the trade's stop as trigger.
-    Never raises."""
+    Entries are the trade's own entry type; exits found in history are `exchange`, with the trade's stop as trigger,
+    unless `kinds` names the order's type ({order id: "target"}: a resting target, #65). Never raises."""
     try:
         feats = trade.get("entry_features") if isinstance(trade.get("entry_features"), dict) else {}
         kind = "limit" if feats.get("entry_type") == "limit" else "market"
+        kinds = kinds or {}
+        buys = ep.get("buys") or []
         fills = (_by_order("entry", kind, ep.get("sells") or [])
-                 + _by_order("exit", "exchange", ep.get("buys") or [], trade.get("stop_price")))
+                 + _by_order("exit", "exchange", [b for b in buys if str(b.get("order")) not in kinds],
+                             trade.get("stop_price"))
+                 + [f for t in sorted(set(kinds.values())) for f in _by_order(
+                     "exit", t, [b for b in buys if kinds.get(str(b.get("order"))) == t])])
         if fills:
             _spawn(_job(tr, int(trade["id"]), fills, None))
     except Exception as e:  # noqa: BLE001 - research data: never in a close's way

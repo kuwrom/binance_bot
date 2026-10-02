@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 
 from tests import fake_errors as err
+from tests.fake_reduce import ReduceOnly
 
 SYM = "PUMP/USDT:USDT"
 FEE = 0.0005
@@ -30,7 +31,7 @@ def raw(symbol: str) -> str:
     return symbol.split(":")[0].replace("/", "")
 
 
-class Engine:
+class Engine(ReduceOnly):
     """State set up by FakeCcxt.__init__: sym[s] = {price, qty, entry, lev, tick, step, min, qv}; limits; stops and
     prearms (open conditional orders: id -> trigger); algo (every conditional order's meta); fills; income; markets
     (the client's loaded markets) and market_loads; brackets (per-symbol leverage brackets, default BRACKETS)."""
@@ -63,6 +64,8 @@ class Engine:
         At one level the limit fills before the stop, so a pre-armed stop sees the position it protects."""
         b = self.sym[s]
         old = b["price"]
+        if p < old:   # down: resting BUY limits (a short's reduce-only targets) fill (fake_reduce.py)
+            self._walk_down(s, old, p)
         if p > old:
             hits = [(o["price"], 0, i) for i, o in self.limits.items()
                     if o["symbol"] == s and o["status"] == "open" and o["side"] == "sell" and o["price"] <= p]
@@ -117,7 +120,8 @@ class Engine:
         o["avg"] = ((o["avg"] or 0.0) * o["filled"] + px * q) / (o["filled"] + q)
         o["filled"] += q
         o["last_ts"] = self.fills[-1]["timestamp"]
-        o["status"] = "closed" if o["filled"] >= o["amount"] - 1e-12 else "open"
+        # a reduce-only remainder expires when this fill closed the position (fake_reduce.py)
+        o["status"] = "closed" if o["filled"] >= o["amount"] - 1e-12 else o["status"]
 
     def _fill(self, s: str, side: str, amount: float, order: str | None = None) -> None:
         """A trade at the current price, stamped by the exchange clock, as ccxt parses a userTrades row
@@ -140,6 +144,7 @@ class Engine:
                             "time": ms})
         b["qty"] = round(max(0.0, b["qty"] - amount), 8)
         if not b["qty"]:
+            self._ro_flat(s)
             # a closePosition stop goes with the position. SECONDARY source: testnet probes 2026-09-24
             # (github.com/bcup02/trade-alerts PR #65); a reduce-only stop stays and is rejected if it triggers
             for i in [i for i in self.stops if self._algo_sym(i) == s]:

@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import news, scanner, setups
+from . import news, scanner, setups, targets_sync
 from .app import get_app
 from .entries import EntryDesk
 from .exchange import to_symbol
@@ -134,6 +134,10 @@ async def update_plan(symbol: str, changes: dict[str, Any], reason: str) -> dict
     new = {**plan.to_dict(), **pins}
     app.journal.update_trade(tr["id"], plan=new)
     app.journal.log_decision("update_plan", reason, tr["symbol"], snapshot={"trade_id": tr["id"], "changes": changes})
+    old, auto = tr.get("plan") or {}, lambda p: bool((p.get("auto") or {}).get("targets"))
+    if (old.get("targets") or []) != (new.get("targets") or []) or auto(old) != auto(new):
+        resting = await targets_sync.after(app.trader, tr["symbol"], "update_plan")   # #65: the book follows the plan
+        return {"ok": True, "trade_id": tr["id"], "plan": new, "resting_targets": resting}
     return {"ok": True, "trade_id": tr["id"], "plan": new}
 
 

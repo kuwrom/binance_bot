@@ -168,3 +168,11 @@ async def test_guardian_skips_a_busy_symbol_and_escalates_only_when_it_stays_bus
 async def test_bad_fraction(tmp_path, kw):
     _, s, _ = desk(tmp_path)
     assert not (await s.close(SYM, "x", **kw))["ok"]
+
+
+async def test_a_close_below_one_step_is_refused_not_raised(tmp_path):
+    """ccxt raises InvalidOrder when an amount truncates to 0 (the fake does too): sized() answers instead."""
+    g, s, fake = desk(tmp_path)
+    await short_with_targets(s)
+    r = await s.close(SYM, "a sliver", fraction=0.0001, expect_contracts=100)
+    assert not r["ok"] and "too small" in r["error"] and fake.position == 100

@@ -28,6 +28,7 @@ class Action:
     urgent: bool = False
     cooldown_s: float = 3600
     key: str = ""                      # an alert's stable identity (its cooldown key): never PnL or age
+    cum: float | None = None           # a target close: the share of the ORIGINAL size gone by this target
 
 
 def excursions(trade: dict[str, Any], mark: float) -> dict[str, float]:
@@ -80,7 +81,9 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
 
     # targets: fractions are of the ORIGINAL position and CUMULATIVE. At a target, close only what the plan wants
     # gone by then minus what is already gone (manual partials count), so a manual partial never double-counts and
-    # the runner survives for the later targets and the trail (lesson: ONDO #5 lost its runner this way).
+    # the runner survives for the later targets and the trail (lesson: ONDO #5 lost its runner this way). Automatic
+    # targets rest on the book as reduce-only limits (targets.py, #65); a close here is the market fallback for one the
+    # mark crossed without its limit having filled (gone from the book, refused, part-filled): what today did.
     hit = set(trade.get("targets_hit") or [])
     orig, cur = trade.get("amount") or pos["contracts"], pos["contracts"]
     cum = 0.0
@@ -95,7 +98,7 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
             continue
         if auto.get("targets"):
             frac = 1.0 if cum >= 1.0 else min(1.0, to_close / cur) if cur else 1.0
-            acts.append(Action("close", f"target {t['price']} hit", fraction=frac, target_price=t["price"]))
+            acts.append(Action("close", f"target {t['price']} hit", fraction=frac, target_price=t["price"], cum=cum))
             cur -= cur * frac
         else:
             acts.append(Action("alert", f"target {t['price']} reached (PnL {pnl:+.1f}%): take "

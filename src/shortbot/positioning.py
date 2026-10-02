@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from . import clientid, killswitch, stops
+from . import clientid, killswitch, stops, targets_sync
 from . import indicators as ind
 from .audit import refusals
 from .exchange import to_symbol
@@ -182,6 +182,7 @@ class PositionOps:
             return {**res, "size_cut": 0}
         left = qty
         if cut > 0:
+            await targets_sync.pull_safe(tr, symbol, "widen: before its size cut")   # #65: none fills with the cut
             try:
                 await tr._market_close(symbol, cut, whole=False)   # never re-sent blind (#9)
                 err = None
@@ -202,6 +203,7 @@ class PositionOps:
         tr.j.update_trade(trade["id"], stop_price=new_stop,
                           notes=f"{trade.get('notes') or ''} widened {cur}->{new_stop}".strip())
         tr.j.log_decision("widen_stop", reason, symbol, snapshot={**snap, "remaining": left})
+        await targets_sync.after(tr, symbol, "widen")
         await tr.alert("action_widen", f"stop {cur} -> {new_stop}, size cut {cut}: {reason}", symbol, False)
         return {"ok": True, "old_stop": cur, "new_stop": new_stop, "size_cut": cut, "remaining": round(left, 8),
                 "max_loss_usdt": round(r1, 2), **({"warnings": res["warnings"]} if res.get("warnings") else {})}
@@ -280,6 +282,7 @@ class PositionOps:
                                                            "worst_case": worst, "r_initial": r1,
                                                            "worst_case_R": round(worst / r1, 2) if r1 else None})
         await tr.alert("action_add", f"added {add_qty} @ {mark}; stop {new_stop}; worst case {worst:.2f}", symbol, False)
+        await targets_sync.after(tr, symbol, "add")   # #65: the plan's shares of the grown size
         return {"ok": True, "added": add_qty, "price": mark, "new_stop": new_stop, "worst_case_usdt": round(worst, 2)}
 
     async def _refusals(self, trade: dict, pos: dict, add_qty: float, new_stop: float, stop_after: float,

@@ -26,7 +26,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, equity_marks, reconcile
+from . import clientid, equity_marks, reconcile, targets
 from .exchange import Exchanges, to_raw, to_symbol
 from .journal import Journal
 from .risk import AccountState
@@ -193,6 +193,7 @@ class Trader(OpenFlow, ManageFlow):
                 "UNPROTECTED": "unknown" if err else stop is None, "trade_id": jt.get("id"), "setup": jt.get("setup"),
                 "thesis": jt.get("thesis"), "plan": jt.get("plan"), "opened_at": jt.get("opened_at"),
                 "mae_pct": jt.get("mae_pct"), "mfe_pct": jt.get("mfe_pct"), "targets_hit": jt.get("targets_hit"),
+                "targets_resting": targets.view(self.j, jt.get("id")),   # reduce-only limits on the book (#65)
                 "journal_status": jt.get("status", "NOT IN JOURNAL"), **({"error": err} if err else {}),
             })
         return out

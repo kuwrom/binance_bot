@@ -38,6 +38,7 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 from . import entries_fills as fills
+from . import targets_sync
 from .entries_amend import EntryAmend
 from .entries_cancel import CANCEL_FAILS_ALERT, DEAD, EntryCancel, withdraw  # noqa: F401 (withdraw re-export)
 from .entries_place import MIN_TTL_S, EntryPlacement  # noqa: F401 (MIN_TTL_S re-export)
@@ -256,6 +257,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                 await fills.plan_stop(self, e, cps)
                 trades = await fills.history(tr.t, e, o)
                 done = fills.adopt(self, e, o, pos, trades) if pos else None
+                if pos:   # another trade's targets never meet this fill (#65)
+                    await targets_sync.clear_stale(tr, sym, (self.j.active_trade(sym) or {}).get("id"))
         if rest == "unknown":
             return await self._rest_unknown(e)
         if not pos:   # filled and closed again before this poll (its pre-armed stop): rebuild it from history

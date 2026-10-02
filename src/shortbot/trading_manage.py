@@ -16,7 +16,7 @@ from decimal import ROUND_FLOOR, Decimal
 
 import ccxt.async_support as ccxt
 
-from . import clientid, close_intent, fill_quality, margin, reconcile, stops, tranches
+from . import clientid, close_intent, fill_quality, margin, reconcile, stops, targets_sync, tranches
 from .audit import refusals
 from .exchange import to_symbol
 from .stops import is_bridge, is_protective_stop
@@ -50,8 +50,20 @@ class ManageFlow:
             amount = close_intent.sized(self, symbol, size, trade, fraction, expect_contracts, of_original)
             if isinstance(amount, dict):
                 return amount   # refused: nothing sent
+            # a resting target filling with a partial close would close more than asked: they go first (#65)
+            if amount < size and await targets_sync.pull_safe(self, symbol, f"partial close: {reason}"):
+                pos = await self.position(symbol)   # one filled meanwhile: decide on what is left
+                if not pos:
+                    return {"ok": False, "error": f"no open position in {symbol}: its targets filled"}
+                size = _f(pos["contracts"])
+                amount = close_intent.sized(self, symbol, size, trade, fraction, expect_contracts, of_original)
+                if isinstance(amount, dict):
+                    await targets_sync.after(self, symbol, "a refused partial close")
+                    return amount
             if amount < size:
-                return await self._close_part(symbol, trade, pos, size, amount, reason, lesson)
+                res = await self._close_part(symbol, trade, pos, size, amount, reason, lesson)
+                await targets_sync.after(self, symbol, "partial close")
+                return res
             order = await self._market_close(symbol, amount)
             fill_quality.record(self, trade and trade["id"], "exit", "market", order)   # mainnet ref, background (#35)
             exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
@@ -68,6 +80,7 @@ class ManageFlow:
                 return await self._close_left(symbol, trade, order, amount, None, exit_px, reason, lesson, e)
             if left:
                 return await self._close_left(symbol, trade, order, amount, left, exit_px, reason, lesson)
+            await targets_sync.pull_safe(self, symbol, "flat after a full close")   # whatever Binance does (#65)
             if listed is None:
                 await self.alert("orphan_stop", f"closed but could not list stops: {err}", symbol, False)
             else:   # the limits of "unknown" legs may still rest and fill: their pre-armed stops stay
@@ -212,6 +225,7 @@ class ManageFlow:
             if trade:
                 self.j.update_trade(trade["id"], stop_price=new_stop)
             self.j.log_decision("move_stop", reason, symbol, snapshot={"from": current, "to": new_stop})
+            await targets_sync.after(self, symbol, "stop move")   # #65: in case its bridge took a target with it
             return {"ok": True, "symbol": symbol, "old_stop": current, "new_stop": new_stop,
                     "order_id": placed.get("id"), **({"warnings": res["warnings"]} if res.get("warnings") else {})}
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-from . import clientid, fill_quality, killswitch, reconcile, stops, warmup
+from . import clientid, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
 from .audit import refusals
 from .entry_intents import ON_BOOK
 from .exchange import to_symbol
@@ -143,6 +143,7 @@ class OpenFlow:
                 if await self.position(symbol):   # a limit fill or another session got there first
                     return {"ok": False, "error": f"{symbol} already has a position (opened since the checks); "
                                                   "manage it instead"}
+                await targets_sync.clear_stale(self, symbol)   # the last trade's targets never meet this one (#65)
                 if (jt := self.j.active_trade(symbol)) and jt["status"] == "opening":   # under the lock: not in flight
                     return {"ok": False, "trade_id": jt["id"], "error": f"trade #{jt['id']}'s entry on {symbol} is "
                             "unresolved (send status unknown): it may still fill. Never re-send it; the guardian "

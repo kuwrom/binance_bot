@@ -115,7 +115,11 @@ class FakeCcxt(Account, Engine):
 
     def amount_to_precision(self, s, a):
         step = Decimal(str(self._spec(s)["step"]))
-        return str((Decimal(str(a)) / step).to_integral_value(ROUND_DOWN) * step)
+        r = (Decimal(str(a)) / step).to_integral_value(ROUND_DOWN) * step
+        if r == 0:   # ccxt 4.5.84 base/exchange.py amount_to_precision: a '0' result raises
+            raise ccxt.InvalidOrder(f"binanceusdm amount of {s} must be greater than minimum amount precision of "
+                                    f"{step}")
+        return str(r)
 
     def price_to_precision(self, s, p):
         tick = Decimal(str(self._spec(s)["tick"]))
@@ -218,6 +222,8 @@ class FakeCcxt(Account, Engine):
             raise err.tick_size()
         if reduce and (side != "buy" or b["qty"] <= 0):
             raise err.reduce_only_rejected()
+        if reduce:
+            self._ro_compete(s, amount, price)   # fake_reduce.py
         if not reduce and amount * price < b["min"]:
             raise err.min_notional(b["min"])
         gtd = None
@@ -233,6 +239,8 @@ class FakeCcxt(Account, Engine):
                           "ts": self.now_ms(), "last_ts": None}
         if side == "sell" and price <= b["price"]:   # marketable: GTD is not post-only (GTX), so it takes at once
             self._exec_limit(i, amount)
+        elif side == "buy" and price >= b["price"]:   # GTC is not post-only either: a marketable target takes at once
+            self._ro_exec(i)
         return self._order_view(i)
 
     def _new_market(self, s, side, amount, params, cid):
@@ -244,6 +252,7 @@ class FakeCcxt(Account, Engine):
         if reduce:
             if side != "buy" or b["qty"] <= 0:
                 raise err.reduce_only_rejected()
+            self._ro_compete(s, amount, None)   # fake_reduce.py
             # inferred: a reduce-only market order bigger than the position closes just the position (binance.com
             # FAQ "Summary of Failed Orders": reduce-only market orders >= the position size get priority)
             amount = min(amount, b["qty"])

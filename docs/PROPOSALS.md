@@ -14,8 +14,8 @@ These are designs, not code. P1a and P2 now carry research-derived answers, not 
 - Resting bids far below market filled. Hyperliquid's HLP made +$40m that weekend, ~41% of its lifetime profit across two such events.
 
 **Today** (code map, 2026-10-02):
-- Take-profits are not resting orders. `manager.plan_actions` (manager.py:80-101) decides, and the guardian's 60-second protective pass executes a reduce-only MARKET buy on `markPrice` (guardian_positions.py:199-244, trading_manage.py:32-72). A wick between passes is missed.
-- The only orders resting on the exchange are the entry SELL limit, a reduce-only STOP_MARKET pre-arm, one closePosition STOP_MARKET and temporary bridge stops.
+- Take-profits were not resting orders: the guardian's 60-second pass bought back at MARKET on `markPrice`, and a wick between passes was missed. Since #65, automatic targets rest (P1a, below).
+- Resting on the exchange: the entry SELL limit, a reduce-only STOP_MARKET pre-arm, one closePosition STOP_MARKET, temporary bridge stops and, since #65, the automatic targets as reduce-only BUY limits (`sb-t…`).
 - There is no ADL monitoring, no check of the margin asset or multi-asset mode, and no margin-ratio or liquidation-distance check once a position is open. The liquidation checks run only at entry: risk.py:37-47 and trading_open.py:171-173, the latter a warning only.
 
 ### P1a. Resting reduce-only take-profit orders: research result (2026-10-02, `backtest/rungs.py`)
@@ -45,13 +45,22 @@ Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill
    - The expected gain is small, about +0.005-0.01R per trade. It is a free option on wicks, not an edge.
 3. **The bigger gap is execution, not depth.** The backtest credits targets as resting limits that fill on any last-price touch. Live, the guardian closes targets at market when its 60-second mark-price check sees them, and mark price smooths out last-price wicks.
    - Rule: make automatic targets resting reduce-only limit orders at the target prices. This is the execution the backtest already assumes, and it adds no carve cost.
-   - **To measure:** per-target fill prices are not journalled today (`targets_hit` stores target prices only). Record them, and run the demo probe below.
+   - **Built (#65, `targets.py`, `targets_sync.py`).** Each automatic target rests as a reduce-only GTC BUY LIMIT at its price (client id `sb-t<trade>-…`), sized by the plan's cumulative fractions of the original size, so manual partials and adds count. GTC, not post-only: a target placed when the book is already through it fills at once at its price or better instead of being rejected. Plain LIMITs use the 200-open-orders budget per symbol, not the 10 conditional slots (stop, bridges, pre-arms).
+   - Kept in sync by the guardian every pass (fills settled, missing ones placed, wrong ones cancelled, orphans cancelled) and right after a partial close, an add, a widen, a stop move or `update_plan`. A partial close or a widen's cut cancels the targets first, so none fills with it. Flat cancels them, whatever Binance does on its own. A new short on the symbol (`open_short`, a limit-entry fill) cancels any target of another trade first.
+   - The market fallback stays: a target the mark crossed without its limit having filled (gone from the book, refused, part-filled) is closed at market by the guardian, idempotently (`of_original`), as before.
+   - **Measured:** each fill is a `target_fill` decision (target, order, price, qty, time, slip in bps) plus the row in `target_orders` (status history, why it left the book) and a mainnet reference (`fill_refs`, type `target`). Orders Binance took away are `target_gone` decisions.
 
-**Still unverified** (both on binance-bot-99's demo-probe list):
-- whether Binance cancels reduce-only orders itself when the position goes flat (cancel-on-flat stays mandatory either way);
+**Still unverified** (Binance's docs leave them open; the code is safe either way: it re-lists the book every pass and cancels on flat):
+- whether an untriggered conditional reduce-only order (a stop swap's bridge, a pre-arm) takes part in the reduce-only competition and cancels targets;
+- whether Binance expires reduce-only limits at flat (Binance staff, dev.binance.vision/t/802, say EXPIRED), and what a partly filled one reads;
+- what a cut that is not an order (a partial ADL) does to them;
 - the ADL endpoint format.
 
-**Fakes first:** `fake_engine` never fills BUY limits on the way down, and refuses TAKE_PROFIT below price.
+**Demo drill (#65, owner-approved, run by the coordinator):** a minimum-size short on a liquid coin with `auto.targets` on and two targets a little below the price.
+1. Wait for a guardian pass: `sqlite3 -readonly data/shortbot.db "select id,target,qty,status,order_id,history from target_orders order by id desc limit 5"`. Expect two `resting` rows; the book shows two reduce-only BUY limits `sb-t<trade>-…`.
+2. `move_stop` once (a bridge is placed and cancelled). Same query: are the rows still `resting`? A `target_gone` decision (`select ts,snapshot from decisions where action='target_gone'`) means the bridge's competition took them; the next pass places them again.
+3. Let one target fill (or move a target just under the price with `update_plan`): a `target_fill` decision shows price, qty, time and slip; for a partial fill, `filled` < `qty` while it stays `resting`.
+4. Close the rest by hand on Binance (not through the desk), and look at the rows before the next pass: `history[-1].ex` is Binance's own status at flat (`expired` or `canceled`), or the row is still `resting` and the next pass cancels it (`why` = "flat: the position is closed").
 
 ### P1b. ADL watch: built (#64, `guardian_margin.py`, facts and sources in `margin.py`)
 - **Endpoint** (Binance's SDK carries the doc text; JKorf/Binance.Net #1107 for the shape): `GET /fapi/v1/adlQuantile`, weight 5, values update every 30 s, 0-4 = queue position low to high. One-way Mode answers LONG, SHORT and BOTH (ours: BOTH). Without `symbol` a list (`[]` when flat, demo read 2026-10-02), with one a single object. A populated answer is still unverified on demo: the parser is tolerant, anything unexpected is logged as an ERROR with the raw answer, and the first non-empty answer is kept in kv `adl_sample`.

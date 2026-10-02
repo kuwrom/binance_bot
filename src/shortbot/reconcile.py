@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import episodes, fill_quality
+from . import episodes, fill_quality, targets
 from .exchange import to_raw
 
 log = logging.getLogger("shortbot.reconcile")
@@ -97,7 +97,8 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
                   gross_pnl=inc["gross"], fees=inc["fees"], funding=inc["funding"] + inc["liq_fee"])
     if episode:
         j.update_trade(trade["id"], closed_at=ms_to_iso(episode["closed_ms"]))
-        fill_quality.record_episode(trader, trade, episode)   # mainnet refs for its fills not yet referenced (#35)
+        fill_quality.record_episode(trader, trade, episode,   # mainnet refs for its fills not yet referenced (#35)
+                                    targets.order_kinds(j, trade["id"]))   # its resting targets' fills say so
     j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,
                                                                       "exit": exit_px})
     return {"trade_id": trade["id"], "symbol": trade["symbol"], "exit": exit_px, **inc, "reason": reason}
@@ -127,7 +128,10 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
                 continue   # the live position is the one this trade last saw: nothing to read
             m = await episodes.match(trader, tr)
             if m["state"] == "closed":   # its own exit fill proves it, whatever the positions answer said
-                done.append(await finalize(trader, tr, await exit_reason(trader.t, tr["symbol"], m), episode=m))
+                why = await exit_reason(trader.t, tr["symbol"], m)
+                if why == CLOSED_ON_EXCHANGE:   # not Binance's own close: its last exit may be a resting target (#65)
+                    why = targets.exit_label(trader.j, tr["id"], m) or why
+                done.append(await finalize(trader, tr, why, episode=m))
             elif empty:
                 unproven.append(tr)
             elif not p or older:

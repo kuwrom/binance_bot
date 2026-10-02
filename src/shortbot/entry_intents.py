@@ -31,7 +31,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid
+from . import clientid, targets
 from .exchange import to_symbol
 from .journal import now_iso
 
@@ -204,6 +204,8 @@ async def _sweep(desk) -> list[dict[str, Any]]:
     events = []
     for o in orders:
         oid, cid, sym = str(o["orderId"]), o.get("clientOrderId"), to_symbol(o["symbol"])
+        if targets.is_target(cid):
+            continue   # a resting plan target: targets_sync keeps those (#65)
         r = by_cid.get(cid) or by_oid.get(oid)
         try:
             if r is None:
