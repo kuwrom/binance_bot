@@ -4,12 +4,13 @@ by fill type, setup and entry type; and the calibration hook, which refuses to c
 
 import json
 import math
+from dataclasses import replace
 
 import pytest
 from pytest import approx
 
 from shortbot import fill_report as fr
-from shortbot.backtest.sim import COSTS
+from shortbot.backtest.sim import COSTS, Plan, simulate
 from shortbot.journal import Journal
 
 DAY = 86_400_000
@@ -146,3 +147,25 @@ def test_calibration_refuses_below_30_trades_or_20_days(n, days):
 def test_calibration_with_no_fills_is_empty_not_an_error():
     cal = fr.calibrate(Journal(":memory:"))
     assert not cal["ok"] and cal["n_fills"] == 0 and cal["k_bps"] is None
+
+
+def flat(*hl):
+    rows = [{"ts": k * 3_600_000, "o": 100.0, "h": 100.0, "l": 100.0, "c": 100.0, "qv": 1.0} for k in range(6)]
+    for k, (h, lo) in enumerate(hl, 1):
+        rows[k].update(h=h, l=lo)
+    return rows
+
+
+@pytest.mark.parametrize("plan,hl,kinds,reason", [
+    (Plan(stop=110, time_stop=2), [], ("entry/market", "exit/time"), "time"),
+    (Plan(stop=110), [(111, 100)], ("entry/market", "exit/stop"), "stop"),
+    (Plan(stop=110, entry="limit", limit_px=101, targets=((96, 1.0),)), [(102, 100), (100, 95)],
+     ("entry/limit", "exit/target"), "target"),
+    (Plan(stop=110, entry="stop", limit_px=99, time_stop=2), [(100, 98)], ("entry/stop", "exit/time"), "time")])
+def test_the_model_charges_each_fill_what_the_simulator_charges(plan, hl, kinds, reason):
+    """Costs.charge is pinned to simulate(): a change to the sim's time-stop or stop charge fails here, not silently."""
+    costs = replace(COSTS, funding=False, stop_slip_mult=3.0)
+    r = simulate(flat(*hl), 0, plan, costs=costs, vol24_usd=1e6)
+    assert r["reason"] == reason
+    assert r["slip_pct"] == approx(sum(costs.charge(k) for k in kinds) * costs.slip(1e6) * 100)
+    assert {fr.mult({"leg": k.split("/")[0], "type": k.split("/")[1]}, costs) for k in fr.SIM_KIND} == {0.0, 1.0, 3.0}

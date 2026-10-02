@@ -6,7 +6,7 @@ them. Read-only, no network.
   entry (a SELL): (ref - px) / ref; exit (a BUY): (px - ref) / ref. bps_mark: the same against the mark.
 - stale: the reference is more than MAX_LAG_MS from the fill (a thin coin's last print well before it): listed,
   kept out of every aggregate and of the calibration.
-- model: sim.Costs.slip(24h quote volume) x the simulator's charge for that fill (MULT): a market entry or a desk
+- model: sim.Costs.slip(24h quote volume) x the sim's charge for that fill (Costs.charge): a market entry or a desk
   close 1x (sim: entry at the close, time stop), a limit 0 (fills at its price as maker), a stop 2x (stop_slip_mult;
   `exchange` exits, the stop-outs found in trade history, are charged as stops). Volume: fill_refs.vol24_usd (mainnet
   24 h ticker at the first entry), else entry_features.quote_volume (the scan's); sim sums the 24 hourly bars to the
@@ -33,9 +33,11 @@ from .backtest.sim import COSTS, Costs
 MAX_LAG_MS = 5_000
 MIN_TRADES = 30
 RECENT = 20
-STOP = "stop"   # charged stop_slip_mult x
-MULT: dict[str, float | str] = {"entry/market": 1.0, "entry/limit": 0.0, "entry/stop": STOP, "exit/market": 1.0,
-                                "exit/exchange": STOP, "exit/stop": STOP, "exit/target": 0.0, "exit/limit": 0.0}
+# a desk fill -> the sim fill it is charged as (sim.Costs.charge): a desk close is a market order (sim's time exit), a
+# stop-out found in trade history a stop, a resting target a target
+SIM_KIND = {"entry/market": "entry/market", "entry/limit": "entry/limit", "entry/stop": "entry/stop",
+            "exit/market": "exit/time", "exit/exchange": "exit/stop", "exit/stop": "exit/stop",
+            "exit/target": "exit/target", "exit/limit": "exit/target"}
 HOW = ("bps of the fill price vs the mainnet reference at the fill (book mid, else last print, else mark); positive "
        "= worse for the short. model_bps = what backtest/sim.py charges the same fill: 20 bp / sqrt(24h vol $M), "
        "clipped 1-150 bp, 2x on stops, 0 on limits. excess = actual - model. Demo fills vs mainnet prices: they "
@@ -67,8 +69,8 @@ def bps(f: dict[str, Any], ref: float | None = None) -> float | None:
 
 
 def mult(f: dict[str, Any], costs: Costs = COSTS) -> float | None:
-    m = MULT.get(f"{f.get('leg')}/{f.get('type')}")
-    return costs.stop_slip_mult if m == STOP else m
+    kind = SIM_KIND.get(f"{f.get('leg')}/{f.get('type')}")
+    return costs.charge(kind) if kind else None
 
 
 def model_bps(f: dict[str, Any], vol24_usd: float | None, costs: Costs = COSTS) -> float | None:

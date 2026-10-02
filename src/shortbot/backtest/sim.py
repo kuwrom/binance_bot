@@ -48,6 +48,13 @@ class Costs:
         m = max(vol24_usd / 1e6, 1e-6)
         return min(self.slip_max_bps, max(self.slip_min_bps, self.slip_k_bps / m ** 0.5)) / 1e4
 
+    def charge(self, kind: str) -> float:
+        """Slippage simulate() charges a fill of `kind`, in multiples of slip(): the one table fill_report.py compares
+        live fills with (tests pin it to simulate()). A market entry and a time / eod / funding-budget exit (exit/time)
+        1x, a limit entry and a target (resting, maker) 0, a stop entry and a stop exit stop_slip_mult x."""
+        return {"entry/market": 1.0, "exit/time": 1.0, "entry/limit": 0.0, "exit/target": 0.0,
+                "entry/stop": self.stop_slip_mult, "exit/stop": self.stop_slip_mult}[kind]
+
 
 COSTS = Costs()
 FREE = Costs(taker_bps=0, maker_bps=0, slip_k_bps=0, slip_min_bps=0, funding=False)
