@@ -164,9 +164,9 @@ def chandelier(st: Study, s: str, d: int, mult: float = 3.0, max_h: int = 20) ->
     return None
 
 
-def breakout(st: Study) -> dict[str, list[dict[str, Any]]]:
-    out: dict[str, list[dict[str, Any]]] = {f"hold{h}": [] for h in (5, 10, 20)} | {"chandelier3": []}
-    last: dict[str, int] = {}
+def breakout_days(st: Study) -> list[tuple[int, str]]:
+    """(day, coin) of every L2 signal: the close exceeds the previous 20 days' highest high, first in 20 days."""
+    out, last = [], {}
     for d in st.p.days:
         for s in st.uni(d):
             bars = st.p.bars[s]
@@ -176,14 +176,21 @@ def breakout(st: Study) -> dict[str, list[dict[str, Any]]]:
             if d - last.get(s, -10 ** 15) < 20 * DAY:
                 continue
             last[s] = d
-            for h in (5, 10, 20):
-                if (e := _event(st, s, d, st.net(s, d, h), h)) is not None:
-                    out[f"hold{h}"].append(e)
-            ch = chandelier(st, s, d)
-            if ch is not None:
-                r, k = ch
-                if (e := _event(st, s, d, r - st.p.funding(s, d, k) - COST, k)) is not None:
-                    out["chandelier3"].append(e)
+            out.append((d, s))
+    return out
+
+
+def breakout(st: Study) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {f"hold{h}": [] for h in (5, 10, 20)} | {"chandelier3": []}
+    for d, s in breakout_days(st):
+        for h in (5, 10, 20):
+            if (e := _event(st, s, d, st.net(s, d, h), h)) is not None:
+                out[f"hold{h}"].append(e)
+        ch = chandelier(st, s, d)
+        if ch is not None:
+            r, k = ch
+            if (e := _event(st, s, d, r - st.p.funding(s, d, k) - COST, k)) is not None:
+                out["chandelier3"].append(e)
     return out
 
 
@@ -201,23 +208,34 @@ def _beta(st: Study, s: str, d: int, n: int = 60) -> float:
     return sum((a - mx) * (b - my) for a, b in zip(xs, ys)) / len(xs) / statistics.pvariance(xs)
 
 
+def rs_names(st: Study, d: int) -> list[str]:
+    """The L1 universe at day d: the top 30 by 30-day volume without BTC ([] below 15 names)."""
+    names = [s for s in st.uni(d, BASKET + 1) if s != BTC][:BASKET]
+    return names if len(names) >= 15 else []
+
+
+def rs_picks(st: Study, d: int, n: int, names: list[str], betas: dict[str, float] | None = None) -> list[str]:
+    """The top 5 of `names` by their n-day return residual to BTC at close d (beta from 60 daily returns)."""
+    b0 = st.btc.get(d - n * DAY)
+    if b0 is None or d not in st.btc:
+        return []
+    betas = betas or {s: _beta(st, s, d) for s in names}
+    resid = {s: st.p.bars[s][d][4] / st.p.bars[s][d - n * DAY][4] - 1 - betas[s] * (st.btc[d] / b0 - 1)
+             for s in names if d - n * DAY in st.p.bars[s]}
+    return sorted(resid, key=lambda x: -resid[x])[:5]
+
+
 def residual_momentum(st: Study) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {f"lb{n}": [] for n in (7, 14, 28)}
     for d in st.p.days:
-        if datetime.fromtimestamp(d / 1000, UTC).weekday() != 6:
-            continue
-        names = [s for s in st.uni(d, BASKET + 1) if s != BTC][:BASKET]
-        if len(names) < 15:
+        if datetime.fromtimestamp(d / 1000, UTC).weekday() != 6 or not (names := rs_names(st, d)):
             continue
         b7 = st.bench(d, 7, names)
+        if b7 is None:
+            continue
         betas = {s: _beta(st, s, d) for s in names}
         for n in (7, 14, 28):
-            b0 = st.btc.get(d - n * DAY)
-            if b0 is None or b7 is None:
-                continue
-            resid = {s: st.p.bars[s][d][4] / st.p.bars[s][d - n * DAY][4] - 1 - betas[s] * (st.btc[d] / b0 - 1)
-                     for s in names if d - n * DAY in st.p.bars[s]}
-            for s in sorted(resid, key=lambda x: -resid[x])[:5]:
+            for s in rs_picks(st, d, n, names, betas):
                 net = st.net(s, d, 7)
                 if net is not None:
                     out[f"lb{n}"].append({"d": d, "s": s, "net": net, "excess": net - b7,
