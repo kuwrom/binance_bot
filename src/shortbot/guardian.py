@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from pathlib import Path
 
 from . import audit, procs
@@ -25,6 +24,7 @@ from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, s
 from .guardian_margin import MarginChecks
 from .guardian_positions import PositionChecks
 from .guardian_watch import WatchChecks
+from .killswitch import HEARTBEAT_KEY
 from .margin import ADL_PERSIST_PASSES
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
@@ -34,9 +34,25 @@ from .symlock import GUARDIAN_WAIT_S
 
 log = logging.getLogger("shortbot.guardian")
 # job: (every_s, timeout_s). Jobs of one lane run one after another; the lanes run side by side.
-# streaks escalate; the heartbeat comes from here
+# Protective streaks escalate. The heartbeat ("protection last verified", #61) is stamped by the positions pass alone
+# (PositionChecks.check_positions), and only while the fill poll's last run succeeded. entry_reconcile is bookkeeping
+# (the fill poll resolves unknown sends itself; the positions pass protects any position they made): no heartbeat.
 PROTECTIVE = {"entries": (5, 240), "positions": (60, 240), "entry_reconcile": (60, 240)}
 WATCH = {"watch": (60, 240)}   # streaks escalate too (silent squeeze checks matter on a short book); no heartbeat
+# what is and isn't happening while a job keeps failing (the urgent escalation, guardian_loop.Lane)
+UNVERIFIED = "the heartbeat stops, so new entries are refused (and HALTED after 10 min) until it works again."
+FAILING = {
+    "positions": "Stops, plans and closed trades are NOT being checked: check positions and stops on the exchange. "
+                 "Resting stops still fire on Binance; " + UNVERIFIED,
+    "entries": "The fill poll is NOT running: a resting entry that fills keeps only its pre-armed stop (a send of "
+               "unknown outcome has none) until the positions pass restores one, and isn't journalled; the "
+               "withdrawal sweeps aren't running either. Check resting entries on Binance; " + UNVERIFIED,
+    "entry_reconcile": "Bookkeeping only: sends still 'placing' aren't timed out, unresolved pre-armed stops aren't "
+                       "matched and open orders aren't swept for external ones. Fills, stops and plans ARE still "
+                       "checked (the fill poll resolves unknown sends itself): the heartbeat and entries are "
+                       "unaffected.",
+    "watch": "Squeeze, funding, news and ADL alerts on open shorts are NOT running: watch the positions yourself.",
+}
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
            "housekeeping": (86400, 240), "processes": (3600, 240), "margin_mode": (300, 240)}
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
@@ -89,17 +105,22 @@ class Guardian(PositionChecks, WatchChecks, MarginChecks, MarketJobs):
         def lane(name: str, table: dict, **kw) -> Lane:
             return Lane(name, [Job(k, fns[k], *v) for k, v in table.items()], self.n, self.ex, self.j, TICK_S, **kw)
         return {"protective": lane("protective", PROTECTIVE, escalate_after=ESCALATE_AFTER_FAILS,
-                                   escalate_note="Fills and stops are NOT being checked: check positions and stops "
-                                                 "on the exchange.", on_pass=self._heartbeat),
-                "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS,
-                              escalate_note="Squeeze, funding, news and ADL alerts on open shorts are NOT "
-                                            "running: watch the positions yourself."),
+                                   escalate_note=FAILING),
+                "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
                 "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH)}
 
-    def _heartbeat(self) -> None:
-        """Only after a protective pass in which fills and stops were both last checked OK: its age = time since
-        protection last worked (the session brief shows it)."""
-        self.j.set("guardian_heartbeat", str(time.time()))
+    def _heartbeat(self, at: float) -> None:
+        """Called by a positions pass that verified every held position (or a flat account), `at` = its position read.
+        Stamped only while the fill poll's last run succeeded: fills are protected (and journalled) by it. Its age is
+        how long protection has gone unverified; every reader acts on that age (killswitch.watch_guardian)."""
+        lane = self.lanes.get("protective")
+        if lane and lane.failing("entries"):
+            log.info("heartbeat withheld: the fill poll is failing")
+            return
+        try:
+            self.j.set(HEARTBEAT_KEY, str(at))
+        except Exception:  # noqa: BLE001 - a locked DB must not cost the pass its income read; the age shows it
+            log.exception("heartbeat not written")
 
     # ------------------------------------------------------------ run
     async def _startup(self) -> None:

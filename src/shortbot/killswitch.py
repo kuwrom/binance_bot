@@ -34,11 +34,10 @@ ACTIVE, REDUCING, HALTED = "ACTIVE", "REDUCING", "HALTED"
 LEVEL = {ACTIVE: 0, REDUCING: 1, HALTED: 2}
 KV_KEY = "trading_state"
 FRESH_KEY = "trading_state_fresh_checks"
-HEARTBEAT_KEY = "guardian_heartbeat"   # "protection last worked": written after a good protective tick
+HEARTBEAT_KEY = "guardian_heartbeat"   # protection last VERIFIED: a guardian positions pass (guardian_positions, #61)
 STALE_HEARTBEAT_S = 600                # 240 s job timeout + retry stays under it; Mac sleep counts as downtime
-SLOW_HEARTBEAT_S = 180                 # brief warning only
-FRESH_HEARTBEAT_S = 60
-AUTO_CLEAR_CHECKS = 2                  # distinct fresh heartbeats (guardian passes) before a stale halt lifts
+VERIFIED_S = 180                       # 3 positions passes (60 s), the lane's escalation: older = new risk refused
+AUTO_CLEAR_CHECKS = 2                  # distinct verified heartbeats (guardian passes) before a stale halt lifts
 STALE = "stale_heartbeat"
 ALLOWED = "close, partial close, move_stop (tighten), cancel entries, flatten"
 CLEAR_HINT = "only a human clears it: `.venv/bin/shortbot-admin clear --reason '...'` from a real terminal"
@@ -161,7 +160,7 @@ def _fresh_passes(j, now: float | None) -> int:
         n, last = (int(seen.get("n", 0)), seen.get("hb")) if isinstance(seen, dict) else (0, None)
     except ValueError:
         n, last = 0, None
-    if age is None or age >= FRESH_HEARTBEAT_S:
+    if age is None or age > VERIFIED_S:   # stamps come once per positions pass: ~60 s apart
         n, last = 0, None
     elif hb != last:
         n, last = n + 1, hb
@@ -214,14 +213,19 @@ def heartbeat_age(j, now: float | None = None) -> float | None:
 
 async def watch_guardian(tr, now: float | None = None) -> str | None:
     """The guardian can't see its own death, so sessions check its heartbeat wherever they read the state (the
-    opening gate, the brief, the status tool). Stale: trip HALTED and withdraw the resting entries now, since no one
-    would protect their fills. Never seen: block without tripping (start the guardian first)."""
+    opening gate, the brief, the status tool). Its age is how long protection has gone unverified (#61). Over
+    VERIFIED_S: new risk is refused (the reason is returned; nothing is tripped, so it lifts with the next verified
+    pass). Stale: trip HALTED and withdraw the resting entries now, since no one would protect their fills; it lifts
+    itself after AUTO_CLEAR_CHECKS verified passes. Never seen: block without tripping (start the guardian first)."""
     age = heartbeat_age(tr.j, now)
     if age is None:
-        return "the guardian has never run against this journal: start shortbot-guardian before opening risk"
+        return ("the guardian has never run against this journal, or never with trade keys: nothing has verified "
+                "protection. Start shortbot-guardian before opening risk")
     if age <= STALE_HEARTBEAT_S:
         await auto_clear_stale(tr.j, tr.ex.settings, now)
-        return None
+        return None if age <= VERIFIED_S else (
+            f"protection unverified: the guardian last verified every open position's stop {age:.0f} s ago "
+            f"(> {VERIFIED_S} s). New risk waits for its next good pass; this lifts itself")
     why = (f"guardian heartbeat is {age / 60:.0f} min old (> {STALE_HEARTBEAT_S / 60:.0f} min): fills, stops "
            "and plans are unguarded")
     from .killswitch_ops import halt
@@ -326,6 +330,7 @@ def status(j, now: float | None = None) -> dict[str, Any]:
     return {**{k: v for k, v in st.items() if k != "prev_row"},
             "guardian_heartbeat_age_s": None if age is None else round(age),
             "guardian_alive": age is not None and age <= STALE_HEARTBEAT_S,
+            "protection_verified": age is not None and age <= VERIFIED_S,   # else new risk is refused
             "allowed": "everything (risk checks still apply)" if st["state"] == ACTIVE else ALLOWED,
             "clear": how_to_clear(st), "rearm": rearm.holding(j)}
 
@@ -334,8 +339,8 @@ def brief_line(j, now: float | None = None) -> str:
     s = status(j, now)
     age = s["guardian_heartbeat_age_s"]
     hb = "never seen" if age is None else f"{age} s ago" + (
-        " (STALE)" if not s["guardian_alive"] else " (slow: protection not confirmed for 3+ min)"
-        if age > SLOW_HEARTBEAT_S else "")
+        " (STALE)" if not s["guardian_alive"] else " (UNVERIFIED: stops not verified for 3+ min, new entries "
+        "refused until the next good pass)" if not s["protection_verified"] else "")
     if s["state"] == ACTIVE:
         return f"### kill switch: ACTIVE; guardian heartbeat {hb}"
     return (f"### ⛔ kill switch {s['state']} since {s['at']}, tripped by {s['by']} ({s.get('cause')}): {s['reason']}\n"

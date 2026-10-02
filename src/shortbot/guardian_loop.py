@@ -75,13 +75,11 @@ class Streak:
 
 class Lane:
     def __init__(self, name: str, jobs: list[Job], notifier, ex, journal, tick_s: float = 1.0,
-                 escalate_after: int | None = None, escalate_note: str = "",
-                 on_pass: Callable[[], Any] | None = None):
+                 escalate_after: int | None = None, escalate_note: dict[str, str] | None = None):
         self.name, self.jobs, self.n, self.ex, self.j = name, jobs, notifier, ex, journal
         self.tick_s = tick_s
         self.streak = Streak(escalate_after)
-        self.escalate_note = escalate_note   # what is NOT happening while this lane's jobs keep failing
-        self.on_pass = on_pass   # after a tick in which every job's last run succeeded (the heartbeat)
+        self.escalate_note = escalate_note or {}   # job -> what is and isn't happening while it keeps failing
         self.last = {job.name: self._seed(job) for job in jobs}
         self._wake = asyncio.Event()
 
@@ -120,12 +118,11 @@ class Lane:
             self.last[job.name] = time.time()
             ran = True
             await self._run(job)
-        if ran and self.on_pass and not self.streak.fails:
-            try:
-                self.on_pass()
-            except Exception:  # noqa: BLE001
-                log.exception("%s lane: pass callback failed", self.name)
         return ran
+
+    def failing(self, name: str) -> bool:
+        """Is this job in a failure streak (its last run failed)?"""
+        return name in self.streak.fails
 
     async def _run(self, job: Job) -> None:
         try:   # a hung await (socket, DB lock) only ever holds up this lane
@@ -159,7 +156,8 @@ class Lane:
             await send_safe(self.n, f"guardian_error:{job.name}", why, cooldown_s=ERROR_COOLDOWN_S)
         if escalate:
             await send_safe(self.n, f"guardian_failing:{job.name}", f"{job.name} failed {self.streak.after}x in a "
-                            f"row since {self.streak.started(job.name)} (last: {why}). {self.escalate_note}".strip(),
+                            f"row since {self.streak.started(job.name)} (last: {why}). "
+                            f"{self.escalate_note.get(job.name, '')}".strip(),
                             urgent=True, cooldown_s=0)
 
 

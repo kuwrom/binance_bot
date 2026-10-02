@@ -115,32 +115,17 @@ async def test_protective_failures_escalate_once_then_recover():
     assert k.count("guardian_error:positions") == 1   # the per-error alert keeps its cooldown
 
 
-async def test_heartbeat_only_when_every_protective_job_last_succeeded():
-    state = {"ok": False}
-
-    async def positions():
-        if not state["ok"]:
-            raise RuntimeError("RequestTimeout")
-    beats = []
-    ln = lane_with(Job("entries", noop, 0, 5), Job("positions", positions, 0, 5), escalate_after=3,
-                   on_pass=lambda: beats.append(1))
-    await ln.tick()
-    await ln.tick()   # entries keeps succeeding, positions keeps failing: no heartbeat
-    assert not beats
-    state["ok"] = True
-    await ln.tick()
-    assert beats == [1]
-
-
 async def test_guardian_heartbeat_stays_stale_while_positions_fail():
+    """Only a positions pass that verified the book stamps it (#61): a lane tick of good fill polls doesn't."""
     g = guardian_with(FakeCcxt())
 
     async def boom():
         raise RuntimeError("RequestTimeout")
     g.check_positions = boom
     await g._lanes()["protective"].tick()
+    await g._lanes()["protective"].tick()
     assert g.j.get("guardian_heartbeat") is None
-    g.check_positions = noop
+    del g.check_positions   # the real pass, over a flat account
     await g._lanes()["protective"].tick()
     assert g.j.get("guardian_heartbeat")
 
@@ -164,12 +149,12 @@ async def test_failing_resync_or_alerts_never_kill_a_lane():
 
     async def broken(*a, **k):
         raise RuntimeError("database is locked")
-    ln = lane_with(Job("positions", drift, 0, 5), escalate_after=1, on_pass=lambda: 1 / 0)
+    ln = lane_with(Job("positions", drift, 0, 5), escalate_after=1)
     ln.ex.resync_time = broken
     ln.n.send = broken
     await ln.tick()
     ln.jobs[0].fn = noop
-    await ln.tick()   # recovery alert and heartbeat both raise: still no crash
+    await ln.tick()   # the recovery alert raises: still no crash
 
 
 async def test_timeout_counts_as_a_failure():

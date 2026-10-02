@@ -36,16 +36,19 @@ SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mod
 
 class PositionChecks:
     """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
-    kill_seen, pnl_streak, pnl_tripped, and MarginChecks.margin_pass."""
+    kill_seen, pnl_streak, pnl_tripped, _heartbeat, and MarginChecks.margin_pass."""
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:
+        """The stop/plan pass, and the only stamp of the heartbeat (#61): after a pass in which every held position's
+        check completed with its stop confirmed, or the account read flat. Without trade keys nothing is verified."""
         if not self.ex.trade:
             return
         tr = self.app.trader
         if time.time() - self._last_resync > RESYNC_EVERY_S:   # the Mac's clock drifts after sleep (-1021)
             await self.ex.resync_time()
             self._last_resync = time.time()
+        t0, verified = time.time(), True   # protection is verified as of this read, not of the pass's end
         live = await tr._raw_positions()
         try:   # journalling closed trades must never cost the stop checks below
             closed = await reconcile.reconcile(tr, live)
@@ -60,10 +63,13 @@ class PositionChecks:
         for p in held:
             sym = p["symbol"]
             try:
-                await self._one_position(p)
+                if not await self._one_position(p):   # a long, or a stop that couldn't be restored (alerted)
+                    verified = False
             except SymbolBusy as e:   # another process is acting on it: skip this pass, retry next pass
+                verified = False
                 await self._position_busy(sym, e)
             except Exception as e:  # noqa: BLE001 - isolate: other positions still get checked
+                verified = False   # swallowed here, never in the heartbeat
                 await self._position_failed(sym, e)
             else:
                 r = self.pos_streak.ok(sym)
@@ -71,6 +77,8 @@ class PositionChecks:
                     await send_safe(self.n, "guardian_recovered:position", f"position check OK again after {r[0]} "
                                     f"failures ({r[1] / 60:.0f} min)", sym, cooldown_s=0)
         await self.margin_pass(live, held)   # after the stops, never instead of them (guardian_margin.py, #64)
+        if verified:   # before the income read: an income outage never stalls it (#16); margin findings only alert
+            self._heartbeat(t0)
         self.pos_streak.forget(set(self.pos_streak.fails) - {p["symbol"] for p in held})   # closed meanwhile
         self.untracked_since = {s: t for s, t in self.untracked_since.items() if s in {p["symbol"] for p in held}}
         acct = await self._day_pnl_read()   # after the stops: the pass's one income read
@@ -147,7 +155,9 @@ class PositionChecks:
                             f"{self.pos_streak.started(sym)} ({e}). Its stop and plan are NOT being verified: check "
                             "what holds it (a hung or suspended session?).", sym, urgent=True, cooldown_s=0)
 
-    async def _one_position(self, p: dict) -> None:
+    async def _one_position(self, p: dict) -> bool:
+        """Check one position: stop, reconciliation, plan, funding. True = its check completed with a stop confirmed
+        resting (the heartbeat's "verified"); a raise is a failed check, which isn't verified either."""
         sym = p["symbol"]
         if p["side"] != "short":
             await self.n.send("unexpected_long", f"A LONG position exists ({p['contracts']}). This desk is "
@@ -155,14 +165,14 @@ class PositionChecks:
             await guarded("kill_switch", ks.trip(self.j, self.app.settings, REDUCING, "guardian", f"a {p['side']} "
                           f"position ({p['contracts']}) in {sym} on a short-only desk", {"symbol": sym},
                           cause="long_position"), self.n)
-            return
+            return False   # nothing here protects a long
         if p.get("error"):   # its stops couldn't be read (Trader.positions): a failed check of this symbol only
             raise RuntimeError(p["error"])
         close, bridges = await stops.listed(self.app.trader, sym)   # a pre-arm or bridge covers a fixed size only
         if p["UNPROTECTED"] or not close or bridges:
-            await self._restore_stop(sym)
+            restored = await self._restore_stop(sym)
             if p["UNPROTECTED"] or not close:
-                return
+                return restored
         await self._untracked_trip(p)
         if p["stop_distance_pct"] is not None and p["stop_distance_pct"] < STOP_NEAR_PCT:
             await self.n.send("stop_near", f"Mark {p['mark']} is {p['stop_distance_pct']}% from stop "
@@ -174,6 +184,7 @@ class PositionChecks:
             await self._track_funding(sym)
         except Exception as e:  # noqa: BLE001 - tracking must never fail the stop checks
             log.warning("funding tracking %s: %s", sym, e)
+        return True
 
     async def _untracked_trip(self, p: dict) -> None:
         """A position the journal doesn't know is a reconciliation mismatch: trip REDUCING once it has stayed untracked
@@ -195,7 +206,8 @@ class PositionChecks:
             log.exception("untracked trip %s failed", sym)
             await send_safe(self.n, "guardian_error:kill_switch", f"{type(e).__name__}: {e}", sym, cooldown_s=1800)
 
-    async def _restore_stop(self, sym: str) -> None:
+    async def _restore_stop(self, sym: str) -> bool:
+        """True when a stop rests now (restored, or one was there) or the position is gone; False when it failed."""
         tr = self.app.trader
         try:
             res = await tr.ensure_stop(sym, FALLBACK_STOP_PCT)
@@ -205,6 +217,7 @@ class PositionChecks:
             elif res:
                 await self.n.send("stop_missing", f"No closePosition stop found. Action: {res}", sym, urgent=True,
                                   cooldown_s=300)
+            return True
         except SymbolBusy:
             raise   # someone else is acting on it: not a failed restore (check_positions skips it this pass)
         except Exception as e:  # noqa: BLE001
@@ -220,9 +233,10 @@ class PositionChecks:
                     "a stop is in place now (set elsewhere): NOT closed." if covered else "position CLOSED." if pos
                     else "the position was already gone (closed elsewhere): nothing to close."), sym,
                                   urgent=True, cooldown_s=0)
-            else:
-                await self.n.send("stop_restore_failed", f"attempt {n}/{MAX_STOP_RESTORE_FAILS}: {e}", sym,
-                                  urgent=True, cooldown_s=0)
+                return True
+            await self.n.send("stop_restore_failed", f"attempt {n}/{MAX_STOP_RESTORE_FAILS}: {e}", sym,
+                              urgent=True, cooldown_s=0)
+            return False
 
     async def _run_plan(self, trade: dict, p: dict) -> None:
         ex = excursions(trade, p["mark"])

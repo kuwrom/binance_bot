@@ -139,7 +139,7 @@ async def test_auto_clear_needs_consecutive_fresh_passes_and_never_lifts_other_c
     now = time.time()
     j = Journal(":memory:")
     await ks.trip(j, SETTINGS, HALTED, "session watchdog", "stale", cause=STALE)
-    for age, expect in ((5, HALTED), (100, HALTED), (4, HALTED), (3, ACTIVE)):   # 100 s old resets the count
+    for age, expect in ((5, HALTED), (ks.VERIFIED_S + 20, HALTED), (4, HALTED), (3, ACTIVE)):   # unverified: reset
         j.set(ks.HEARTBEAT_KEY, str(now - age))
         await ks.auto_clear_stale(j, SETTINGS, now)
         assert ks.read(j)["state"] == expect
@@ -179,7 +179,7 @@ async def test_brief_line_says_what_tripped_it_and_how_it_clears():
     j, now = Journal(":memory:"), time.time()
     j.set(ks.HEARTBEAT_KEY, str(now - 4))
     assert ks.brief_line(j, now).startswith("### kill switch: ACTIVE; guardian heartbeat 4 s ago")
-    assert "slow" in ks.brief_line(j, now + 200)
+    assert "UNVERIFIED" in ks.brief_line(j, now + 200)
     await ks.trip_on_daily_loss(j, SETTINGS, 9_600, -400)
     line = ks.brief_line(j, now)
     assert "REDUCING" in line and "guardian (daily_loss): daily loss -4.00%" in line
