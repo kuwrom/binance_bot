@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import killswitch as ks
-from . import entry_gates, news, procs, research
+from . import entry_gates, news, procs, research, setup_ladder
 from .exchange import to_raw
 from .guardian_loop import guarded
 from .market.regime import market_regime
@@ -21,6 +21,9 @@ from .risk_budget import governor_status
 
 log = logging.getLogger("shortbot.guardian")
 SOCIAL_TOP_MOVERS = 30
+LADDER_CLEAR_REMIND_S = 7 * 86400    # live: criteria pass, a human clear is due: alerted once, then weekly
+LADDER_STOP_LOOKBACK_S = 7 * 86400   # an older setup_ladder_stop row is history (the brief shows it), not news
+KV_STOP_SENT = "setup_ladder_stop_sent:"   # + alert id: that row went to Telegram
 
 
 class MarketJobs:
@@ -108,9 +111,60 @@ class MarketJobs:
             await self.n.send(f"stale_process:{f['pid']}", f["text"], urgent=True, cooldown_s=procs.ALERT_COOLDOWN_S)
 
     async def housekeeping(self) -> None:
-        n = self.j.prune_kv(("news_seen:", "ann_seen:", "alert_ts:"), 30 * 86400)
+        n = self.j.prune_kv(("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)
         m = self.liq_store.prune()
         log.info("pruned %d kv markers, %d old liquidations", n, m)
+
+    async def setup_ladder_check(self) -> None:
+        """Daily (#69): the frozen re-enable check on every SHADOW setup ladder of this account. Demo re-enables at
+        HALF (a decision and an alert); live alerts that the criteria pass and a human clear is due; failing criteria
+        are only logged. A ladder that could not be evaluated fails the job (guardian_error) after the others ran."""
+        live = self.app.settings.mode == "live"
+        broken = []
+        for row in setup_ladder.auto_reenable(self.j, live=live):
+            s = row["setup"]
+            if row.get("error"):
+                broken.append(f"{s}: {row['error']}")
+            elif row.get("ok"):
+                await self._ladder_reenabled(row)
+            elif live and row.get("fails") == []:      # criteria pass; only the human clear is missing
+                await self.n.send(f"setup_ladder_clear_due:{s}", f"criteria pass for {s} ({_evidence(row)}): awaiting "
+                                  f"`shortbot-admin ladder-clear --setup {s} --reason …`",
+                                  cooldown_s=LADDER_CLEAR_REMIND_S)
+            else:
+                log.info("setup ladder %s stays SHADOW: %s", s, "; ".join(row.get("fails") or [str(row.get("reason"))]))
+        if broken:
+            raise RuntimeError("setup ladder not evaluated for " + "; ".join(broken))
+
+    async def _ladder_reenabled(self, row: dict) -> None:
+        s = row["setup"]
+        try:
+            need = (setup_ladder.status(self.j, s).get("probation") or {}).get("need_r")
+        except Exception:  # noqa: BLE001 - the re-enable is done: journal and alert it anyway
+            log.exception("setup ladder %s: probation unreadable after its re-enable", s)
+            need = None
+        ev = {k: row.get(k) for k in ("n", "days", "mean", "t_day", "reenabled_at")}
+        self.j.log_decision("setup_ladder_reenable", f"{s} re-enabled at HALF: the criteria frozen at its stop pass "
+                            f"on the shadow evidence since ({_evidence(row)})",
+                            snapshot={"setup": s, "evidence": ev, "probation_need_r": need})
+        await self.n.send("setup_ladder_reenable", f"setup {s} re-enabled at HALF (probation until +{need}R): "
+                          f"criteria {_evidence(row)}", cooldown_s=0)
+
+    async def forward_ladder_stops(self) -> None:
+        """Every 10 min (#69): setup_ladder.status() journals a `setup_ladder_stop` row in whichever process saw the
+        stop first (often the MCP server sizing a trade), and nothing sends it. Send each of this account's recent
+        rows to Telegram once (no second row); a failed send releases its marker for the next pass."""
+        since = (datetime.now(timezone.utc) - timedelta(seconds=LADDER_STOP_LOOKBACK_S)).isoformat(timespec="seconds")
+        rows = self.j.db.execute("SELECT id, symbol, message FROM alerts WHERE kind = 'setup_ladder_stop' AND mode = ? "
+                                 "AND ts >= ? ORDER BY id", (self.j.mode, since)).fetchall()
+        for aid, sym, msg in rows:
+            marker = KV_STOP_SENT + str(aid)
+            claimed = self.j.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)",
+                                        (marker, str(time.time()))).rowcount
+            self.j.db.commit()
+            if claimed and not await self.n.forward("setup_ladder_stop", msg, sym):
+                self.j.db.execute("DELETE FROM kv WHERE k = ?", (marker,))
+                self.j.db.commit()
 
     # ------------------------------------------------------------ research lane
     async def record_metrics(self) -> None:
@@ -188,6 +242,10 @@ class MarketJobs:
         n = await detect(self.ex, self.j)
         if n:
             log.info("laggard study: %d new events", n)
+
+
+def _evidence(row: dict) -> str:
+    return f"{row.get('n')} episodes over {row.get('days')} days, mean {row.get('mean')}, t_day {row.get('t_day')}"
 
 
 def _names(title: str, symbol: str) -> bool:

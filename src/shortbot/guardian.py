@@ -54,7 +54,8 @@ FAILING = {
     "watch": "Squeeze, funding, news and ADL alerts on open shorts are NOT running: watch the positions yourself.",
 }
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
-           "housekeeping": (86400, 240), "processes": (3600, 240), "margin_mode": (300, 240)}
+           "housekeeping": (86400, 240), "processes": (3600, 240), "margin_mode": (300, 240),
+           "setup_ladder": (86400, 240), "setup_ladder_stops": (600, 120)}   # #69: re-enable check; stops to Telegram
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600)}
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
@@ -100,7 +101,8 @@ class Guardian(PositionChecks, WatchChecks, MarginChecks, MarketJobs):
                "processes": self.check_processes, "margin_mode": self.check_margin_mode,
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
-               "ladder": self.ladder_shadow, "laggard": self.laggard_study}
+               "ladder": self.ladder_shadow, "laggard": self.laggard_study,
+               "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops}
 
         def lane(name: str, table: dict, **kw) -> Lane:
             return Lane(name, [Job(k, fns[k], *v) for k, v in table.items()], self.n, self.ex, self.j, TICK_S, **kw)

@@ -1,7 +1,8 @@
 """Telegram alerts with per-key cooldown; falls back to the log when Telegram isn't configured.
 Every alert is an alerts row first. The cooldown is armed on the attempt, so a dead Telegram (a revoked token) never
 re-alerts every pass; a failed send shortens it to TELEGRAM_RETRY_S, so an outage doesn't swallow an alert for its
-whole cooldown either. A send is time-boxed, and no row, log line or message carries a secret (redact.py)."""
+whole cooldown either. A send is time-boxed, and no row, log line or message carries a secret (redact.py).
+`forward` is the one Telegram-only path: for a row some other process journalled (setup_ladder_stop, #69)."""
 
 from __future__ import annotations
 
@@ -50,6 +51,15 @@ class Notifier:
         if cooldown_s > TELEGRAM_RETRY_S:
             self.j.set(f"alert_ts:{key}", str(now - (cooldown_s - TELEGRAM_RETRY_S)))
         return False
+
+    async def forward(self, kind: str, message: str, symbol: str | None = None, urgent: bool = False) -> bool:
+        """Telegram only, for an alert row another process already journalled: no second row and no cooldown (the
+        caller sends each row once). Without Telegram it is logged. True if delivered (or logged)."""
+        message = redact(message)
+        log.warning("ALERT %s %s: %s", kind, symbol or "", message)
+        if not (self.s.telegram_token and self.s.telegram_chat_id):
+            return True
+        return await self._telegram(kind, message, symbol, urgent)
 
     async def _telegram(self, kind: str, message: str, symbol: str | None, urgent: bool) -> bool:
         text = f"{'🚨' if urgent else '🔔'} <b>[{self.s.mode}] {html.escape(kind)}</b>"
