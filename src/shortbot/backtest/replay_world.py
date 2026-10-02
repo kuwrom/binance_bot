@@ -187,6 +187,11 @@ def _has(db: sqlite3.Connection, table: str) -> bool:
     return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
 
 
+def iso(ms: int) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+
+
 def _ms(iso: str) -> int:
     from datetime import datetime, timezone
     d = datetime.fromisoformat(iso)

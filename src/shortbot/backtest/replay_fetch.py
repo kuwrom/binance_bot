@@ -56,8 +56,9 @@ async def exchange_info(client: httpx.AsyncClient, base: str) -> list[dict[str, 
 
 
 def build_meta(prod: list[dict], demo: list[dict], hist_coins: dict[str, dict], t0: int, t1: int) -> dict[str, dict]:
-    """Coin perps alive at some point of [t0 - lookback, t1] with point-in-time listing facts."""
-    demo_set = {s["symbol"] for s in demo}
+    """Coin perps alive at some point of [t0 - lookback, t1] with point-in-time listing facts. `demo`: the demo
+    account's list TODAY (PENDING_TRADING / SETTLING there are not scannable): its history is not published."""
+    demo_set = {s["symbol"] for s in demo if s.get("status") == "TRADING"}
     out = {}
     for s in prod:
         raw = s["symbol"]
@@ -113,11 +114,15 @@ async def fetch_funding(client: httpx.AsyncClient, store: Store, raws: list[str]
     """Settled funding from REST (weight shared with fundingInfo: 500 / 5 min / IP, so paced)."""
     n = 0
     for raw in raws:
+        key = f"rest/fundingRate/{raw}/{V.day_str(a)}/{V.day_str(b)}"
+        if store.have(key):
+            continue
         r = await client.get(f"{FAPI}/fapi/v1/fundingRate", params={"symbol": raw, "startTime": a, "endTime": b,
                                                                      "limit": 1000}, timeout=30)
         if r.status_code == 200:
             rows = [(int(x["fundingTime"]) // 1000 * 1000, float(x["fundingRate"])) for x in r.json()]
             store.put_funding(raw, rows)
+            store.done(key, len(rows), int(time.time() * 1000))  # wall-clock: fetch log
             n += len(rows)
         await asyncio.sleep(pace_s)
     store.db.commit()
@@ -180,8 +185,7 @@ async def build(cache: Path | str, t0: int, t1: int, times: list[int], hist_db: 
         for r, s in spots.items():
             meta[r]["spot"] = s if s[0] in have else None
         store.put_meta(meta)
-        hist_end = store.db.execute("SELECT MAX(ts) FROM funding").fetchone()[0] or t0 - 30 * DAY
-        out["funding_rest"] = await fetch_funding(client, store, mv, min(hist_end, t0) - 3 * DAY, t1 + DAY)
+        out["funding_rest"] = await fetch_funding(client, store, mv, t0 - 10 * DAY, t1 + DAY)   # 21 prints at 8 h
     await f.close()
     out["requests"] = f.requests
     store.set("build", out)

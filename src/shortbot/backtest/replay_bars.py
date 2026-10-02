@@ -115,16 +115,20 @@ def ticker(fine: Sequence[Bar], t_ms: int, coarse: Sequence[Bar] = (), coarse_st
 
 
 def predicted_funding(prem: Sequence[Bar], t_ms: int, last_settle_ms: int, interval_h: int,
-                      interest_8h: float = 0.0001, clamp: float = 0.0005) -> float | None:
-    """Binance's estimate of the next funding rate: F = P + clamp(I - P, -0.05%, +0.05%), with P the time-weighted
-    average premium index since the last settlement (weights 1..n, here one per closed minute) and I the interest
-    rate (0.01% per 8 h, scaled to the interval). Approximate: Binance samples the premium every few seconds."""
+                      interest_8h: float = 0.0001, clamp: float = 0.0005, cap: float = 0.02) -> float | None:
+    """Binance's estimate of the next funding rate (binance.com/en/support/faq/360033525031, 2026-10-02):
+    F = [P + clamp(I - P, -0.05%, +0.05%)] / (8 / N), with N the interval in hours, I = 0.01% and P the average
+    premium index since the last settlement: time-weighted (1..n) for N > 1, equally weighted for N = 1; capped at
+    +-2% for most contracts. Approximate here: one premium sample per closed minute (Binance samples every 5 s)."""
     xs = [b[C] for b in between(prem, last_settle_ms, t_ms) if b[TS] + MIN <= t_ms]
     if not xs:
         return None
-    p = sum(i * x for i, x in enumerate(xs, 1)) / (len(xs) * (len(xs) + 1) / 2)
-    i_rate = interest_8h * interval_h / 8
-    return p + min(max(i_rate - p, -clamp), clamp)
+    if interval_h == 1:
+        p = sum(xs) / len(xs)
+    else:
+        p = sum(i * x for i, x in enumerate(xs, 1)) / (len(xs) * (len(xs) + 1) / 2)
+    f = (p + min(max(interest_8h - p, -clamp), clamp)) / (8 / interval_h)
+    return min(max(f, -cap), cap)
 
 
 def funding_interval_h(settles: Sequence[int], default: int = 8) -> int:

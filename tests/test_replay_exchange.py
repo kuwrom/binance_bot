@@ -85,7 +85,7 @@ def test_market_info_and_delisting_lead(store):
 def test_funding_positioning_and_unavailable_feeds(store):
     rex = ReplayExchange(store)
     rates = run(rex.public.fetch_funding_rates())
-    assert rates["AAA/USDT:USDT"]["fundingRate"] == pytest.approx(0.0002 + 0.0001 - 0.0002)   # P + clamp(I - P)
+    assert rates["AAA/USDT:USDT"]["fundingRate"] == pytest.approx(0.0001)   # P + clamp(I - P), 8 h
     assert run(rex.funding_intervals())["AAAUSDT"]["interval_h"] == 8
     hist = run(rex.public.fetch_funding_rate_history("AAA/USDT:USDT", limit=21))
     assert len(hist) == 21 and hist[-1]["timestamp"] <= F.T

@@ -100,14 +100,29 @@ def _pct(x: dict[str, Any]) -> str:
     return f"{x['p']:.1%}" + (f" (95% CI {ci[0]:.1%}–{ci[1]:.1%}, {x['days']} days)" if ci else f" ({x['days']} day)")
 
 
-def report(summary: dict[str, Any], results: list[dict[str, Any]], cfg: dict[str, Any], prov: dict[str, Any]) -> str:
-    s = summary
-    inferred = sum(1 for r in results if r["args"].get("inferred"))
-    lines = [
-        "# Live-pipeline replay vs logged scans (task #29)", "",
-        f"Window {cfg['since']} → {cfg['until']}: {s['scans']} logged scans, {s['rows']} logged candidate rows. "
-        f"Universe `{cfg['universe']}`, oracle feeds {'ON' if cfg['oracle'] else 'off'}, delisting lead "
-        f"{cfg['lead_days']} d. Scan arguments inferred for {inferred} scans (logged since this change).", "",
+def first_current(scans: list[dict[str, Any]]) -> int | None:
+    """First scan that logged a tape state: the scanner's current logging, after the 2026-09-29 veto changes (the
+    'OI < $xM' veto became the liquidity tier, negative funding a flag). Older scans ran code that is not in git."""
+    return next((s["ts_ms"] for s in scans if any(r["features"].get("tape_state") for r in s["rows"])), None)
+
+
+def attribution(results: list[dict[str, Any]], meta: dict[str, dict]) -> dict[str, int]:
+    """Why a logged coin was not evaluated (or an extra one was): today's demo list differs, or the ranking."""
+    out = {"missing_not_on_demo_today": 0, "missing_not_listed_today": 0, "missing_ranked_out": 0,
+           "extra_ranked_in": 0}
+    for r in results:
+        u = r["cmp"]["universe"]
+        for s in u["missing"]:
+            m = meta.get(s.split("/")[0] + "USDT")
+            key = "missing_not_listed_today" if m is None else "missing_not_on_demo_today" if not m.get("demo") \
+                else "missing_ranked_out"
+            out[key] += 1
+        out["extra_ranked_in"] += len(u["extra"])
+    return out
+
+
+def _table(s: dict[str, Any]) -> list[str]:
+    return [
         "| measure | value |", "|---|---|",
         f"| **row match** (same coin evaluated, same tradable, setups and tape state) | **{_pct(s['match'])}** |",
         f"| coin evaluated by the replay (universe recall per row) | {_pct(s['in_replay'])} |",
@@ -117,8 +132,24 @@ def report(summary: dict[str, Any], results: list[dict[str, Any]], cfg: dict[str
         f"| veto reasons agree (numbers ignored) | {_pct(s['agree_vetoes'])} |",
         f"| universe recall / precision (mean per scan) | {s['universe_recall_mean']} / {s['universe_precision_mean']} |",
         f"| scans with the exact logged universe | {s['universe_exact_share']} |",
-        f"| tradable-set Jaccard (mean per scan) | {s['tradable_jaccard_mean']} |", "",
-        "## Where they differ", "", "Veto reasons only in the logged scan: " +
+        f"| tradable-set Jaccard (mean per scan) | {s['tradable_jaccard_mean']} |"]
+
+
+def report(summary: dict[str, Any], results: list[dict[str, Any]], cfg: dict[str, Any], prov: dict[str, Any]) -> str:
+    s, a = summary["current_code"] or summary["all"], summary["all"]
+    inferred = sum(1 for r in results if r["args"].get("inferred"))
+    lines = [
+        "# Live-pipeline replay vs logged scans (task #29)", "",
+        f"Window {cfg['since']} → {cfg['until']}: {a['scans']} logged scans, {a['rows']} logged candidate rows. "
+        f"Universe `{cfg['universe']}`, oracle feeds {'ON' if cfg['oracle'] else 'off'}, delisting lead "
+        f"{cfg['lead_days']} d. Scan arguments inferred for {inferred} scans (logged since this change).", "",
+        f"## Current code ({s['scans']} scans since {summary['code_since']})", "",
+        "The replay runs today's code. Scans before the first one that logged a tape state ran code that is not in "
+        "git (other veto rules), so decisions are compared from there on; the universe is compared for all.", "",
+        *_table(s), "", f"## All scans ({a['scans']})", "", *_table(a), "",
+        "Universe differences: " + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in summary["universe"].items()) +
+        ". The demo account's coin list is only known as of today.", "",
+        "## Where they differ (current code)", "", "Veto reasons only in the logged scan: " +
         (", ".join(f"{k} ({n})" for k, n in s["vetoes_logged_only"]) or "none") + ".", "",
         "Veto reasons only in the replay: " + (", ".join(f"{k} ({n})" for k, n in s["vetoes_replay_only"]) or "none")
         + ".", "", "Tape state (logged -> replay): " +
@@ -160,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--hist", help="data/hist.db (read-only)")
     ap.add_argument("--daily", help="data/daily.db (read-only)")
     ap.add_argument("--limit", type=int, help="replay only the first N scans")
+    ap.add_argument("--code-since", help="compare decisions from here (default: the first scan with a tape state)")
     a = ap.parse_args(argv)
     work = Path(a.work)
     cache = Path(a.cache or work / "cache.db")
@@ -174,7 +206,10 @@ def main(argv: list[str] | None = None) -> int:
     rex = ReplayExchange(Store(cache), W.limits_timeline(snap), db_path=world, universe=a.universe,
                          delist_lead_days=a.lead_days)
     results = asyncio.run(replay(scans, rex, Journal(world), live_maps(snap), W.Oracle() if a.oracle else None))
-    summary = RC.summarize(results)
+    since_code = _ms(a.code_since) if a.code_since else first_current(scans)
+    current = [r for r in results if since_code is not None and r["ts_ms"] >= since_code]
+    summary = {"all": RC.summarize(results), "current_code": RC.summarize(current) if current else None,
+               "code_since": W.iso(since_code) if since_code else None, "universe": attribution(results, rex.meta)}
     cfg = {"since": a.since, "until": a.until, "universe": a.universe, "oracle": a.oracle, "lead_days": a.lead_days}
     inputs = {"journal_snapshot": P.fingerprint(snap, ["candidates", "decisions", "market_maps"]),
               "replay_cache": P.fingerprint(cache, ["bars", "metrics", "funding", "meta"], file_hash=False)}
@@ -183,8 +218,12 @@ def main(argv: list[str] | None = None) -> int:
     out = P.save(P.unique(Path(a.out)), prov, {
         "report.md": report(summary, results, cfg, prov),
         "results.json": json.dumps({"summary": summary, "scans": results, "provenance": prov}, indent=1, default=str)})
-    m = summary["match"]
-    print(f"match {m['p']:.1%} ci {m['ci95']} over {summary['rows']} rows / {summary['scans']} scans -> {out}")
+    for era in ("current_code", "all"):
+        if summary[era]:
+            m = summary[era]["match"]
+            print(f"{era}: match {m['p']:.1%} ci {m['ci95']} over {summary[era]['rows']} rows / "
+                  f"{summary[era]['scans']} scans")
+    print(f"-> {out}")
     return 0
 
 

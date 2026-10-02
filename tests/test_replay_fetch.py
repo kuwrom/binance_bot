@@ -28,7 +28,8 @@ def test_build_meta_point_in_time_fields():
     prod = [sym("AAAUSDT", tags=["AI"]), sym("OLDUSDT", dd=F.T0 - 30 * F.DAY), sym("NEWUSDT", on=F.T0 + 99 * F.DAY),
             sym("DELUSDT", dd=F.T0 + F.DAY), {**sym("XAUUSDT"), "underlyingType": "COMMODITY"},
             {**sym("BTCUSDT_261225"), "contractType": "CURRENT_QUARTER"}]
-    meta = RF.build_meta(prod, [{"symbol": "AAAUSDT"}], {"AAAUSDT": {"spot_raw": "AAAUSDT", "spot_mult": 1.0}},
+    demo = [{"symbol": "AAAUSDT", "status": "TRADING"}, {"symbol": "DELUSDT", "status": "PENDING_TRADING"}]
+    meta = RF.build_meta(prod, demo, {"AAAUSDT": {"spot_raw": "AAAUSDT", "spot_mult": 1.0}},
                          F.T0, F.T0 + 2 * F.DAY)
     assert sorted(meta) == ["AAAUSDT", "DELUSDT"]
     assert meta["AAAUSDT"]["demo"] and meta["AAAUSDT"]["spot"] == ["AAAUSDT", 1.0] and meta["AAAUSDT"]["tags"] == ["AI"]

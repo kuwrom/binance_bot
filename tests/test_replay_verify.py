@@ -40,7 +40,10 @@ def test_cli_replays_a_logged_scan_to_itself(tmp_path, capsys):
     assert RV.main(["--journal", str(live), "--work", str(tmp_path / "work"), "--since", "2026-09-26",
                     "--until", "2026-09-27", "--out", str(out)]) == 0
     res = json.loads((out / "results.json").read_text())
-    s = res["summary"]
+    assert res["summary"]["code_since"] == "2026-09-26T14:36:40+00:00"
+    assert res["summary"]["universe"]["missing_ranked_out"] == 0
+    s = res["summary"]["current_code"]
+    assert res["summary"]["all"]["rows"] == 2
     assert s["scans"] == 1 and s["rows"] == 2 and s["match"]["p"] == 1.0 and s["universe_exact_share"] == 1.0
     assert res["scans"][0]["args"] == {"direction": "both", "min_change": 5, "depth": 25, "top_n": 10,
                                        "groups": None, "inferred": False}
@@ -48,4 +51,4 @@ def test_cli_replays_a_logged_scan_to_itself(tmp_path, capsys):
     prov = json.loads((out / "provenance.json").read_text())
     assert prov["config"]["command"] == "shortbot.backtest.replay_verify" and "journal_snapshot" in prov["inputs"]
     assert "row match" in (out / "report.md").read_text()
-    assert "match 100.0%" in capsys.readouterr().out
+    assert "current_code: match 100.0%" in capsys.readouterr().out

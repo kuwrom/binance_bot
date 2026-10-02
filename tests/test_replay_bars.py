@@ -100,9 +100,13 @@ def test_predicted_funding_follows_binance_formula():
     assert RB.predicted_funding(prem, T0 + 60 * MIN, T0, 8) == pytest.approx(0.0001)   # P = I: F = I
     hot = [(b[0], 0, 0, 0, 0.002, 0, 0, 0, 0, 0) for b in prem]
     assert RB.predicted_funding(hot, T0 + 60 * MIN, T0, 8) == pytest.approx(0.002 - 0.0005)  # clamp(I - P)
-    ramp = [(T0 + i * MIN, 0, 0, 0, float(i), 0, 0, 0, 0, 0) for i in range(3)]          # time-weighted 1,2,3
-    assert RB.predicted_funding(ramp, T0 + 3 * MIN, T0, 8, clamp=1e9) == pytest.approx(
-        (0 * 1 + 1 * 2 + 2 * 3) / 6 + (0.0001 - 8 / 6))
+    assert RB.predicted_funding(hot, T0 + 60 * MIN, T0, 4) == pytest.approx((0.002 - 0.0005) / 2)   # / (8 / N)
+    ramp = [(T0 + i * MIN, 0, 0, 0, float(i) / 1e4, 0, 0, 0, 0, 0) for i in range(3)]   # time-weighted 1,2,3
+    p = (0 * 1 + 1 * 2 + 2 * 3) / 6 / 1e4
+    assert RB.predicted_funding(ramp, T0 + 3 * MIN, T0, 8, clamp=1) == pytest.approx(p + (0.0001 - p))
+    assert RB.predicted_funding(ramp, T0 + 3 * MIN, T0, 1) == pytest.approx(0.0001 / 8)   # equal weights: P = I
+    huge = [(b[0], 0, 0, 0, 0.5, 0, 0, 0, 0, 0) for b in prem]
+    assert RB.predicted_funding(huge, T0 + 60 * MIN, T0, 8) == 0.02                         # capped
     assert RB.predicted_funding(prem, T0 + 60 * MIN, T0 + 59 * MIN + 1, 8) is None       # nothing since settling
 
 
