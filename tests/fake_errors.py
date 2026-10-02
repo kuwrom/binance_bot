@@ -51,6 +51,10 @@ def open_orders_block_margin_mode():
     return ccxt.OperationRejected(_body(-4067, "Position side cannot be changed if there exists open orders."))
 
 
+def max_stop_orders():   # -4045 MAX_STOP_ORDER_EXCEEDED (error-code page; ccxt common map -> OperationRejected)
+    return ccxt.OperationRejected(_body(-4045, "Reach max stop order limit."))
+
+
 def duplicate_client_id():
     # -4116 DUPLICATED_CLIENT_ORDER_ID (linear map -> InvalidOrder); New-Order doc: the id is unique among OPEN orders.
     # Inferred: the Algo endpoint's duplicate-clientAlgoId answer is undocumented, so the fake uses -4116 for both

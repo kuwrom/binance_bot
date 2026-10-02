@@ -3,6 +3,8 @@ exchange-side stop-market (closePosition, mark price). Safety properties:
 - a journal row ('opening') exists BEFORE the entry order, so crashes mid-entry are recoverable
 - fills are verified from the live position; the stop is placed with retries; if it can't be placed
   the position is closed (with retries) and an urgent alert fires if even that fails
+- every order carries a client id (clientid.py, #9): an ambiguous answer (timeout, 5xx, -1007) is resolved by that id
+  and the position, never by a blind resend
 - stop swaps roll back to the old stop on failure; stops only ever tighten
 - scanner vetoes + market regime are re-checked server-side; overriding them needs a logged reason
 - every order-changing sequence on a symbol holds that symbol's lock (symlock.py): one at a time across the
@@ -21,7 +23,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import reconcile
+from . import clientid, reconcile
 from .exchange import Exchanges
 from .journal import Journal
 from .risk import AccountState
@@ -31,6 +33,7 @@ from .trading_manage import ManageFlow
 from .trading_open import OpenFlow
 
 STOP_PARAMS = {"closePosition": True, "workingType": "MARK_PRICE"}
+DEAD = ("canceled", "expired", "rejected")   # final: an order found unfilled in one of these never fills
 Alert = Callable[[str, str, str | None, bool], Awaitable[Any]]
 Prechecks = Callable[[Exchanges, str, dict], Awaitable[dict[str, Any]]]
 
@@ -166,30 +169,116 @@ class Trader(OpenFlow, ManageFlow):
         await self.t.set_leverage(leverage, symbol)
 
     async def _place_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict:
+        """ONE closePosition stop at stop_price, under one client id (clientAlgoId) for all its sends. Returns the stop as
+        acked, or as found by that id after an ambiguous answer (timeout, 5xx, -1007, -1021). A definite refusal raises
+        at once (any ExchangeError subclass, and clientid.STOP_REFUSALS: -4130 a closePosition stop already rests,
+        -2021 it would trigger now, -4120). Re-sending after looking is safe: the id is unique among open orders and a
+        side holds one closePosition stop, so a re-send of a stop that landed meanwhile is refused, and that refusal is
+        resolved by the id again. Raises the last error when the id was never found (it may still land)."""
         px = float(self.t.price_to_precision(symbol, stop_price))
+        cid = clientid.new("stop", clientid.tag(symbol))
+        doubt = False
         for i in range(tries):
             try:
                 return await self.t.create_order(symbol, "STOP_MARKET", "buy", None, None,
-                                                 {**STOP_PARAMS, "triggerPrice": px})
-            except (ccxt.NetworkError, ccxt.RateLimitExceeded, ccxt.InvalidNonce) as e:
-                if i == tries - 1:
-                    raise
+                                                 {**STOP_PARAMS, "triggerPrice": px, "clientOrderId": cid})
+            except Exception as e:  # noqa: BLE001 - classified below
+                unknown = clientid.send_unknown(e, clientid.STOP_REFUSALS)
                 if is_clock_drift(e):
                     await self.ex.resync_time()
-                await _sleep(1)
+                if unknown:
+                    await _sleep(1)
+                if (unknown or doubt) and (found := await self._find_stop(symbol, cid)):
+                    return found
+                if not unknown or i == tries - 1:
+                    raise
+                doubt = True
         raise RuntimeError("unreachable")
 
-    async def _market_close(self, symbol: str, amount: float, tries: int = 3) -> dict:
+    async def _find_stop(self, symbol: str, cid: str) -> dict | None:
+        """The conditional order sent under `cid`: by its client id (Query Algo Order), else among the open conditional
+        orders (a verified shape; the lookup's not-found answer is not, #55). None when neither shows it."""
+        try:
+            o = await clientid.lookup(self.t, symbol, cid, trigger=True)
+            if o and o.get("clientOrderId") == cid:
+                return o
+        except Exception:  # noqa: BLE001 - the listing may still show it
+            pass
+        try:
+            return next((o for o in await self.t.fetch_open_orders(symbol, params={"trigger": True})
+                         if o.get("clientOrderId") == cid), None)
+        except Exception:  # noqa: BLE001 - not seen: the caller decides
+            return None
+
+    async def _market_close(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> dict:
+        """Reduce-only market BUY of `amount`, each send under its own client id. A definite refusal is retried (nothing
+        ran). An ambiguous answer is settled, never blindly re-sent: the order found by its id is the answer; a flat
+        position leaves nothing to buy back ({"flat": True, "filled": None}); otherwise only a `whole` close (amount =
+        the position the caller saw) is sent again, as reduce-only can't buy back more than the position. A partial
+        close (whole=False) is never re-sent while in doubt: clientid.Unknown once its tries are spent."""
+        doubt: list[str] = []
         last: Exception | None = None
         for i in range(tries):
+            if whole or not doubt:
+                cid = clientid.new("close", clientid.tag(symbol))
+                try:
+                    return await self.t.create_order(symbol, "market", "buy", amount, None,
+                                                     {"reduceOnly": True, "clientOrderId": cid})
+                except Exception as e:  # noqa: BLE001 - this is the last line of defence: classified, then retried
+                    last = e
+                    if is_clock_drift(e):
+                        await self.ex.resync_time()
+                    if clientid.send_unknown(e):
+                        doubt.append(cid)
+            await _sleep(2 ** i)
+            if doubt and (got := await self._close_outcome(symbol, doubt)) is not None:
+                return got
+        if doubt and not whole:
+            raise clientid.Unknown(doubt[-1], last or RuntimeError("no answer"))
+        unsure = f" (outcome unknown: {', '.join(doubt)})" if doubt else ""
+        raise RuntimeError(f"market close failed after {tries} tries{unsure}: {last}")
+
+    async def _close_outcome(self, symbol: str, doubt: list[str]) -> dict | None:
+        """Settle close sends of unknown outcome: the newest one found with a fill; one found dead and unfilled leaves
+        `doubt`; {"flat": True} when the position reads flat; None while still in doubt."""
+        for cid in reversed(list(doubt)):
             try:
-                return await self.t.create_order(symbol, "market", "buy", amount, None, {"reduceOnly": True})
-            except Exception as e:  # noqa: BLE001 - retry anything; this is the last line of defence
-                last = e
-                if is_clock_drift(e):
-                    await self.ex.resync_time()
-                await _sleep(2 ** i)
-        raise RuntimeError(f"market close failed after {tries} tries: {last}")
+                o = await clientid.lookup(self.t, symbol, cid)
+            except Exception:  # noqa: BLE001 - still unknown
+                continue
+            if o and _f(o.get("filled")) > 0:
+                return o
+            if o and o.get("status") in DEAD:
+                doubt.remove(cid)
+        try:
+            pos = await self.position(symbol)
+        except Exception:  # noqa: BLE001 - still unknown
+            return None
+        if pos is None:
+            return {"id": None, "clientOrderId": doubt[-1] if doubt else None, "flat": True, "status": None,
+                    "filled": None, "average": None}
+        return None
+
+    async def _market_sell(self, symbol: str, amount: float, cid: str, lookups: int = 3) -> dict:
+        """A market SELL that opens or adds to the short, sent ONCE under client id `cid` (journalled by the caller).
+        Returns the order as acked, or as found settled by `cid` after an ambiguous answer. Raises a definite refusal as
+        is, or clientid.Unknown when `cid` stays unsettled: it may still fill, so it is never re-sent."""
+        try:
+            return await self.t.create_order(symbol, "market", "sell", amount, None, {"clientOrderId": cid})
+        except Exception as e:  # noqa: BLE001 - classified below
+            if not clientid.send_unknown(e):
+                raise
+            if is_clock_drift(e):
+                await self.ex.resync_time()
+            for i in range(lookups):
+                await _sleep(1 + i)
+                try:
+                    o = await clientid.lookup(self.t, symbol, cid)
+                except Exception:  # noqa: BLE001 - look again
+                    continue
+                if o is not None and (_f(o.get("filled")) > 0 or o.get("status") in DEAD):
+                    return o
+            raise clientid.Unknown(cid, e) from e
 
     async def _verified_position(self, symbol: str, tries: int = 4) -> dict | None:
         for _ in range(tries):

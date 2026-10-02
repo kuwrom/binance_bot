@@ -1,6 +1,11 @@
 """Opening a short (mixed into Trader): server-side vetoes, regime and budget checks, sizing, the plan, then a
 market SELL that is only kept once its stop is on the exchange.
 
+The SELL carries a client id journalled in the 'opening' row first (entry_features.client_id, #9). An ambiguous answer
+is settled by that id and the position, never re-sent; one that stays unknown keeps the row 'opening' (a late fill is
+never untracked) and the symbol refuses new entries until reconcile settles it. Once filled, the stop always goes on,
+even if the position can't be read.
+
 trading.py imports this module, so `_f` and `_sleep` are imported inside each method at call time: a module-level
 import would be circular, and would bind `_sleep` before the tests patch `shortbot.trading._sleep`.
 """
@@ -9,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
-from . import killswitch, reconcile, warmup
+from . import clientid, killswitch, reconcile, warmup
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier,
@@ -91,52 +96,76 @@ class OpenFlow:
                 if await self.position(symbol):   # a limit fill or another session got there first
                     return {"ok": False, "error": f"{symbol} already has a position (opened since the checks); "
                                                   "manage it instead"}
+                if (jt := self.j.active_trade(symbol)) and jt["status"] == "opening":   # under the lock: not in flight
+                    return {"ok": False, "trade_id": jt["id"], "error": f"trade #{jt['id']}'s entry on {symbol} is "
+                            "unresolved (send status unknown): it may still fill. Never re-send it; the guardian "
+                            "settles it within ~3 min"}
                 await self._prepare(symbol, leverage)
                 features = {**checks.get("features", {}), "regime": checks.get("regime"), "budget": budget,
                             "vetoes_overridden": blockers if blockers else None, "veto_override": veto_override,
                             "limits": lim.__dict__}
                 tid = self.j.create_trade(symbol, setup, thesis, stop_price, leverage, tp.to_dict(), features,
                                           self.ex.experiment)
-                self.j.update_trade(tid, conviction=budget.get("conviction"), regime_cell=budget.get("cell"))
-                return await self._enter(tid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
+                cid = clientid.new("open", tid)   # journalled BEFORE the send
+                self.j.update_trade(tid, conviction=budget.get("conviction"), regime_cell=budget.get("cell"),
+                                    entry_features={**features, "client_id": cid})
+                return await self._enter(tid, cid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
 
-    async def _enter(self, tid: int, symbol: str, amount: float, stop_price: float, sized: bool,
+    async def _enter(self, tid: int, cid: str, symbol: str, amount: float, stop_price: float, sized: bool,
                      leverage: int, lim, equity: float) -> dict:
-        from .trading import _f, _sleep
+        from .trading import DEAD, _f, _sleep
         try:
-            await self.t.create_order(symbol, "market", "sell", amount)
-        except Exception as e:  # noqa: BLE001 - the order may still have filled (timeout)
-            if not await self._verified_position(symbol, tries=2):
-                self.j.abort_trade(tid, f"entry order failed: {e}")
-                return {"ok": False, "error": f"entry order failed, no position: {e}"}
-        pos = await self._verified_position(symbol)
-        if not pos:
+            order = await self._market_sell(symbol, amount, cid)
+        except clientid.Unknown as e:
+            try:
+                held = await self.position(symbol)   # flat before the send (checked under this lock): ours, if any
+            except Exception:  # noqa: BLE001 - can't tell
+                held = None
+            if not held:
+                return await self._entry_unknown(tid, cid, symbol, e)
+            order = {}
+        except Exception as e:  # noqa: BLE001 - a definite refusal: nothing ran
+            self.j.abort_trade(tid, f"entry order refused: {e}")
+            return {"ok": False, "error": f"entry order refused, no position: {e}"}
+        if not _f(order.get("filled")) and order.get("status") in DEAD:
+            self.j.abort_trade(tid, f"entry order {order['status']}, unfilled")
+            return {"ok": False, "error": f"entry order {order['status']} unfilled; no position"}
+        pos, unread = await self._fill_position(symbol)
+        size = _f((pos or {}).get("contracts")) or _f(order.get("filled"))
+        fill = _f((pos or {}).get("entryPrice")) or _f(order.get("average"))
+        if not size and unread is None:   # the position reads flat and the order reports no fill
             self.j.abort_trade(tid, "entry sent but no position found")
             return {"ok": False, "error": "entry sent but no position found; check the exchange"}
-        fill, size = _f(pos.get("entryPrice")), _f(pos.get("contracts"))
-        mark = _f(pos.get("markPrice"), fill)
+        mark = _f((pos or {}).get("markPrice"), fill)
         try:
-            if stop_price <= max(fill, mark):
+            if fill and stop_price <= max(fill, mark):
                 raise ValueError(f"price {max(fill, mark)} already at/above stop {stop_price}")
-            stop = await self._place_stop(symbol, stop_price)
+            stop = await self._place_stop(symbol, stop_price)   # always, even when the position couldn't be read
         except Exception as e:  # noqa: BLE001
             try:
-                await self._market_close(symbol, size)
+                await self._market_close(symbol, size or amount)
                 await _sleep(1)
                 res = await reconcile.finalize(self, {**self.j.get_trade(tid), "status": "open"},
                                                f"aborted: stop placement failed ({e})")
             except Exception as e2:  # noqa: BLE001
-                self.j.activate_trade(tid, fill, size, round(size * fill, 2))
+                if size and fill:
+                    self.j.activate_trade(tid, fill, size, round(size * fill, 2))
                 await self.alert("NAKED_POSITION", f"stop failed ({e}) AND close failed ({e2}). Position is "
                                  "UNPROTECTED. Guardian will retry; check Binance now.", symbol, True)
                 return {"ok": False, "error": "UNPROTECTED POSITION: stop and close both failed", "trade_id": tid}
             await self.alert("stop_failed", f"stop placement failed ({e}); position closed", symbol, True)
             return {"ok": False, "error": f"stop placement failed ({e}); position closed", "closed": res}
-
+        warnings = [] if pos else [f"position unread after the fill ({unread or 'reads flat'}): " + (
+            "journalled from the order's own fill" if size and fill else "trade stays 'opening'; the guardian "
+            "journals it from the live position")]
+        if not (size and fill):
+            for w in warnings:
+                await self.alert("entry_warning", w, symbol, True)
+            return {"ok": True, "trade_id": tid, "symbol": symbol, "client_id": cid, "stop": stop_price,
+                    "stop_order_id": stop.get("id"), "warnings": warnings}
         self.j.activate_trade(tid, fill, size, round(size * fill, 2))
         risk_usdt = size * (stop_price - fill)
-        liq = _f(pos.get("liquidationPrice")) or None
-        warnings = []
+        liq = _f((pos or {}).get("liquidationPrice")) or None
         if liq and stop_price >= liq * (1 - lim.liq_buffer_pct / 100):
             warnings.append(f"stop {stop_price} is within {lim.liq_buffer_pct}% of liquidation {liq}")
         if equity and risk_usdt / equity * 100 > lim.risk_per_trade_pct * 1.25:
@@ -145,7 +174,34 @@ class OpenFlow:
             await self.alert("entry_warning", w, symbol, False)
         self.j.log_decision("open", self.j.get_trade(tid)["thesis"], symbol, snapshot={
             "trade_id": tid, "fill": fill, "size": size, "stop": stop_price, "warnings": warnings})
-        return {"ok": True, "trade_id": tid, "symbol": symbol, "amount": size, "fill": fill,
+        return {"ok": True, "trade_id": tid, "symbol": symbol, "amount": size, "fill": fill, "client_id": cid,
                 "notional": round(size * fill, 2), "auto_sized": sized, "leverage": leverage,
                 "stop": stop_price, "stop_order_id": stop.get("id"), "liquidation": liq,
                 "risk_at_stop_usdt": round(risk_usdt, 2), "warnings": warnings}
+
+    async def _fill_position(self, symbol: str, tries: int = 4) -> tuple[dict | None, Exception | None]:
+        """The position a fill made, read up to `tries` times: (position, None), (None, None) when it reads flat, or
+        (None, the error) when the reads kept failing. Never raises: the stop goes on regardless."""
+        from .trading import _sleep
+        err: Exception | None = None
+        for _ in range(tries):
+            try:
+                if p := await self.position(symbol):
+                    return p, None
+                err = None
+            except Exception as e:  # noqa: BLE001
+                err = e
+            await _sleep(0.5)
+        return None, err
+
+    async def _entry_unknown(self, tid: int, cid: str, symbol: str, e: clientid.Unknown) -> dict:
+        """The entry may still fill: its row stays 'opening' with its client id, never aborted (a late fill must not be
+        untracked). open_short refuses the symbol until reconcile settles the row (activated from the position, or
+        aborted after OPENING_GRACE_S); the guardian's stop pass protects a late fill at the row's stop."""
+        msg = f"entry send status unknown and {cid} not found ({type(e.cause).__name__}): it may still fill; not re-sent"
+        self.j.log_decision("entry_unknown", msg, symbol, snapshot={"trade_id": tid, "client_id": cid})
+        await self.alert("entry_unknown", f"trade #{tid}: {msg}. The guardian protects and journals a late fill.",
+                         symbol, True)
+        return {"ok": False, "unknown": True, "trade_id": tid, "client_id": cid, "error": msg,
+                "hint": "Don't re-send it. Re-read positions in ~3 min: the guardian adopts a late fill at the planned "
+                        "stop, or aborts the row."}

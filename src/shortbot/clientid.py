@@ -7,8 +7,11 @@ Binance USDⓈ-M (developers.binance.com, checked 2026-10-01):
 - Query Order takes origClientOrderId. An unfilled CANCELED/EXPIRED order disappears ~3 days after creation (any
   order after 90 days).
 - -1006 / -1007 and HTTP 503 "Unknown error" mean the execution status is unknown.
+- Query Algo Order takes algoId or clientAlgoId; its answer for an unknown id is undocumented (checked 2026-10-02).
 ccxt 4.5.84: params['clientOrderId'] -> newClientOrderId, or clientAlgoId for a linear-swap trigger order (without it
-ccxt sends its own 'x-xcKtGhcu' + uuid22); fetch_order / cancel_order map it to origClientOrderId.
+ccxt sends its own 'x-xcKtGhcu' + uuid22); fetch_order / cancel_order map it to origClientOrderId, or with
+params['trigger'] to clientAlgoId (GET/DELETE /fapi/v1/algoOrder). A code missing from ccxt's maps raises a bare
+ExchangeError('binanceusdm ' + body) (binance.py handle_errors), e.g. -4130 and -4120.
 """
 
 from __future__ import annotations
@@ -20,8 +23,20 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 PREFIX = "sb"
-KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s"}   # one letter each in the id
+KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "add": "a"}   # one letter each in the id
 VALID = re.compile(r"^[\.A-Z\:/a-z0-9_-]{1,36}$")
+# definite refusals of a closePosition stop that ccxt raises as a bare ExchangeError (or may): one already rests on the
+# side (-4130), wrong endpoint (-4120), it would trigger at once (-2021). Nothing was placed: no lookup needed.
+STOP_REFUSALS = (-4130, -4120, -2021)
+
+
+class Unknown(Exception):
+    """An order's outcome stays unknown after looking it up by its client id: it may have run, or still run. Never
+    re-send it blind; re-read the position first."""
+
+    def __init__(self, cid: str, cause: BaseException):
+        super().__init__(f"send status unknown, {cid} not found ({type(cause).__name__}: {cause})")
+        self.cid, self.cause = cid, cause
 
 
 def new(kind: str, ref: int | str) -> str:
@@ -33,21 +48,37 @@ def new(kind: str, ref: int | str) -> str:
     return cid
 
 
+def tag(symbol: str) -> str:
+    """An id `ref` from a symbol: its base's ASCII letters and digits ('1000PEPE/USDT:USDT' -> '1000PEPE'; a non-ASCII
+    base gives '', so the id stays valid)."""
+    return re.sub(r"[^A-Za-z0-9]", "", symbol.split("/")[0])[:12]
+
+
+def code(e: BaseException) -> int | None:
+    """The Binance error code in a ccxt error ('binanceusdm {"code":-4130,...}'), if the answer carried one."""
+    m = re.search(r'"code"\s*:\s*(-?\d+)', str(e))
+    return int(m.group(1)) if m else None
+
+
 def ours(cid: Any) -> bool:
     return str(cid or "").startswith(PREFIX + "-")
 
 
-def send_unknown(e: BaseException) -> bool:
+def send_unknown(e: BaseException, refusals: tuple[int, ...] = ()) -> bool:
     """True when an order request may have executed although it raised: timeouts, transport errors, HTTP 5xx,
     -1000/-1006/-1007, a -1021 answered after the order executed (seen on cancels, ONDO #5), an error code ccxt doesn't
-    map. False only for a definite refusal (an ExchangeError subclass: price filter, min notional, margin...)."""
+    map. False for a definite refusal: an ExchangeError subclass (price filter, min notional, margin...) or a code in
+    `refusals` (e.g. STOP_REFUSALS)."""
+    if refusals and code(e) in refusals:
+        return False
     return not (isinstance(e, ccxt.ExchangeError) and type(e) is not ccxt.ExchangeError)
 
 
-async def lookup(t, symbol: str, cid: str) -> dict[str, Any] | None:
-    """The (non-conditional) order behind a client id, or None if Binance doesn't know it (-2013). Other errors
-    propagate: the outcome stays unknown. A conditional order's not-found answer is unverified (demo probe #55)."""
+async def lookup(t, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:
+    """The order behind a client id (trigger: a conditional order, by clientAlgoId), or None if Binance doesn't know it
+    (-2013). Other errors propagate: the outcome stays unknown. A conditional order's not-found answer is unverified
+    (demo probe #55): callers also check the open conditional orders."""
     try:
-        return await t.fetch_order(None, symbol, {"clientOrderId": cid})
+        return await t.fetch_order(None, symbol, {"clientOrderId": cid, **({"trigger": True} if trigger else {})})
     except ccxt.OrderNotFound:
         return None

@@ -115,7 +115,7 @@ async def test_a_remainder_whose_stop_cannot_be_placed_alerts_naked_position():
     t, fake, old, res, sent = await leg_fills_mid_close(prearm=False, fail_stop=1)
     assert fake.position > 0 and fake.stops == {} and fake.prearms == {}
     ((msg, urgent),) = [(m, u) for k, m, s, u in sent if k == "NAKED_POSITION"]
-    assert urgent and "stop rejected" in msg and "Pre-armed stops: none" in msg
+    assert urgent and "-4045" in msg and "Pre-armed stops: none" in msg
 
 
 async def test_flatten_keeps_the_stop_of_a_limit_that_fills_mid_close_and_raises_no_false_naked_alert():

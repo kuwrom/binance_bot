@@ -14,8 +14,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from . import clientid, killswitch
 from . import indicators as ind
-from . import killswitch
 from .exchange import to_symbol
 
 
@@ -148,7 +148,7 @@ class PositionOps:
             cut = qty - allowed
             if cut > 0:
                 cut = float(tr.t.amount_to_precision(symbol, cut + float(tr.t.market(symbol)["precision"]["amount"] or 0)))
-                await tr._market_close(symbol, min(cut, qty))
+                await tr._market_close(symbol, min(cut, qty), whole=cut >= qty)
             for s in stops:
                 await tr.t.cancel_order(s["id"], symbol, params={"trigger": True})
             try:
@@ -208,7 +208,21 @@ class PositionOps:
                 return {"ok": False, "error": f"could not tighten the stop first: {mv.get('error')}"}
         if blocked := killswitch.state_refusal(tr.j, "add_to_winner"):   # tripped meanwhile: the tightened stop stays
             return blocked
-        await tr.t.create_order(symbol, "market", "sell", add_qty)
+        cid = clientid.new("add", trade["id"])
+        try:
+            o = await tr._market_sell(symbol, add_qty, cid)
+        except clientid.Unknown as e:   # it may have run: never re-sent (#9); logged as a size change
+            msg = f"add of {add_qty}: {e}. Not re-sent: re-read the position before adding again"
+            tr.j.log_decision("add", f"UNKNOWN: {reason}", symbol, snapshot={"add_qty": add_qty, "client_id": cid,
+                                                                             "unknown": True, "new_stop": new_stop})
+            await tr.alert("add_unknown", msg, symbol, True)
+            return {"ok": False, "unknown": True, "client_id": cid, "error": msg}
+        except Exception as e:  # noqa: BLE001 - a definite refusal: nothing ran; the tightened stop stays
+            return {"ok": False, "error": f"add refused: {e}"}
+        if o.get("filled") is not None and not float(o["filled"]):
+            return {"ok": False, "error": f"add order {o.get('status')}: nothing filled"}
+        add_qty = float(o.get("filled") or add_qty)   # what filled
+        mark = float(o.get("average") or 0) or mark
         plan = dict(trade.get("plan") or {})
         plan.setdefault("r1_usdt", r1)                               # pin 1R before the amount grows
         plan.setdefault("full_size", trade.get("amount") or qty)     # ladder exposure base (x = contracts/full_size)

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import ccxt.async_support as ccxt
 
-from . import close_intent, reconcile, tranches
+from . import clientid, close_intent, reconcile, tranches
 from .exchange import to_symbol
 from .stops import is_protective_stop, swap_stop
 
@@ -46,13 +46,10 @@ class ManageFlow:
             amount = close_intent.sized(self, symbol, size, trade, fraction, expect_contracts, of_original)
             if isinstance(amount, dict):
                 return amount   # refused: nothing sent
+            if amount < size:
+                return await self._close_part(symbol, trade, pos, size, amount, reason, lesson)
             order = await self._market_close(symbol, amount)
             exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
-            if amount < size:
-                self.j.log_decision("partial_close", reason, symbol, snapshot={
-                    "trade_id": trade and trade["id"], "exit": exit_px, "amount": amount, "lesson": lesson})
-                return {"ok": True, "symbol": symbol, "closed_amount": amount, "exit": exit_px,
-                        "remaining": round(size - amount, 8)}
             legs = await tranches.cancel_legs(self, trade["id"], "trade closed") if trade else {}
             await _sleep(1)  # let the position settle and income records land
             try:
@@ -73,6 +70,37 @@ class ManageFlow:
                 await self._strip_stops(symbol, listed, own + legs.get("unfilled", []) + legs.get("filled", []))
             res = await reconcile.finalize(self, trade, reason, lesson) if trade else {"note": "not in journal"}
             return {"ok": True, "symbol": symbol, "closed_amount": amount, "exit": exit_px, "result": res}
+
+    async def _close_part(self, symbol: str, trade: dict | None, pos: dict, size: float, amount: float, reason: str,
+                          lesson: str) -> dict:
+        """A partial close: never re-sent while its outcome is unknown (clientid.Unknown); reports what FILLED, not
+        what was asked (a market order can expire part-filled). The trade's stops stay as they are."""
+        from .trading import _f
+        try:
+            order = await self._market_close(symbol, amount, whole=False)
+        except clientid.Unknown as e:
+            msg = f"partial close of {amount:g}: {e}. Not re-sent: re-read the position before closing again"
+            await self.alert("close_unknown", msg, symbol, True)
+            self.j.log_decision("close_unknown", reason, symbol, snapshot={
+                "trade_id": trade and trade["id"], "amount": amount, "client_id": e.cid, "lesson": lesson})
+            return {"ok": False, "unknown": True, "symbol": symbol, "client_id": e.cid, "error": msg}
+        exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
+        if order.get("filled") is None:   # flat meanwhile, or an answer without it: the position says what is left
+            try:
+                left = _f(((await self.position(symbol)) or {}).get("contracts"))
+            except Exception:  # noqa: BLE001 - reported as unknown
+                left = None
+            closed = None if left is None else round(size - left, 8)
+        else:
+            closed = round(_f(order["filled"]), 8)
+            left = round(size - closed, 8)
+        self.j.log_decision("partial_close", reason, symbol, snapshot={
+            "trade_id": trade and trade["id"], "exit": exit_px, "amount": closed, "asked": amount, "lesson": lesson})
+        out = {"ok": bool(closed), "symbol": symbol, "closed_amount": closed, "exit": exit_px,
+               **({"remaining": left} if left is not None else {})}
+        if closed is None or closed < amount:
+            out["warning"] = f"the close filled {'an unknown amount' if closed is None else f'{closed:g}'} of {amount:g}"
+        return out
 
     async def _strip_stops(self, symbol: str, listed: list[dict], own: list[dict]) -> None:
         """Flat: cancel the closePosition stop and the pre-armed stops of this trade's own entries, matched by id or,
@@ -189,9 +217,9 @@ class ManageFlow:
             pos = await self.position(symbol)
             if not pos:
                 return None
+            # an 'opening' row is protected too: under this lock no entry of this host is in flight (open_short holds
+            # it until its stop rests), so the row is a crashed entry or one of unknown outcome that filled late (#9)
             jt = self.j.active_trade(symbol) or {}
-            if jt.get("status") == "opening":
-                return {"symbol": symbol, "action": "skipped: entry in progress"}
             mark = _f(pos.get("markPrice"))
             stop = _f(jt.get("stop_price")) or _f(pos.get("entryPrice")) * (1 + fallback_pct / 100)
             if stop <= mark:

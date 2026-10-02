@@ -51,7 +51,8 @@ async def test_flatten_closes_every_short_reduce_only_and_stays_halted():
     assert (await open_default(t))["ok"]
     r = await ops.flatten(t, "agent (MCP)", "BTC squeeze", "flattened into a squeeze")
     assert r["ok"] and fake.position == 0 and ks.read(t.j)["state"] == HALTED and ks.read(t.j)["cause"] == "flatten"
-    assert fake.orders[-1][1:] == ("buy", 100, {"reduceOnly": True})
+    side, qty, params = fake.orders[-1][1:]
+    assert (side, qty, params["reduceOnly"]) == ("buy", 100, True) and params["clientOrderId"].startswith("sb-c")
     tr = t.j.trades()[0]
     assert tr["status"] == "closed" and "flatten all" in tr["exit_reason"] and tr["lesson"]
     assert t.j.decisions()[0]["action"] == "flatten_all"

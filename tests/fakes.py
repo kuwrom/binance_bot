@@ -202,9 +202,9 @@ class FakeCcxt(Engine):
         assert side == "buy", "short-only fake: buy stops only"
         close = bool(params.get("closePosition"))
         if close:
-            if self.fail_stop:
+            if self.fail_stop:   # a definite refusal: ccxt never raises a bare, code-less ExchangeError for Binance
                 self.fail_stop -= 1
-                raise ccxt.ExchangeError("stop rejected")
+                raise err.max_stop_orders()
             if any(self._algo_sym(i) == s for i in self.stops):
                 raise err.one_close_position_stop()
         if trig <= self.sym[s]["price"]:   # a BUY STOP_MARKET triggers at price >= triggerPrice

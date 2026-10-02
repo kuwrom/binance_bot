@@ -186,7 +186,7 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
 
 async def _sweep(desk) -> list[dict[str, Any]]:
     """Every open order on the account must belong to a live journal row. Conditional orders are not swept (desk
-    stops carry no client id yet, #9). Raw endpoint: ccxt's fetch_open_orders refuses to run without a symbol
+    stops carry 'sb-s' client ids since #9, but nothing sweeps them yet). Raw endpoint: ccxt's fetch_open_orders refuses to run without a symbol
     unless an option is changed (request weight 40 either way)."""
     if time.time() - desk._swept_at < SWEEP_EVERY_S:
         return []
