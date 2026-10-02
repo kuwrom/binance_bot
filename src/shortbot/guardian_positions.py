@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_intents, equity_marks, reconcile, stops
+from . import entry_gates, entry_intents, equity_marks, reconcile, stops
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -265,6 +265,8 @@ class PositionChecks:
             return
         if state == HALTED:   # every pass: catches entries a session placed before it saw the trip
             await self._halt_sweep()
+        else:   # a governor halt or a market pause withdraws resting entries too (#12)
+            await entry_gates.guardian_sweep(self.entries, self.n)
         if not self.entries.pending():
             return
         for ev in await self.entries.poll():

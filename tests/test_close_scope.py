@@ -2,6 +2,8 @@
 resting entry keeps its pre-armed stop, a leg kept by `withdraw` keeps its own, and a remainder (a close that
 filled short, or an order that filled mid-close) keeps its stop or gets one at once, never waiting for the guardian."""
 
+from unittest.mock import patch
+
 import ccxt
 import pytest
 
@@ -13,7 +15,10 @@ TRIG = {"trigger": True}
 
 
 async def market_short(t, stop=1.05):
-    r = await t.open_short(SYM, stop_price=stop, setup="pump_fade", thesis="lower high after +60%", notional=100)
+    """A market short beside a resting entry: open_short refuses that now (#12), but the state still arises (an
+    external order, a fill racing a close, rows from an older build), so these tests build it past the refusal."""
+    with patch("shortbot.trading_open._resting", lambda j, s: []):
+        r = await t.open_short(SYM, stop_price=stop, setup="pump_fade", thesis="lower high after +60%", notional=100)
     assert r["ok"], r
     return r["trade_id"]
 
@@ -53,7 +58,7 @@ async def test_closing_a_trade_leaves_another_groups_resting_split_entry_and_its
     d, t, fake = desk()
     r = await d.propose_group([prop(1.06, stop=1.12, tranches=[{"limit_price": 1.06}, {"limit_price": 1.08}])])
     other, prearms = {x["entry_id"] for x in r["placed"]}, dict(fake.prearms)
-    await market_short(t)                                          # open_short doesn't see resting entries
+    await market_short(t)
     fake.price = 0.95
     res = await t.close(SYM, "target", "lesson")
     assert res["ok"] and fake.position == 0 and fake.stops == {}

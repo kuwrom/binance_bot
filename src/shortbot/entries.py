@@ -18,8 +18,9 @@ Mechanics (Binance USDⓈ-M, verified in docs/ccxt 2026-09):
   resolved by that id, never by resending (entry_intents.py)
 Every entry row is research data: fill rate, time-to-fill, level type, and unfilled counterfactuals.
 
-This module: entry rows and their lifecycle (fill, expiry, cancel, amend). Placement is mixed in from
-entries_place.py (propose_group).
+This module: entry rows and their lifecycle (fill, expiry, cancel). Placement is mixed in from entries_place.py
+(propose_group), amend from entries_amend.py; entry_gates.py withdraws resting entries in a governor halt or a market
+pause.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from typing import Any
 import ccxt.async_support as ccxt
 
 from . import entries_fills as fills
-from . import killswitch
+from .entries_amend import EntryAmend
 from .entries_place import MIN_TTL_S, EntryPlacement  # noqa: F401 (MIN_TTL_S re-export)
 from .entry_intents import HINTS, ON_BOOK, located
 from .stops import is_clock_drift
@@ -91,7 +92,7 @@ async def withdraw(t, e: dict[str, Any]) -> str:
     return "unfilled"
 
 
-class EntryDesk(EntryPlacement):
+class EntryDesk(EntryPlacement, EntryAmend):
     def __init__(self, trader, regime_fn=None):
         self.tr = trader
         self.j = trader.j
@@ -99,7 +100,8 @@ class EntryDesk(EntryPlacement):
         have = {r[1] for r in self.j.db.execute("PRAGMA table_info(entries)")}
         for col, typ in (("conviction", "TEXT"), ("regime_cell", "TEXT"), ("tranche", "TEXT"), ("leg", "INTEGER"),
                          ("client_id", "TEXT"), ("prearm_cid", "TEXT"), ("abandon", "INTEGER DEFAULT 0"),
-                         ("mode", "TEXT NOT NULL DEFAULT 'demo'"), ("experiment", "TEXT"), ("limits", "TEXT")):
+                         ("mode", "TEXT NOT NULL DEFAULT 'demo'"), ("experiment", "TEXT"), ("limits", "TEXT"),
+                         ("overrides", "TEXT")):
             if col not in have:
                 try:
                     self.j.db.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
@@ -150,7 +152,7 @@ class EntryDesk(EntryPlacement):
                 r["hint"] = HINTS[r["status"]]
         return rows
 
-    # ------------------------------------------------------------ cancel / amend
+    # ------------------------------------------------------------ cancel
     async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:
         """Relabel the row only when its limit died unfilled; returns withdraw's outcome."""
         async with self.tr.symbol_lock(e["symbol"], f"cancel entry #{e['id']}: {reason}"):
@@ -176,32 +178,6 @@ class EntryDesk(EntryPlacement):
                 got[await self._cancel_entry(e, "cancelled", reason)].append(e["id"])
         return {"ok": not got["unknown"], "cancelled": len(got["unfilled"]), "filled_first": got["filled"],
                 "cancel_failed": got["unknown"]}
-
-    async def amend(self, entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
-        rows = self._rows("id=? AND status='pending'", (entry_id,))
-        if not rows:
-            return {"ok": False, "error": "no pending entry with that id"}
-        e = rows[0]
-        if e["replaced"]:
-            return {"ok": False, "error": "already replaced once (rule: replace at most once, don't chase)"}
-        if new_limit >= e["stop_price"]:
-            return {"ok": False, "error": "new limit must stay below the stop"}
-        t = self.tr.t
-        px = float(t.price_to_precision(e["symbol"], new_limit))
-        # a lower sell limit fills sooner and loses more at the stop; raising it toward the stop only reduces risk
-        lower = px < e["limit_price"]
-        if lower and (blocked := await killswitch.gate(self.tr, "amend (lower limit)")):
-            return blocked
-        async with self.tr.symbol_lock(e["symbol"], f"amend entry #{entry_id}: {reason}"):
-            if not self._rows("id=? AND status='pending' AND COALESCE(replaced, 0)=0 AND limit_price=?",
-                              (entry_id, e["limit_price"])):
-                return {"ok": False, "error": f"entry #{entry_id} changed since you looked (filled, cancelled or "
-                                              "amended meanwhile): re-read pending_entries"}
-            if lower and (blocked := killswitch.state_refusal(self.j, "amend (lower limit)")):
-                return blocked
-            await t.edit_order(e["order_id"], e["symbol"], "limit", "sell", e["amount"], px)
-            self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}")
-        return {"ok": True, "entry_id": entry_id, "new_limit": px}
 
     # ------------------------------------------------------------ the 5 s loop (guardian)
     async def poll(self) -> list[dict[str, Any]]:

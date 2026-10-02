@@ -12,7 +12,7 @@ from .app import get_app
 from .entries import EntryDesk
 from .exchange import to_symbol
 from .mcp_server import tool
-from .plans import build_plan, validate_plan
+from .plans import revise_plan, validate_plan
 from .positioning import PositionOps
 
 
@@ -80,18 +80,22 @@ async def positions() -> list[dict[str, Any]]:
 @tool(human=True)
 async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, plan: dict[str, Any] | None = None,
                      notional_usdt: float | None = None, leverage: int = 2,
-                     veto_override: str | None = None, conviction: str = "B") -> dict[str, Any]:
+                     veto_override: str | None = None, conviction: str = "B",
+                     budget_override: str | None = None) -> dict[str, Any]:
     """Open a market short with a mandatory exchange stop. REQUIRES HUMAN APPROVAL.
     setup: a registered setup (list_setups) or 'exp_<name>'. thesis: why now, what confirmed it.
     plan (optional, merged over the setup's defaults): trigger, invalidation, targets [{price, fraction}],
     time_stop_hours, breakeven_at_pct, trail_activate_pct, trail_pct, review_every_hours, kill_conditions [..],
     auto {breakeven, trail, targets, time_stop} = what the guardian may execute without asking.
-    Omit notional_usdt to auto-size to the per-trade risk cap. Scanner vetoes and a hostile/unknown regime
-    block the trade unless veto_override gives a research reason (stored on the trade).
+    Omit notional_usdt to auto-size to the per-trade risk cap. Scanner vetoes, a cold desk and a hostile/unknown
+    regime block the trade unless veto_override gives a research reason. An explicit notional_usdt that risks more
+    than the current risk budget is refused unless budget_override gives one. Neither lifts a blocked budget (governor
+    halt, no heat room) or a hard cap; each one used is stored on the trade with what it bypassed, and alerted.
+    Refused while an order rests on the symbol (cancel_entry_group first): its fill would be a second trade.
     conviction: C 0.5x | B 1x | A 1.5x (downgraded to B unless the setup has >= 30 trades with R's 90% lower bound
     > 0) | M = moonshot (25% of a ring-fenced bucket). The risk governor can block or halve any tier."""
     return await get_app().trader.open_short(symbol, stop_price, setup, thesis, plan, notional_usdt, leverage,
-                                             veto_override, conviction)
+                                             veto_override, conviction, budget_override)
 
 
 @tool(human=True)
@@ -114,18 +118,22 @@ async def move_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]
 @tool(human=True)
 async def update_plan(symbol: str, changes: dict[str, Any], reason: str) -> dict[str, Any]:
     """Change an open trade's plan (targets, time stop, trailing, auto flags...). REQUIRES HUMAN APPROVAL,
-    because auto flags let the guardian act on its own."""
+    because auto flags let the guardian act on its own. The desk's pins (r1_usdt, full_size, ladder_live) are kept."""
     app = get_app()
     tr = app.journal.active_trade(to_symbol(symbol))
     if not tr or tr["status"] != "open":
         raise ToolError(f"no open journal trade for {symbol}")
-    plan = build_plan(tr.get("plan") or {}, changes)
+    try:
+        plan, pins = revise_plan(tr.get("plan") or {}, changes)
+    except ValueError as e:
+        return {"ok": False, "plan_errors": [str(e)]}
     errs = validate_plan(plan, tr["entry_price"], tr["stop_price"])
     if errs:
         return {"ok": False, "plan_errors": errs}
-    app.journal.update_trade(tr["id"], plan=plan.to_dict())
+    new = {**plan.to_dict(), **pins}
+    app.journal.update_trade(tr["id"], plan=new)
     app.journal.log_decision("update_plan", reason, tr["symbol"], snapshot={"trade_id": tr["id"], "changes": changes})
-    return {"ok": True, "trade_id": tr["id"], "plan": plan.to_dict()}
+    return {"ok": True, "trade_id": tr["id"], "plan": new}
 
 
 @tool
@@ -161,9 +169,11 @@ async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.
                           warmup_override: str | None = None) -> dict[str, Any]:
     """Limit-entry GROUP (3-5 shorts at better levels). Each: {symbol, limit_price (ABOVE market), stop_price, setup,
     thesis, plan?, leverage?, level_type (round_number|prior_high|sweep|vwap_band|ema_retest), level_reason,
-    cancel_below?, conviction? (C|B|A|M, default B)}. GTD expiry on the exchange; pre-armed reduce-only stop; the guardian protects fills within 5 s
-    and cancels the siblings of the first fill. Sized from the current risk budget. A send whose outcome is unknown
-    (timeout, 5xx) is listed under `unknown`: it may rest on the book, so don't re-propose it."""
+    cancel_below?, conviction? (C|B|A|M, default B), veto_override? (research reason; no budget override: always
+    sized from the current risk budget)}. GTD expiry on the exchange (ttl_hours <= 24); pre-armed reduce-only stop;
+    the guardian protects fills within 5 s and cancels the siblings of the first fill. Resting entries are withdrawn
+    while the governor halts new entries or a market pause is on (one placed over that pause stays). A send whose
+    outcome is unknown (timeout, 5xx) is listed under `unknown`: it may rest on the book, so don't re-propose it."""
     return await EntryDesk(get_app().trader).propose_group(proposals, ttl_hours, True, warmup_override)
 
 
@@ -186,5 +196,6 @@ async def cancel_entry_group(group_id: str, reason: str) -> dict[str, Any]:
 
 @tool(human=True)
 async def amend_entry(entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
-    """Move a pending limit ONCE (don't chase)."""
+    """Move a pending limit ONCE (don't chase). Lowering it re-runs the risk check (more risk at the same size) and
+    is refused for a split entry's leg; every amend is a logged decision."""
     return await EntryDesk(get_app().trader).amend(entry_id, new_limit, reason)

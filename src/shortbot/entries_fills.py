@@ -89,13 +89,14 @@ def new_trade(desk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> 
     at = datetime.fromtimestamp(fill_ms / 1000, timezone.utc) if fill_ms else datetime.now(timezone.utc)
     j = desk.j
     stamped = e.get("limits")   # NULL: a row placed before #32, attributed as before
+    over = json.loads(e["overrides"]) if e.get("overrides") else {}   # a veto override at placement (#11)
     tid = j.create_trade(e["symbol"], e["setup"], e["thesis"], e["stop_price"], e["leverage"], e["plan"],
                          {"entry_type": "limit", "level_type": e["level_type"], "level_reason": e["level_reason"],
                           "group_id": e["group_id"], "limit_price": e["limit_price"],
                           "session_bucket": session_bucket(at),
                           "breadth_pct": ((cached(j, 1800) or {}).get("header") or {}).get("breadth_pct"),
                           "placed_session": session_bucket(datetime.fromisoformat(e["created_at"])),
-                          **({"limits": json.loads(stamped)} if stamped else {}), **features},
+                          **({"limits": json.loads(stamped)} if stamped else {}), **over, **features},
                          e.get("experiment") if stamped else desk.tr.ex.experiment)
     j.update_trade(tid, conviction=e.get("conviction"), regime_cell=e.get("regime_cell"),
                    opened_at=at.isoformat(timespec="seconds"))

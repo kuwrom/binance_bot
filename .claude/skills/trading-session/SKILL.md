@@ -18,7 +18,7 @@ The shortbot state was injected at session start (open positions, unacknowledged
 
 ## 2. Regime
 - Run `market_regime`.
-- **hostile** or **unknown**: manage positions only; no new shorts unless the human explicitly wants a research exception (`veto_override`).
+- **hostile** or **unknown**: manage positions only; no new shorts unless the human explicitly wants a research exception (`veto_override`). Sizing above the risk budget is a separate exception (`budget_override`, `open_short` with a notional only). Each override needs its own reason; both are recorded on the trade and alerted. Neither lifts a governor halt or a hard cap.
 - **caution**: A+ setups only, and consider smaller size.
 - Run `market_map` (`shortbot map`) before judging any single coin. It shows the regime, breadth, and each sector's move after removing BTC's move, plus rotation in/out.
   - Short laggards in weak or rotating-out sectors.
@@ -76,7 +76,9 @@ Unless the trigger needs an immediate market entry, propose a **group of 3-5 lim
 - **Adverse selection:** limits fill more often when you're wrong. Size comes from the current risk budget (`shortbot budget <coin>`).
 - **Size cuts:** pass the read's `size_mult` (e.g. 0.25 for thin float / squeeze-prone). The tier and funding cuts apply on top; it only ever shrinks.
 - **Pump fades (learning #29):** single limits 4-5% above the market got 0 fills while the fades happened. Prefer a split entry (`tranches`): leg 1 just above the market once the read says short_setup, leg 2 at the structure level. A split is all-or-nothing at placement.
-- **Repricing:** move a pending limit at most once (`amend`). Never chase.
+- **Repricing:** move a pending limit at most once (`amend`). Never chase. Lowering it re-runs the risk check and is refused for a split leg (cancel and re-propose).
+- **Withdrawn by the guardian:** resting entries are cancelled while the governor halts new entries (`governor halt: ...`) or a market pause is on (`market pause: ...`, alert `entries_withdrawn`). An entry placed with a `veto_override` over that same pause stays. Re-propose once it lifts. TTL is at most 24 h.
+- **One trade per symbol:** `open_short` is refused while any order rests on the symbol. Cancel the group first if you want the market entry.
 - **No resting bounce-sell limits in breakdowns** (learning #20). They fill on exactly the breakdowns that fail. The breakdown short itself is unproven; if taken, enter on resumption below the breakdown low, not on a hoped-for bounce.
 
 ### Writing the invalidation

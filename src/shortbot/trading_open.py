@@ -6,6 +6,15 @@ is settled by that id and the position, never re-sent; one that stays unknown ke
 never untracked) and the symbol refuses new entries until reconcile settles it. Once filled, the stop always goes on,
 even if the position can't be read.
 
+One trade per symbol (#12): no market short beside an order resting on the symbol (ours, of unknown outcome, or one
+the desk didn't place): its fill would join this position as a second trade and every USDT would count twice. It is
+refused, not cancelled first: a cancel can find the order already filled, and its group may hold other symbols' bets.
+
+Two overrides, each a non-empty research reason (#11): `veto_override` trades through the signal vetoes, the cold-desk
+gate and a hostile/unknown regime; `budget_override` lets an explicit notional risk more than the dynamic budget
+(heat, cluster caps, daily-cap room, governor halving). Neither lifts a blocked budget or a hard cap. Each one used is
+recorded in entry_features with what it bypassed, and alerted.
+
 trading.py imports this module, so `_f` and `_sleep` are imported inside each method at call time: a module-level
 import would be circular, and would bind `_sleep` before the tests patch `shortbot.trading._sleep`.
 """
@@ -13,8 +22,10 @@ import would be circular, and would bind `_sleep` before the tests patch `shortb
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 from . import clientid, killswitch, reconcile, stops, warmup
+from .entry_intents import ON_BOOK
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier,
@@ -22,14 +33,43 @@ from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier
 from .setups import resolve
 
 
+def _reason(x: str | None) -> str | None:
+    return x.strip() if isinstance(x, str) and x.strip() else None
+
+
+def _resting(j, symbol: str) -> list[dict]:
+    """Entry rows on `symbol` that are or may be on the book, this journal's mode (filtered here, so a table not
+    migrated yet still counts as demo)."""
+    try:
+        rows = j._rows(f"SELECT id, group_id, status, order_id, mode FROM entries WHERE symbol=? AND {ON_BOOK}",
+                       (symbol,))
+    except sqlite3.OperationalError:   # no entries table yet: nothing rests
+        return []
+    return [r for r in rows if (r.get("mode") or "demo") == j.mode]
+
+
+def _beside(symbol: str, rows: list[dict]) -> dict:
+    own, ext = [r for r in rows if r["status"] != "external"], [r for r in rows if r["status"] == "external"]
+    why = ([f"resting entries {[r['id'] for r in own]} (group {', '.join(sorted({r['group_id'] for r in own}))}) can "
+            "fill into it: cancel_entry_group first, or let them rest"] if own else []) + (
+           [f"external orders {[r['order_id'] for r in ext]} (not placed by shortbot) rest on it: cancel them on "
+            "Binance first"] if ext else [])
+    return {"ok": False, "resting_entries": [{k: r[k] for k in ("id", "group_id", "status")} for r in rows],
+            "error": f"no market short on {symbol} beside an order that can fill into the same position (a second "
+                     "trade, its PnL counted twice): " + "; ".join(why)}
+
+
 class OpenFlow:
     """Uses Trader's exchange, journal, lock (then symbol_lock), prechecks, budget and order primitives."""
 
     async def open_short(self, symbol: str, stop_price: float, setup: str, thesis: str,
                          plan: dict | None = None, notional: float | None = None, leverage: int = 2,
-                         veto_override: str | None = None, conviction: str = "B") -> dict:
-        """conviction: C 0.5x | B 1x | A 1.5x (only with a proven setup record) | M moonshot bucket."""
+                         veto_override: str | None = None, conviction: str = "B",
+                         budget_override: str | None = None) -> dict:
+        """conviction: C 0.5x | B 1x | A 1.5x (only with a proven setup record) | M moonshot bucket.
+        veto_override / budget_override: research reasons (module doc); blank = none."""
         from .trading import _f
+        veto_why, budget_why = _reason(veto_override), _reason(budget_override)
         symbol = to_symbol(symbol)
         st = resolve(setup)
         async with self.lock:
@@ -50,7 +90,7 @@ class OpenFlow:
             blockers = list(checks.get("vetoes", [])) + [g for g in [warmup.gate(self.j)] if g]
             if checks.get("regime") in ("hostile", "unknown"):
                 blockers.append(f"market regime is {checks['regime']}")
-            if blockers and not (veto_override and veto_override.strip()):
+            if blockers and not veto_why:
                 self.j.log_decision("rejected", "vetoes: " + "; ".join(blockers), symbol, snapshot=checks)
                 return {"ok": False, "vetoed": blockers,
                         "hint": "pass veto_override='<research reason>' to trade it anyway as a logged exception"}
@@ -66,14 +106,18 @@ class OpenFlow:
                 budget = {**budget, "risk_usd": round(budget["risk_usd"] * m, 2),
                           "multipliers": {**(budget.get("multipliers") or {}), "liquidity_funding": m}}
             dist = (stop_price - price) / price if price else 0
-            sized = notional is None
+            sized, over_budget = notional is None, None
             if sized:  # size = dynamic risk budget / stop distance, still inside the hard caps
                 notional = round(min(budget["risk_usd"] / dist if dist > 0 else 0,
                                      max_notional_for_risk(acct.equity, price, stop_price, lim)) * 0.98, 2)
-            elif dist > 0 and notional * dist > budget["risk_usd"] * 1.001 and not veto_override:
-                return {"ok": False, "rejected_by_budget": [
-                    f"risk at stop {notional * dist:.2f} USDT > current budget {budget['risk_usd']} USDT "
-                    f"({budget['multipliers']}); size down or omit notional to auto-size"], "budget": budget}
+            elif dist > 0 and notional * dist > budget["risk_usd"] * 1.001:
+                if not budget_why:
+                    return {"ok": False, "rejected_by_budget": [
+                        f"risk at stop {notional * dist:.2f} USDT > current budget {budget['risk_usd']} USDT "
+                        f"({budget['multipliers']}); size down or omit notional to auto-size"], "budget": budget,
+                        "hint": "or pass budget_override='<research reason>' to risk more as a logged exception"}
+                over_budget = {"risk_at_stop_usdt": round(notional * dist, 2), "budget_risk_usd": budget["risk_usd"],
+                               "multipliers": budget.get("multipliers"), "reasons": budget.get("reasons")}
             req = ShortRequest(symbol, notional, price, stop_price, leverage, _f(prod_ticker.get("quoteVolume")))
             try:
                 check_open_short(req, acct, lim)
@@ -100,16 +144,31 @@ class OpenFlow:
                     return {"ok": False, "trade_id": jt["id"], "error": f"trade #{jt['id']}'s entry on {symbol} is "
                             "unresolved (send status unknown): it may still fill. Never re-send it; the guardian "
                             "settles it within ~3 min"}
+                if resting := _resting(self.j, symbol):   # under the lock: placement inserts its row under it too
+                    return _beside(symbol, resting)
                 await self._prepare(symbol, leverage)
                 features = {**checks.get("features", {}), "regime": checks.get("regime"), "budget": budget,
-                            "vetoes_overridden": blockers if blockers else None, "veto_override": veto_override,
+                            "vetoes_overridden": blockers or None, "veto_override": veto_why if blockers else None,
+                            "budget_overridden": over_budget, "budget_override": budget_why if over_budget else None,
                             "limits": lim.__dict__}
                 tid = self.j.create_trade(symbol, setup, thesis, stop_price, leverage, tp.to_dict(), features,
                                           self.ex.experiment)
                 cid = clientid.new("open", tid)   # journalled BEFORE the send
                 self.j.update_trade(tid, conviction=budget.get("conviction"), regime_cell=budget.get("cell"),
                                     entry_features={**features, "client_id": cid})
-                return await self._enter(tid, cid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
+                res = await self._enter(tid, cid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
+        await self._override_alerts(symbol, tid, features, res)
+        return res
+
+    async def _override_alerts(self, symbol: str, tid: int, f: dict, res: dict) -> None:
+        """Each override used reaches the human (#11). After the order, never before it: no alert delays a fill."""
+        done = "opened" if res.get("ok") else f"entry failed: {res.get('error')}"
+        for kind, what in (("veto_override", f["vetoes_overridden"]), ("budget_override", f["budget_overridden"])):
+            if what:
+                try:
+                    await self.alert(kind, f"trade #{tid}: {f[kind]!r} overrode {what} ({done})", symbol, False)
+                except Exception:  # noqa: BLE001 - the trade is journalled with it; an alert outage changes nothing
+                    pass
 
     async def _enter(self, tid: int, cid: str, symbol: str, amount: float, stop_price: float, sized: bool,
                      leverage: int, lim, equity: float) -> dict:

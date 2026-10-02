@@ -122,7 +122,8 @@ async def _run(args: argparse.Namespace) -> object:
             case "open":
                 return await app.trader.open_short(args.symbol, args.stop, args.setup, args.thesis,
                                                    json.loads(args.plan) if args.plan else None, args.notional,
-                                                   args.leverage, args.veto_override, args.conviction)
+                                                   args.leverage, args.veto_override, args.conviction,
+                                                   args.budget_override)
             case "close":
                 return await app.trader.close(args.symbol, args.reason, args.lesson, args.fraction,
                                               args.expect_contracts, args.of_original)

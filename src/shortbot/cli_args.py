@@ -32,7 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--plan", help="JSON trade plan (merged over the setup defaults)")
     o.add_argument("--notional", type=float, help="USDT size; omit to auto-size to the risk cap")
     o.add_argument("--leverage", type=int, default=2)
-    o.add_argument("--veto-override", help="research reason to trade despite vetoes/regime")
+    o.add_argument("--veto-override", help="research reason to trade despite vetoes/regime/cold desk")
+    o.add_argument("--budget-override", help="research reason for a --notional that risks more than the risk budget")
     o.add_argument("--conviction", choices=TIERS, default="B",
                    help="C 0.5x | B 1x | A 1.5x (needs a proven setup record) | M moonshot bucket")
     c = sub.add_parser("close", help="buy back all or part of a short")
@@ -63,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("proposals", help='JSON list of {symbol, limit_price, stop_price, setup, thesis, plan?, '
                     'leverage?, level_type, level_reason, cancel_below?, conviction?, size_mult? (0.1-1, only shrinks: pass '
                     "the read's size_mult), tranches? [{limit_price, share}] = split entry (all-or-nothing), veto_override?}")
-    pr.add_argument("--ttl-hours", type=float, default=6.0)
+    pr.add_argument("--ttl-hours", type=float, default=6.0, help="at most 24")
     pr.add_argument("--no-prearm", action="store_true")
     pr.add_argument("--warmup-override", help="reason to skip the cold-desk warm-up")
     wu = sub.add_parser("warmup", help="cold-desk 15-min study: start = t0 snapshot, check = t+15 verdicts")

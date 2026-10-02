@@ -42,7 +42,8 @@ TICK_S = 1.0
 
 class Guardian(PositionChecks, WatchChecks, MarketJobs):
     """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
-    the kill-switch loss trips (daily loss, dd_stop) follow an active experiment's limits (killswitch.py)."""
+    the kill-switch loss trips (daily loss, dd_stop) and the governor verdict (its halt withdraws resting entries,
+    entry_gates.py) follow an active experiment's limits, the ones the session places and sizes under."""
 
     def __init__(self, app=None):
         self.app = app or get_app(research=False)

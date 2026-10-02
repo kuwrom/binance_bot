@@ -55,6 +55,20 @@ def build_plan(defaults: dict[str, Any], overrides: dict[str, Any] | None) -> Tr
     return TradePlan(**merged, targets=targets, auto=auto)
 
 
+PINNED = ("r1_usdt", "full_size", "ladder_live")   # written by the desk (adds, the live ladder, split entries), never
+                                                   # by a plan edit: 1R and the ladder's exposure base stay fixed
+
+
+def revise_plan(current: dict[str, Any], changes: dict[str, Any] | None) -> tuple[TradePlan, dict[str, Any]]:
+    """An open trade's plan with the analyst's changes: (the edited plan, its pinned keys exactly as they were).
+    Store `{**plan.to_dict(), **pins}`. Changing a pinned key is refused; any other unknown key still is too."""
+    locked = sorted(set(changes or {}) & set(PINNED))
+    if locked:
+        raise ValueError(f"{locked} are pinned by the desk (1R, the ladder's full size): not editable in a plan")
+    pins = {k: current[k] for k in PINNED if k in current}
+    return build_plan({k: v for k, v in current.items() if k not in PINNED}, changes), pins
+
+
 def validate_plan(plan: TradePlan, entry: float, stop: float) -> list[str]:
     errs: list[str] = []
     total = 0.0

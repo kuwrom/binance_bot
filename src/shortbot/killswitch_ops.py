@@ -15,14 +15,15 @@ from .symlock import SymbolBusy
 CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who typed it; shortbot-admin can
 
 
-async def cancel_resting(desk, reason: str) -> dict[str, list[int]]:
-    """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED). Only an
+async def cancel_resting(desk, reason: str, keep=None) -> dict[str, list[int]]:
+    """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED; entry_gates
+    reuses it for a governor halt or a market pause, keeping the rows `keep(row)` spares). Only an
     "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
     "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position.
     The desk's own rows only, incl. sends of unknown outcome (placing/unknown: withdraw finds them by client id);
     never an 'external' order, which may be the owner's (the guardian alerts those instead)."""
     out: dict[str, list[int]] = {"cancelled": [], "left_for_fill_poll": []}
-    rows = desk._rows("status IN ('pending','placing','unknown')")
+    rows = [e for e in desk._rows("status IN ('pending','placing','unknown')") if not (keep and keep(e))]
     if not rows:
         return out
     t = desk.tr.t

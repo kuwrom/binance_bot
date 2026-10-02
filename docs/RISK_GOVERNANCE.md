@@ -41,6 +41,12 @@
   - Need ≥ 30 trades per cell and shrink the cell's expectancy toward the setup mean with weight n/(n+30).
   - Cut a cell to 0.5× only if the upper 80% bound of its shrunk expectancy is below 0. Switch it off only at ≥ 50 trades with a walk-forward check.
 
+## Resting entries (`entry_gates.py`, #12)
+- A resting limit is a trade that hasn't happened yet. While the governor halts new entries, or a market pause is on (BTC/ETH +0.8% in 15 min, a breadth squeeze), the guardian withdraws them every 5 s pass. Reasons read `governor halt: ...` and `market pause: ...`. An entry placed with a `veto_override` over that same pause stays; nothing overrides the governor.
+- The governor verdict comes from the guardian's 5-min check, under the effective limits (the research override if active, as for the kill-switch trips), so placing and withdrawing never disagree. A verdict older than 15 min, or a market map older than 15 min, cancels nothing.
+- TTL is at most 24 h. Lowering a resting limit re-runs the budget and hard-cap checks. A split leg is never lowered.
+- Follow-up: governor halving (drawdown tier, loss streak) does not resize entries already resting.
+
 ## Kill switch (research 2026-10-01; `killswitch.py`)
 - **Evidence:** FIA 2024 *Automated Trading Risk Controls*: a kill switch blocks new orders, cancels working orders and may allow risk-reducing ones. MiFID II RTS 6 wants the off switch tested. NautilusTrader's trading states are ACTIVE / REDUCING / HALTED.
 - **States** (one journal kv row, `trading_state`, with who, why, when and the cause):

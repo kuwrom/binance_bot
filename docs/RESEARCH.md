@@ -21,7 +21,8 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 | Change | How | Measured by |
 |---|---|---|
 | Risk limit (leverage, size, stop range...) | `set_risk_params` with an experiment tag | `journal.stats.by_experiment` |
-| One-off exception to a veto or regime | `open_short(veto_override=...)` | `entry_features.vetoes_overridden` on the trade |
+| One-off exception to a veto or regime | `open_short(veto_override=...)` (or a proposal's `veto_override`) | `entry_features.veto_override` + `vetoes_overridden` on the trade |
+| One-off size above the risk budget | `open_short(notional_usdt=..., budget_override=...)` | `entry_features.budget_override` + `budget_overridden` (risk at stop vs budget) |
 | New signal or indicator | One `@signal` function in `signals/` (new data feed → getter in `market/hub.py`). It's logged automatically. | `research_report.by_feature_tertile` |
 | New tape state / playbook routing | One `TapeRule` in `tape.py` | tape state vs candidate outcomes |
 | Signal half-life | `decay.HALF_LIFE_H` prior; refit with `decay.calibrate_half_life` (IC vs signal age) | IC(age) fit, shrunk to the prior |

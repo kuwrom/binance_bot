@@ -1,7 +1,9 @@
 """Limit-entry placement (mixed into EntryDesk, entries.py): validate and size each proposal from the current risk
 budget, journal the entry row (status 'placing', with its client order id), then place the resting GTD sell
 (+ optional pre-armed stop) and journal the outcome (entry_intents.py). A split entry's legs are placed far leg
-first and rolled back as one unit if any leg fails.
+first and rolled back as one unit if any leg fails. A veto_override is recorded on the row (`overrides`, carried onto
+the trade a fill opens) and alerted (#11); a limit entry has no budget override: it is always sized from the budget.
+The TTL is capped at MAX_TTL_H: a resting order must not outlive the read it was placed on (#12).
 """
 
 from __future__ import annotations
@@ -14,12 +16,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import clientid, killswitch, warmup
+from .entry_gates import market_pause
 from .entry_intents import HINTS, ON_BOOK, SendUnknown
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .setups import resolve
 
 MIN_TTL_S = 660
+MAX_TTL_H = 24.0
 
 
 def _now_iso() -> str:
@@ -38,6 +42,9 @@ class EntryPlacement:
         tr = self.tr
         if not 1 <= len(proposals) <= 5:
             return {"ok": False, "error": "propose 1-5 entries per group"}
+        if not ttl_hours <= MAX_TTL_H:   # NaN fails too
+            return {"ok": False, "error": f"ttl_hours {ttl_hours} > {MAX_TTL_H:g}: a resting entry must not outlive "
+                                          "its read; re-propose it later instead"}
         if blocked := await killswitch.gate(tr, "propose_entries"):
             return blocked
         cold = warmup.gate(self.j)
@@ -85,6 +92,13 @@ class EntryPlacement:
                     + [f"{x['symbol']} entry #{x['entry_id']} send status UNKNOWN" for x in unknown]), None, False)
             except Exception as e:  # noqa: BLE001
                 warnings.append(f"alert not sent: {type(e).__name__}: {e}")
+            for x in placed:   # each research exception reaches the human (#11)
+                if o := x.get("overrides"):
+                    try:
+                        await tr.alert("veto_override", f"entry #{x['entry_id']} (group {gid}): {o['veto_override']!r}"
+                                       f" overrode {o['vetoes_overridden']}", x["symbol"], False)
+                    except Exception as e:  # noqa: BLE001
+                        warnings.append(f"override alert not sent: {type(e).__name__}: {e}")
         return {"ok": bool(placed), "group_id": gid, "placed": placed, "rejected": rejected, "unknown": unknown,
                 **({"warnings": warnings} if warnings else {})}
 
@@ -94,6 +108,9 @@ class EntryPlacement:
         if sym not in tr.t.markets:
             raise ValueError(f"{sym} not listed on the connected account")
         st = resolve(p["setup"])
+        if str(p.get("budget_override") or "").strip():
+            raise ValueError("budget_override is open_short's only: a limit entry is always sized from the current "
+                             "risk budget")
         limit, stop = float(p["limit_price"]), float(p["stop_price"])
         tk = await tr.t.fetch_ticker(sym)
         last = float(tk["last"])
@@ -103,8 +120,12 @@ class EntryPlacement:
         # a resting order must not be placed on a read the tape already contradicts (QNT 2026-09-30)
         checks = await tr.prechecks(tr.ex, sym, await tr.ex.public.fetch_ticker(sym))
         vetoes = list(checks.get("vetoes") or [])
-        if vetoes and not str(p.get("veto_override") or "").strip():
+        why = str(p.get("veto_override") or "").strip()
+        if vetoes and not why:
             raise ValueError(f"vetoed at placement: {vetoes} (pass veto_override='<research reason>' to override)")
+        # a pause this placement overrode lets the row rest through that pause (entry_gates); exact strings, same map
+        overrides = {"veto_override": why, "vetoes_overridden": vetoes,
+                     "pause_overridden": bool(set(market_pause(tr.j)) & set(vetoes))} if vetoes else None
         if stop <= limit:
             raise ValueError("stop must be above the limit price")
         plan = build_plan(st.default_plan, p.get("plan"))
@@ -180,21 +201,24 @@ class EntryPlacement:
                 raise ValueError(blocked["error"])
             if await tr.position(sym):   # filled meanwhile (e.g. a split's far leg): never re-lever a live position
                 raise ValueError(f"already short {sym} (opened since the checks); manage the existing position")
+            if (jt := tr.j.active_trade(sym)) and jt["status"] == "opening":   # a fill would make a second trade
+                raise ValueError(f"trade #{jt['id']}'s market entry on {sym} is unresolved (it may still fill): no "
+                                 "limit entry beside it; the guardian settles it within ~3 min")
             await tr._prepare(sym, lev)   # leverage + isolated margin: only on a flat symbol, after the risk check
             # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
             cid = clientid.new("entry", gid)
             eid = self.j._insert(
                 "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price,"
                 " amount, leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price,"
-                " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon, mode, experiment, limits)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon, mode, experiment, limits,"
+                " overrides) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
                  json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
                  p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"),
                  budget.get("cell"), p.get("tranche"), p.get("leg"), cid,
                  1 if p.get("tranche") else 0,    # a split leg is withdrawn if unsure
                  # what it was sized under: the guardian that journals the fill has no research params (#32)
-                 self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__)))
+                 self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__), json.dumps(overrides) if overrides else None))
             try:
                 order = await tr.t.create_order(sym, "limit", "sell", amount, px, {
                     "timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
@@ -223,7 +247,7 @@ class EntryPlacement:
             pass
         return {**odds, "entry_id": eid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
                 "risk_usdt": round(amount * (stop - px), 2), "leverage": lev, "prearmed_stop": bool(prearm_id),
-                "client_id": cid,
+                "client_id": cid, **({"overrides": overrides} if overrides else {}),
                 "expires": datetime.fromtimestamp(expires_ms / 1000, timezone.utc).isoformat(timespec="minutes")}
 
     async def _prearm(self, eid: int, sym: str, amount: float, stop: float) -> str | None:

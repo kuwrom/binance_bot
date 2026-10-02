@@ -180,11 +180,14 @@ def quarter_start(now: datetime) -> str:
 
 
 async def gather_inputs(trader, regime: str, positions: list[dict] | None = None,
-                        setup: str | None = None, symbol: str | None = None) -> BudgetInputs:
+                        setup: str | None = None, symbol: str | None = None,
+                        limits: RiskLimits | None = None) -> BudgetInputs:
     """Live inputs: equity + tracked peak, BTC vol + regime cell (cached 1h), open risk per position at its
     exchange stop (and per external resting order at the max stop distance), governor state (day/week P&L, loss
-    streak, give-back) and this setup's track record."""
+    streak, give-back) and this setup's track record. `limits` (default the trader's): the guardian passes the
+    effective research limits, so its governor verdict and the heat it sees match the session's (#12)."""
     global _vol_cache
+    lim = limits or trader.ex.limits
     now = datetime.now(timezone.utc)
     pos = positions if positions is not None else await trader.positions()
     acct = await trader.account()
@@ -202,11 +205,11 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     risks = {}
     for p in pos:
         stop, mark, qty = p.get("exchange_stop"), p.get("mark") or 0, p.get("contracts") or 0
-        worst = stop if stop else mark * (1 + trader.ex.limits.max_stop_distance_pct / 100)
+        worst = stop if stop else mark * (1 + lim.max_stop_distance_pct / 100)
         risks[p["symbol"]] = max(0.0, (worst - mark) * qty)
     for e in external_orders(trader.j):   # resting orders the desk didn't place: no known stop, the same worst case
         risks[e["symbol"]] = risks.get(e["symbol"], 0.0) + (
-            e["amount"] * e["limit_price"] * trader.ex.limits.max_stop_distance_pct / 100)
+            e["amount"] * e["limit_price"] * lim.max_stop_distance_pct / 100)
     try:
         wk = reconcile.summarize_income(await reconcile.income_since(trader.t, week_start_ms(now)))["net"]
     except Exception:  # noqa: BLE001 - fall back to today only; the daily cap still binds
@@ -229,7 +232,7 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
         b["sector"] = sector_of(b["symbol"])
     syms = sorted({b["symbol"] for b in book} | ({symbol} if symbol else set()))
     rho = await measured_corr(trader.ex.public, syms) if len(syms) >= 2 else None
-    return BudgetInputs(eq, peak, regime, vnow, tgt, risks, govern(trader.ex.limits, gin), cell,
+    return BudgetInputs(eq, peak, regime, vnow, tgt, risks, govern(lim, gin), cell,
                         [r["r_multiple"] for r in s_rows],
                         [r["r_multiple"] for r in s_rows if cell and r["regime_cell"] == cell],
                         sum(r["pnl"] for r in rows if r["conviction"] == "M" and r["closed_at"] >= qs),
@@ -237,10 +240,10 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
                         list((m.get("vetoes") or {}).get("pause") or []), rho)
 
 
-async def governor_status(trader, regime: str) -> dict[str, Any]:
+async def governor_status(trader, regime: str, limits: RiskLimits | None = None) -> dict[str, Any]:
     """Account breakers + the evidence behind the tilts (streak test over all closed R)."""
     from .tilts import streak_test
-    inp = await gather_inputs(trader, regime)
+    inp = await gather_inputs(trader, regime, limits=limits)
     rs = [r["r_multiple"] for r in trader.j.closed_results() if r["r_multiple"] is not None]
     return {**(inp.gov or {}), "regime": regime, "cell": inp.cell, "equity": inp.equity,
             "peak_equity": inp.peak_equity, "streak_test": streak_test(rs),

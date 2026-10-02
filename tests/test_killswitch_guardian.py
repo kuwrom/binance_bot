@@ -158,7 +158,7 @@ async def test_governor_drawdown_stop_trips_reducing(monkeypatch):
     async def regime(ex):
         return {"verdict_for_shorts": "caution"}
 
-    async def gov(tr, reg):
+    async def gov(tr, reg, limits=None):
         return {"halt": True, "until": None, "reasons": ["drawdown 12.5% >= 12.0%"], "drawdown_pct": 12.5}
     monkeypatch.setattr("shortbot.guardian_jobs.market_regime", regime)
     monkeypatch.setattr("shortbot.guardian_jobs.governor_status", gov)
