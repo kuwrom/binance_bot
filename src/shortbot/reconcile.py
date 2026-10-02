@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import episodes
+from . import episodes, fill_quality
 from .exchange import to_raw
 
 log = logging.getLogger("shortbot.reconcile")
@@ -92,6 +92,7 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
                   gross_pnl=inc["gross"], fees=inc["fees"], funding=inc["funding"] + inc["liq_fee"])
     if episode:
         j.update_trade(trade["id"], closed_at=ms_to_iso(episode["closed_ms"]))
+        fill_quality.record_episode(trader, trade, episode)   # mainnet refs for its fills not yet referenced (#35)
     j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,
                                                                       "exit": exit_px})
     return {"trade_id": trade["id"], "symbol": trade["symbol"], "exit": exit_px, **inc, "reason": reason}

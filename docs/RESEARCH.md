@@ -33,6 +33,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 | New setup | Trade as `exp_<name>`, then register it in `setups.py` and add `.claude/skills/<name>/SKILL.md` | `journal.stats.by_setup`, `research_report.by_setup` |
 | Management rule for one trade | `update_plan` | MAE/MFE and R on that trade |
 | Default management of a setup | `Setup.default_plan` in `setups.py` | `by_setup` avg R, MAE/MFE |
+| Backtest slippage model | `fill_report.calibrated_costs(journal)` once `calibrate()` is ok (30 trades, 20 days, one mode) | `journal` → `stats.fill_quality`: demo fills vs the mainnet price at each fill, in bps, vs the model |
 | Guardian alert thresholds | Constants at the top of `guardian_positions.py` (job cadence and timeouts: `guardian.py`) | alert usefulness (journal alerts) |
 | New data source (paid API later, etc.) | New module, then add it to `build_metrics`/`news` behind `data_missing` so failures fail closed. Any third-party text it returns reaches the agent only as `untrusted.wrap(...)`, never in the brief | as above |
 

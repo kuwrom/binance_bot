@@ -42,5 +42,7 @@ def get_app(research: bool = True) -> App:
 async def close_app() -> None:
     global _app
     if _app:
+        from .fill_quality import drain
+        await drain()   # a one-shot CLI's fill references (#35) finish before the clients close
         await _app.ex.close()
         _app = None

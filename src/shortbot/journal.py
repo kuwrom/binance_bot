@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import audit
+from . import audit, fill_report
 from .journal_research import RESEARCH_SCHEMA, ResearchStore
 from .redact import redact
 from .sessions import session_bucket
@@ -57,6 +57,7 @@ TRADE_COLUMNS: dict[str, str] = {
     "fees": "REAL", "funding": "REAL", "exit_reason": "TEXT", "lesson": "TEXT", "mae_pct": "REAL",
     "mfe_pct": "REAL", "low_since_entry": "REAL", "targets_hit": "TEXT", "notes": "TEXT",
     "conviction": "TEXT", "regime_cell": "TEXT", "post_exit": "TEXT", "mode": "TEXT NOT NULL DEFAULT 'demo'",
+    "fill_refs": "TEXT",   # mainnet references at each fill (fill_quality.py, #35): atomic json writes only
 }
 # The audit stamp (#24); rows written by a process that predates it keep NULLs.
 AUDIT_COLUMNS: dict[str, dict[str, str]] = {
@@ -67,7 +68,7 @@ AUDIT_COLUMNS: dict[str, dict[str, str]] = {
     "sessions": {"actor": "TEXT", "claude_session": "TEXT", "code_version": "TEXT"},
 }
 AUDIT_ACTIONS = ("call", "claude_session")   # audit-only rows: `shortbot audit` lists them, decisions() doesn't
-JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit")
+JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit", "fill_refs")
 MODES = ("demo", "live")
 
 
@@ -284,7 +285,7 @@ class Journal(ResearchStore):
         return {"mode": "all" if all_modes else self.mode, "closed_trades": len(rows),
                 "total_pnl": round(sum(r["pnl"] for r in rows), 2), "by_setup": _group(rows, "setup"),
                 "by_experiment": by_exp, "by_entry_session": _group(rows, "session"),
-                "exits": exit_quality(self.trades(500, all_modes)),
+                "exits": exit_quality(self.trades(500, all_modes)), "fill_quality": fill_report.report(self, all_modes),
                 **({"other_modes": other} if other else {})}
 
     # ------------------------------------------------------------ kv

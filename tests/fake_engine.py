@@ -213,9 +213,55 @@ class ProdView:
 
     def __init__(self, fake):
         self._fake, self.prices = fake, {}
+        self.spread = 0.0     # prod best ask - best bid, as a fraction of the price (bookTicker)
+        self.tape: dict[str, list[dict]] = {}   # prod prints per symbol (aggTrades); none = one print at the price
 
     price = property(lambda self: self.prices.get(SYM, self._fake.price),
                      lambda self, p: self.prices.__setitem__(SYM, p))
+
+    def _px(self, req) -> tuple[str, float]:
+        s = next((k for k in self._fake.sym if raw(k) == (req or {}).get("symbol")), None)
+        if s is None:
+            raise err.invalid_symbol()
+        return s, self.prices.get(s, self._fake.sym[s]["price"])
+
+    def print_at(self, px: float, ms: int, buyer_maker: bool = True, s: str = SYM) -> None:
+        """A prod trade at `ms` (exchange clock); buyer_maker: a seller hit the bid (aggTrades `m`)."""
+        rows = self.tape.setdefault(s, [])
+        rows.append({"a": len(rows) + 1, "p": str(px), "q": "1.0", "nq": "1.0", "f": len(rows) + 1, "l": len(rows) + 1,
+                     "T": ms, "m": buyer_maker})
+        rows.sort(key=lambda r: r["T"])
+
+    async def fapiPublicGetTickerBookTicker(self, req=None):
+        """GET /fapi/v1/ticker/bookTicker?symbol= (Symbol-Order-Book-Ticker doc, weight 2; shape as answered live
+        2026-10-02): strings, `time` = the book's last update."""
+        s, px = self._px(req)
+        h = px * self.spread / 2
+        return {"symbol": raw(s), "bidPrice": str(px - h), "bidQty": "10.0", "askPrice": str(px + h), "askQty": "10.0",
+                "time": self._fake.now_ms(), "lastUpdateId": 1}
+
+    async def fapiPublicGetPremiumIndex(self, req=None):
+        """GET /fapi/v1/premiumIndex?symbol= (Mark-Price doc, weight 1; live 2026-10-02: `time` in whole seconds)."""
+        s, px = self._px(req)
+        return {"symbol": raw(s), "markPrice": str(px), "indexPrice": str(px), "estimatedSettlePrice": str(px),
+                "lastFundingRate": "0.00010000", "interestRate": "0.00010000",
+                "nextFundingTime": self._fake.now_ms() // 3_600_000 * 3_600_000 + 3_600_000,
+                "time": self._fake.now_ms() // 1000 * 1000}
+
+    async def fapiPublicGetAggTrades(self, req=None):
+        """GET /fapi/v1/aggTrades (Compressed-Aggregate-Trades-List doc, weight 20): ascending from startTime,
+        endTime inclusive, at most `limit` (500 default, 1000 max); startTime..endTime under 1 hour. With no tape
+        set, one print at the current prod price at min(endTime, now)."""
+        s, px = self._px(req)
+        a, b = req.get("startTime"), req.get("endTime")
+        if a is not None and b is not None and b - a >= 3_600_000:
+            raise err.lookup_interval_too_big()
+        rows = self.tape.get(s)
+        if rows is None:
+            t = min(b if b is not None else self._fake.now_ms(), self._fake.now_ms())
+            rows = [{"a": 1, "p": str(px), "q": "1.0", "nq": "1.0", "f": 1, "l": 1, "T": t, "m": True}]
+        rows = [r for r in rows if (a is None or r["T"] >= a) and (b is None or r["T"] <= b)]
+        return [dict(r) for r in rows[:min(int(req.get("limit") or 500), 1000)]]
 
     async def fetch_ticker(self, s):   # through the fake's own method, so a test's stub of it still applies
         t = await self._fake.fetch_ticker(s)

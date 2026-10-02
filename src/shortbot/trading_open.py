@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-from . import clientid, killswitch, reconcile, stops, warmup
+from . import clientid, fill_quality, killswitch, reconcile, stops, warmup
 from .audit import refusals
 from .entry_intents import ON_BOOK
 from .exchange import to_symbol
@@ -192,6 +192,7 @@ class OpenFlow:
         if not _f(order.get("filled")) and order.get("status") in DEAD:
             self.j.abort_trade(tid, f"entry order {order['status']}, unfilled")
             return {"ok": False, "error": f"entry order {order['status']} unfilled; no position"}
+        ref = fill_quality.snap(self.ex, symbol)   # mainnet at the fill, beside the stop (#35): never awaited here
         pos, unread = await self._fill_position(symbol)
         size = _f((pos or {}).get("contracts")) or _f(order.get("filled"))
         fill = _f((pos or {}).get("entryPrice")) or _f(order.get("average"))
@@ -229,6 +230,7 @@ class OpenFlow:
             return {"ok": True, "trade_id": tid, "symbol": symbol, "client_id": cid, "stop": stop_price,
                     "stop_order_id": stop.get("id"), "warnings": warnings}
         self.j.activate_trade(tid, fill, size, round(size * fill, 2))
+        fill_quality.record(self, tid, "entry", "market", order, px=fill, qty=size, snap=ref)
         risk_usdt = size * (stop_price - fill)
         liq = _f((pos or {}).get("liquidationPrice")) or None
         if liq and stop_price >= liq * (1 - lim.liq_buffer_pct / 100):

@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import reconcile
+from . import fill_quality, reconcile
 from .episodes import qty as _qty
 from .episodes import vwap as _vwap
 from .episodes import walk   # the one flat-to-flat walk: reconcile matches journal trades with it too
@@ -106,7 +106,7 @@ def adopt(desk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
     at = first_fill_ms(trades, e, o)
     tid = tranches.open_trade_id(desk, e)   # a split entry's later leg, or a same-symbol sibling that filled too
     if tid:
-        return tranches.join(desk, e, pos, tid, iso(at))
+        return _referenced(desk, e, o, trades, tranches.join(desk, e, pos, tid, iso(at)))
     sib = desk._filled_sibling(e)            # a sibling on another symbol filled too: two positions, one budget
     orphan = bool(e.get("tranche")) and tranches.parent_closed(desk, e)   # a fresh position nobody asked for
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
@@ -118,8 +118,18 @@ def adopt(desk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
     desk.j.activate_trade(tid, fill, qty, round(fill * qty, 2))
     head = ((f"sibling #{sib} also filled: group over its single-bet budget. " if sib else "")
             + (f"leg filled after its trade closed: new trade #{tid}. " if orphan else ""))
-    return ({"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill, "qty": qty},
-            (head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed", bool(head)))
+    return _referenced(desk, e, o, trades, ({"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill,
+                                             "qty": qty},
+                       (head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed", bool(head))))
+
+
+def _referenced(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict], done: tuple) -> tuple:
+    """A journalled fill's mainnet reference at its own fills (fill_quality.py, #35): in the background, after the
+    journal row, never in the way of the lock or the stop."""
+    if done[0].get("trade_id"):
+        fill_quality.record_fills(desk.tr, done[0]["trade_id"], "entry", "limit", own(trades, e["order_id"]),
+                                  {**o, "id": e["order_id"]})
+    return done
 
 
 async def announce(desk, e: dict[str, Any], ev: dict[str, Any], alert: tuple[str, bool] | None) -> dict[str, Any]:

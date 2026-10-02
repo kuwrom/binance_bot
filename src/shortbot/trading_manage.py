@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import ccxt.async_support as ccxt
 
-from . import clientid, close_intent, reconcile, stops, tranches
+from . import clientid, close_intent, fill_quality, reconcile, stops, tranches
 from .audit import refusals
 from .exchange import to_symbol
 from .stops import is_bridge, is_protective_stop
@@ -51,6 +51,7 @@ class ManageFlow:
             if amount < size:
                 return await self._close_part(symbol, trade, pos, size, amount, reason, lesson)
             order = await self._market_close(symbol, amount)
+            fill_quality.record(self, trade and trade["id"], "exit", "market", order)   # mainnet ref, background (#35)
             exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
             legs = await tranches.cancel_legs(self, trade["id"], "trade closed") if trade else {}
             await _sleep(1)  # let the position settle and income records land
@@ -86,6 +87,7 @@ class ManageFlow:
             self.j.log_decision("close_unknown", reason, symbol, snapshot={
                 "trade_id": trade and trade["id"], "amount": amount, "client_id": e.cid, "lesson": lesson})
             return {"ok": False, "unknown": True, "symbol": symbol, "client_id": e.cid, "error": msg}
+        fill_quality.record(self, trade and trade["id"], "exit", "market", order)
         exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
         if order.get("filled") is None:   # flat meanwhile, or an answer without it: the position says what is left
             try:

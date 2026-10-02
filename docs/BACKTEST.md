@@ -52,6 +52,7 @@ Every run writes `report.md`, `results.json`, `trades.json` and `provenance.json
 - Funding is paid or received on every print held through, at the actual print time.
 - **Fees:** Binance USDⓈ-M regular tier, taker 0.05% / maker 0.02% (checked 2026-09).
 - **Slippage:** `20 bp / sqrt(24h volume in $M)`, clipped to 1–150 bp. That is 4.5 bp at $20M, 20 bp at $1M, 63 bp at $0.1M.
+  Checked against the desk's own fills: journal stats `fill_quality` (each fill vs the mainnet price at it, next to this model; `fill_report.py`). `fill_report.calibrated_costs(journal)` refits the 20 bp from them, and keeps it until 30 trades over 20 days. Demo fills calibrate the demo venue, not live.
 - **Stress run:** 1.5× fees, 2× slippage, and stop fills 10% of the way into the bar's overrun.
 - **R:** net PnL divided by the planned risk (stop − entry)/entry.
 

@@ -70,7 +70,7 @@ def span(trades: list[dict], start: int, through: int | None = None) -> dict[str
             nxt = int(trades[i + 1]["timestamp"]) if i + 1 < len(trades) else None
             return {**_legs(sells), "exit": vwap(buys), "closed_ms": closed,
                     "until_ms": max(closed, nxt - 1) if nxt else None,   # the next activity on the symbol isn't ours
-                    "exit_orders": sorted({str(b["order"]) for b in buys})}
+                    "exit_orders": sorted({str(b["order"]) for b in buys}), "buys": buys}
     return {**_legs(sells), "exit": None, "closed_ms": None, "until_ms": None, "open_qty": net}
 
 
