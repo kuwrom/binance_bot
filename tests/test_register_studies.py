@@ -22,7 +22,8 @@ ENTRY = {"backtest/run.py": "main", "backtest/carry_regime.py": "main", "backtes
 EXEMPT = {"backtest/drawdown.py": "drawdown quantiles of books already tested: selects nothing",
           "sweeps.py": "fake-out size quantiles for stop placement: descriptive, no hypothesis",
           "backtest/trigger_rates.py": "scanner trigger base rates per 15m window: descriptive, selects nothing",
-          "refresh.py": "rebuilds hist.db and reruns the backtest, whose own main records"}
+          "refresh.py": "rebuilds hist.db and reruns the backtest, whose own main records",
+          "backtest/replay_verify.py": "checks the live-pipeline replay against logged scans: tests no strategy (#29)"}
 
 
 @pytest.fixture
