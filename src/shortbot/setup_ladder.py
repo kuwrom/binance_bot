@@ -198,10 +198,17 @@ def status(journal, setup: str | None, epoch: str | None = None, overlaps: dict[
         for at in new:
             _alert_stop(journal, setup, at, w["dd_r"], th["stop"])
     last = (ev.get("stops") or [None])[-1]
-    held = last is not None and not any(r >= last["at"] for r in ev.get("reenables") or [])
+    rel = min((r for r in ev.get("reenables") or [] if last and r >= last["at"]), default=None)
+    held = last is not None and rel is None
     state = "SHADOW" if held else w["state"]   # a recorded stop holds until re-enabled, whatever the replay says (TV4)
+    prob = probation(rows, fam, rel, th["halve"]) if rel and state != "SHADOW" else None
+    if prob and not prob["passed"]:
+        state = "HALF"                         # back at half size until it earns +halve/2 after the re-enable
     reasons = []
-    if state == "HALF":
+    if state == "HALF" and prob and not prob["passed"]:
+        reasons.append(f"setup ladder: {setup} on probation since its re-enable at {rel}: {prob['net_r']}R of the "
+                       f"{prob['need_r']}R it must earn back before full size")
+    elif state == "HALF":
         reasons.append(f"setup ladder: {setup} drawdown {w['dd_r']}R >= {th['halve']}R: half size")
     elif w["state"] == "SHADOW":
         reasons.append(f"setup ladder: {setup} drawdown hit {th['stop']}R: SHADOW (no new entries) until the frozen "
@@ -212,7 +219,18 @@ def status(journal, setup: str | None, epoch: str | None = None, overlaps: dict[
         reasons.append(f"setup ladder: {setup} SHADOW since its stop at {last['at']}: {why}: re-enable needs "
                        f"`shortbot-admin ladder-clear`")
     return {"setup": setup, "family": fam, **w, "state": state, "mult": MULT[state], "thresholds": th,
-            "epoch": start or None, "stop": last, "reasons": reasons}
+            "epoch": start or None, "stop": last, "probation": prob, "reasons": reasons}
+
+
+def probation(rows: list[dict[str, Any]], fam: list[str], reenabled_at: str, halve: float) -> dict[str, Any]:
+    """After a re-enable the setup stays HALF until its net R since then reaches +halve/2. That mirrors the normal
+    HALF -> NORMAL hysteresis; at the protected edge (+0.10R/trade) it takes ~40+ trades, about the triple-penance
+    recovery time. It is anchored to the re-enable, so an epoch reset or a new registry version doesn't skip it.
+    A stop-level drawdown after the re-enable is the replay's job: a new stop, SHADOW again."""
+    net = sum(r["r_multiple"] for r in rows if r.get("setup") in fam and r.get("r_multiple") is not None
+              and (r.get("closed_at") or "") >= reenabled_at)
+    need = round(halve / 2, 2)
+    return {"since": reenabled_at, "net_r": round(net, 3), "need_r": need, "passed": net >= need}
 
 
 def reenable(journal, setup: str, episodes: list[dict[str, Any]], live: bool, human_clear: bool = False,
@@ -251,4 +269,26 @@ def shadow_episodes(journal, setup: str) -> list[dict[str, Any]]:
     for c in journal.candidates(labelled_only=True):
         if setup in (c.get("setups") or []) and c.get("short_ret_72h") is not None:
             out.append({"day": (c.get("ts") or "")[:10], "ret": c["short_ret_72h"]})
+    return out
+
+
+def auto_reenable(journal, live: bool) -> list[dict[str, Any]]:
+    """The guardian's daily evaluator: for every SHADOW ladder of this account, run the frozen re-enable check on the
+    shadow episodes since its stop. Demo re-enables when the criteria pass. Live only reports "criteria pass;
+    live mode needs a human clear" (`shortbot-admin ladder-clear`). Never raises for one setup."""
+    bare = journal.mode == "demo"
+    rows = journal.db.execute("SELECT k FROM kv WHERE k LIKE ?", (KV + "%",)).fetchall()
+    setups = sorted({k[len(KV):] if bare else k[len(KV):-len("@" + journal.mode)] for (k,) in rows
+                     if ("@" not in k if bare else k.endswith("@" + journal.mode))})
+    out = []
+    for setup in setups:
+        try:
+            st = status(journal, setup)
+            if st["state"] != "SHADOW":
+                continue
+            res = reenable(journal, setup, shadow_episodes(journal, setup), live=live)
+            out.append({"setup": setup, **{k: res.get(k) for k in ("ok", "reason", "n", "days", "mean", "t_day",
+                                                                    "fails", "reenabled_at") if k in res}})
+        except Exception as e:  # noqa: BLE001 - one broken ladder must not stop the others
+            out.append({"setup": setup, "ok": False, "error": f"{type(e).__name__}: {e}"})
     return out

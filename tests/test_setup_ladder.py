@@ -14,6 +14,8 @@ class J:
     """Journal stand-in: closed_results(), kv get/set (demo keys), candidates(), alerts; `db` holds the kv table the
     stop alert's once-only marker is claimed in."""
 
+    mode = "demo"
+
     def __init__(self, rows=(), cands=()):
         self.rows, self.kv, self.cands, self.alerts = list(rows), {}, list(cands), []
         self.db = sqlite3.connect(":memory:")
@@ -21,7 +23,10 @@ class J:
 
     def closed_results(self): return self.rows
     def get(self, k): return self.kv.get(k)
-    def set(self, k, v): self.kv[k] = v
+
+    def set(self, k, v):                     # mirrors the real kv table, which auto_reenable lists ladders from
+        self.kv[k] = v
+        self.db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (k, v))
     def mode_key(self, k): return k
     def candidates(self, labelled_only=False, limit=5000): return self.cands
     def log_alert(self, kind, message, symbol=None): self.alerts.append((kind, message))
@@ -164,3 +169,40 @@ def test_ladder_failure_fails_closed_from_the_frozen_stop_record():
     ev["reenables"] = [ev["stops"][-1]["at"] + "Z"]
     j.kv["setup_ladder:pump_fade"] = json.dumps(ev)
     assert _ladder_fallback(j, "pump_fade", RuntimeError("x"))["mult"] == 0.5          # re-enabled since: half
+
+
+def _released(j, setup="pump_fade"):
+    """Stop the ladder, then re-enable it right after the stopping trade."""
+    L.status(j, setup)
+    ev = json.loads(j.kv[L.key(j, setup)])
+    ev["reenables"] = [ev["stops"][-1]["at"] + "Z"]
+    j.kv[L.key(j, setup)] = json.dumps(ev)
+
+
+def test_probation_holds_half_until_plus_half_the_halve_distance_since_reenable():
+    seq = [2] + [-1] * 13                                     # stop at the 14th trade (prior halve 8.6, stop 12.3)
+    j = J(rows(seq))
+    _released(j)
+    assert L.status(j, "pump_fade")["state"] == "HALF"        # re-enabled, nothing earned yet
+    j.rows = rows(seq + [1.0])
+    st = L.status(j, "pump_fade")
+    assert st["state"] == "HALF" and st["probation"]["net_r"] == 1.0 and st["probation"]["need_r"] == 4.3
+    j.rows = rows(seq + [1.0] * 5)                            # +5.0 >= 4.3 since the re-enable
+    assert L.status(j, "pump_fade")["state"] == "NORMAL"
+
+
+def test_probation_survives_an_epoch_reset_and_a_new_stop_after_reenable_is_shadow():
+    seq = [2] + [-1] * 13
+    j = J(rows(seq + [1.0]))
+    _released(j)
+    assert L.status(j, "pump_fade", epoch="2026-10-09")["state"] == "HALF"     # epoch after everything: still on probation
+    j2 = J(rows(seq + [-1.0] * 13))
+    _released(j2)
+    assert L.status(j2, "pump_fade")["state"] == "SHADOW"                       # -13R after the re-enable: new stop
+
+
+def test_auto_reenable_reports_per_setup_and_never_raises():
+    j = J(rows([2] + [-1] * 13))
+    L.status(j, "pump_fade")
+    out = L.auto_reenable(j, live=False)
+    assert out and out[0]["setup"] == "pump_fade" and out[0]["ok"] is False and "criteria" in out[0]["reason"]
