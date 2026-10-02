@@ -13,8 +13,9 @@ Thresholds are the 80% / 95% quantiles of the 100-trade max drawdown of a setup 
 - below 50 trades, a prior table from the 60-day backtest;
 - from 50 trades on, a bootstrap of the setup's own residual R, clamped to [0.75x, 1.5x] of the prior.
 
-State, kept in journal kv `setup_ladder:<setup>`, holds only events: epoch resets, each stop with its frozen
-criteria, and each re-enable. The ladder state itself is recomputed from the trades every time, so it is deterministic.
+State, kept in journal kv `setup_ladder:<setup>` (per account, journal.mode_key), holds only events: epoch resets,
+each stop with its frozen criteria, and each re-enable. The ladder state itself is recomputed from the trades every
+time, so it is deterministic; a recorded stop holds until it is re-enabled, across epoch resets and new versions.
 """
 
 from __future__ import annotations
@@ -146,20 +147,37 @@ def family(setup: str, rows: list[dict[str, Any]], overlaps: dict[str, float] | 
     return out
 
 
+def key(journal, setup: str) -> str:
+    """The ladder's kv row, per account (journal.mode_key): a demo stop never sizes or releases live, and back."""
+    return journal.mode_key(KV + setup)
+
+
 def events(journal, setup: str) -> dict[str, Any]:
-    raw = journal.get(KV + setup)
+    raw = journal.get(key(journal, setup))
     return json.loads(raw) if raw else {"epoch": None, "stops": [], "reenables": [], "log": []}
 
 
 def _save(journal, setup: str, ev: dict[str, Any]) -> None:
-    journal.set(KV + setup, json.dumps(ev))
+    journal.set(key(journal, setup), json.dumps(ev))
+
+
+def _alert_stop(journal, setup: str, at: str, dd: float, stop: float) -> None:
+    """One `setup_ladder_stop` alert per stop. The marker is claimed atomically, so readers that see the same new stop
+    at once (guardian, brief, sizing) don't repeat it."""
+    marker = journal.mode_key(f"setup_ladder_stop_alerted:{setup}:{at}")
+    claimed = journal.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (marker, at)).rowcount
+    journal.db.commit()
+    if claimed:
+        journal.log_alert("setup_ladder_stop", f"{setup} hit its ladder stop: drawdown {dd}R >= {stop}R, SHADOW "
+                          "(no new entries; scans keep logging). It returns only on the evidence frozen at the stop; "
+                          "the human checks it with `shortbot-admin ladder-status`.")
 
 
 def status(journal, setup: str | None, epoch: str | None = None, overlaps: dict[str, float] | None = None,
            now: datetime | None = None) -> dict[str, Any]:
     """The ladder for a new trade's setup: state, size multiplier, drawdown, thresholds, family and reasons.
     `epoch` = the created_at of the setup's current registry version. A stop seen for the first time is recorded
-    with frozen criteria (the only write this function makes)."""
+    with frozen criteria and alerted once (the only writes this function makes)."""
     if not setup:
         return {"state": "NORMAL", "mult": 1.0, "reasons": []}
     rows = journal.closed_results()
@@ -177,14 +195,24 @@ def status(journal, setup: str | None, epoch: str | None = None, overlaps: dict[
         ev.setdefault("log", []).append({"kind": "stop", "at": at, "dd_r": w["dd_r"]})
     if new:
         _save(journal, setup, ev)
+        for at in new:
+            _alert_stop(journal, setup, at, w["dd_r"], th["stop"])
+    last = (ev.get("stops") or [None])[-1]
+    held = last is not None and not any(r >= last["at"] for r in ev.get("reenables") or [])
+    state = "SHADOW" if held else w["state"]   # a recorded stop holds until re-enabled, whatever the replay says (TV4)
     reasons = []
-    if w["state"] == "HALF":
+    if state == "HALF":
         reasons.append(f"setup ladder: {setup} drawdown {w['dd_r']}R >= {th['halve']}R: half size")
     elif w["state"] == "SHADOW":
         reasons.append(f"setup ladder: {setup} drawdown hit {th['stop']}R: SHADOW (no new entries) until the frozen "
                        f"re-enable criteria pass")
-    return {"setup": setup, "family": fam, "state": w["state"], "mult": MULT[w["state"]], **w, "thresholds": th,
-            "epoch": start or None, "stop": (ev.get("stops") or [None])[-1], "reasons": reasons}
+    elif held:
+        why = ("stop predates the replay start" if last["at"] < start else
+               "the replay no longer reaches the stop (thresholds or roll-up changed)")
+        reasons.append(f"setup ladder: {setup} SHADOW since its stop at {last['at']}: {why}: re-enable needs "
+                       f"`shortbot-admin ladder-clear`")
+    return {"setup": setup, "family": fam, **w, "state": state, "mult": MULT[state], "thresholds": th,
+            "epoch": start or None, "stop": last, "reasons": reasons}
 
 
 def reenable(journal, setup: str, episodes: list[dict[str, Any]], live: bool, human_clear: bool = False,

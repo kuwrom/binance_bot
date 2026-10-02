@@ -1,23 +1,33 @@
 import json
+import sqlite3
 from dataclasses import replace
 
 import pytest
 
 from shortbot import setup_ladder as L
 from shortbot.config import RiskLimits
-from shortbot.risk_budget import BudgetInputs, compute_budget
+from shortbot.journal import Journal
+from shortbot.risk_budget import BudgetInputs, _ladder_fallback, compute_budget
 
 
 class J:
-    """Journal stand-in: closed_results(), kv get/set, candidates()."""
+    """Journal stand-in: closed_results(), kv get/set (demo keys), candidates(), alerts; `db` holds the kv table the
+    stop alert's once-only marker is claimed in."""
 
     def __init__(self, rows=(), cands=()):
-        self.rows, self.kv, self.cands = list(rows), {}, list(cands)
+        self.rows, self.kv, self.cands, self.alerts = list(rows), {}, list(cands), []
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)")
 
     def closed_results(self): return self.rows
     def get(self, k): return self.kv.get(k)
     def set(self, k, v): self.kv[k] = v
+    def mode_key(self, k): return k
     def candidates(self, labelled_only=False, limit=5000): return self.cands
+    def log_alert(self, kind, message, symbol=None): self.alerts.append((kind, message))
+
+
+GOOD = [{"day": f"2026-10-{1 + d:02d}", "ret": 0.2 + 0.1 * (d % 4) + 0.05 * k} for d in range(10) for k in range(3)]
 
 
 def rows(rs, setup="pump_fade", start=1):
@@ -110,8 +120,42 @@ def test_risk_budget_applies_the_ladder_multiplier_with_its_reason():
     assert shadow["risk_usd"] == 0 and shadow["blocked"]
 
 
+def test_tv4_an_unreleased_stop_survives_an_epoch_reset_and_a_new_registry_version():
+    j = J(rows([2] + [-1] * 13))
+    assert L.status(j, "pump_fade")["state"] == "SHADOW"
+    newer = L.status(j, "pump_fade", epoch="2026-10-05")     # a detector change registers a new version
+    assert newer["state"] == "SHADOW" and newer["mult"] == 0.0 and newer["thresholds"]["n"] == 0
+    assert "stop predates the replay start: re-enable needs `shortbot-admin ladder-clear`" in newer["reasons"][0]
+    L.reset_epoch(j, "pump_fade", "human", "reviewed")
+    assert L.status(j, "pump_fade")["state"] == "SHADOW"
+    assert L.reenable(j, "pump_fade", GOOD, live=False)["ok"] is True
+    after = L.status(j, "pump_fade")                         # released: the new epoch's own replay sizes it
+    assert after["state"] != "SHADOW" and after["mult"] > 0
+
+
+def test_the_stop_record_is_per_account_a_demo_stop_is_invisible_in_live(tmp_path):
+    demo, live = Journal(tmp_path / "j.db", "demo"), Journal(tmp_path / "j.db", "live")
+    demo.closed_results = lambda all_modes=False: rows([2] + [-1] * 13)
+    assert L.status(demo, "pump_fade")["state"] == "SHADOW"
+    assert demo.get("setup_ladder:pump_fade") and live.get("setup_ladder:pump_fade@live") is None
+    assert L.events(live, "pump_fade")["stops"] == [] and L.status(live, "pump_fade")["state"] == "NORMAL"
+    assert _ladder_fallback(live, "pump_fade", RuntimeError("x"))["mult"] == 0.5        # not demo's stop -> 0
+    assert L.reenable(live, "pump_fade", GOOD, live=True)["reason"] == "not stopped"
+    assert L.events(demo, "pump_fade")["reenables"] == []
+
+
+def test_a_stop_alerts_once_however_many_readers_see_it():
+    j = J(rows([2] + [-1] * 13))
+    for _ in range(3):                                       # brief, guardian, sizing
+        L.status(j, "pump_fade")
+    assert [k for k, _ in j.alerts] == ["setup_ladder_stop"]
+    assert "pump_fade" in j.alerts[0][1] and "13.0R" in j.alerts[0][1] and "ladder-status" in j.alerts[0][1]
+    racer = J(rows([2] + [-1] * 13))                         # another process saw the same stop before the record
+    racer.db = j.db
+    assert L.status(racer, "pump_fade")["state"] == "SHADOW" and racer.alerts == []
+
+
 def test_ladder_failure_fails_closed_from_the_frozen_stop_record():
-    from shortbot.risk_budget import _ladder_fallback
     j = J(rows([2] + [-1] * 13))
     assert _ladder_fallback(j, "pump_fade", RuntimeError("x"))["mult"] == 0.5          # nothing recorded: half
     L.status(j, "pump_fade")                                                           # records the stop

@@ -1,17 +1,23 @@
-"""`shortbot-admin`: the HUMAN side of the kill switch (killswitch.py). Loosening the state lives in this separate
-console script because the agent's allowlist, `Bash(.venv/bin/shortbot *)`, auto-approves every `shortbot`
-subcommand, so a `shortbot` subcommand can't tell the human from the agent. Two loosenings live here:
+"""`shortbot-admin`: the HUMAN side of the kill switch (killswitch.py) and the setup ladder (setup_ladder.py).
+Loosening lives in this separate console script because the agent's allowlist, `Bash(.venv/bin/shortbot *)`,
+auto-approves every `shortbot` subcommand, so a `shortbot` subcommand can't tell the human from the agent. Three
+loosenings live here:
 - `clear`: lowers the state, and holds the loss trips at the readings it shows (killswitch_rearm.py) so they don't
   re-fire on the loss just reviewed;
-- `equity-peak reset`: moves the drawdown peak to today's live equity (equity_marks.reset_peak).
-Both swap only what the human confirmed: if it changed meanwhile, nothing changes and they re-run.
+- `equity-peak reset`: moves the drawdown peak to today's live equity (equity_marks.reset_peak);
+- `ladder-clear --setup X`: re-enables a SHADOWed setup at half size (setup_ladder.reenable), and only when the
+  criteria frozen at its stop pass on the shadow evidence since. Code evaluates them; the human's code is the
+  sign-off live mode needs (RTS 6 / FIA), never an override. `ladder-status` lists what a clear would get now.
+All swap only what the human confirmed: if it changed meanwhile, nothing changes and they re-run.
 
 Speed bumps and a tripwire, not a security boundary (an agent with a shell can still write the SQLite file):
 - a separate executable: the space before `*` is part of a Claude Code rule, so `.venv/bin/shortbot *` doesn't match
-  `.venv/bin/shortbot-admin`; the owner also denies `Bash(*shortbot-admin*)` outright (deny holds in every mode);
+  `.venv/bin/shortbot-admin`; the owner should also deny `Bash(*shortbot-admin*)` outright (a deny holds in every
+  mode);
 - a real terminal: the confirmation code is read from /dev/tty, which Claude Code's Bash tool doesn't have, and
   it refuses to run when CLAUDECODE is set;
-- every change is journalled (`kill_switch_clear`) and alerted, so a clear nobody typed gets noticed.
+- every change is journalled (`kill_switch_clear`, `equity_peak_reset`, `setup_ladder_clear`) and alerted, so a
+  clear nobody typed gets noticed.
 """
 
 from __future__ import annotations
@@ -24,9 +30,11 @@ import os
 import secrets
 from typing import Any
 
-from . import audit, equity_marks
+from . import audit, equity_marks, risk_budget
 from . import killswitch as ks
 from . import killswitch_rearm as rearm
+from . import setup_ladder as L
+from . import setup_ladder_view as view
 from .config import Settings
 from .journal import Journal
 from .redact import install_log_redaction
@@ -78,6 +86,10 @@ async def run(args: argparse.Namespace, settings: Settings | None = None, journa
         return ks.status(j)
     if args.cmd == "equity-peak":
         return await reset_peak(j, s, args.reason, equity_fn)
+    if args.cmd == "ladder-status":
+        return {"ok": True, "mode": s.mode, "setups": view.listing(j)}
+    if args.cmd == "ladder-clear":
+        return await ladder_clear(j, s, args.setup, args.reason)
     shown = j.get(ks.KV_KEY)   # the exact row the human confirms; the clear swaps only that row
     st = ks.read(j)
     if ks.LEVEL[args.to] >= st["level"]:
@@ -129,9 +141,53 @@ async def reset_peak(j: Journal, s: Settings, reason: str, equity_fn) -> dict[st
     return out
 
 
+async def ladder_clear(j: Journal, s: Settings, setup: str, reason: str) -> dict[str, Any]:
+    """Re-enable a SHADOWed setup at half size. Code evaluates the criteria frozen at its stop on the shadow episodes
+    since: before the prompt (failing them refuses with why, no prompt) and again inside setup_ladder.reenable, on the
+    episodes shown. Swaps only the ladder row the human saw."""
+    if not (reason or "").strip() or _under_claude():
+        return {"ok": False, "error": _under_claude() or "ladder-clear needs a --reason"}
+    p = view.clear_preview(j, setup)
+    if not p["ok"]:
+        return {"ok": False, "error": p["error"], **({"evidence": p["evidence"]} if "evidence" in p else {})}
+    ev, stop = p["evidence"], p["stop"]
+    c = stop["criteria"]
+    why = confirm(f"setup ladder {setup}: {p['state']} since its stop at {stop['at']} (drawdown {p['dd_r']}R, stop at "
+                  f"{(stop.get('thresholds') or {}).get('stop')}R)\n"
+                  f"criteria frozen at the stop: >= {c['min_episodes']} shadow episodes on >= {c['min_days']} days, "
+                  f"mean > {c['mean_gt']}, day-clustered t >= {c['t_day_ge']}\n"
+                  f"evidence since {stop['at'][:10]}: {ev['n']} episodes on {ev['days']} days, mean {ev['mean']}, "
+                  f"t_day {ev['t_day']}: pass\n"
+                  f"re-enable {setup} at HALF size ({s.mode} mode)")
+    if why:
+        return {"ok": False, "error": why}
+    key = L.key(j, setup)
+    j.db.commit()
+    j.db.execute("BEGIN IMMEDIATE")   # check-and-re-enable under one write lock
+    try:
+        if j.get(key) != p["raw"]:
+            return {"ok": False, "error": f"the {setup} ladder changed while you were confirming: nothing changed, "
+                                          "re-run"}
+        out = L.reenable(j, setup, p["episodes"], live=s.mode == "live", human_clear=True)   # its write commits
+    finally:
+        if j.db.in_transaction:
+            j.db.rollback()
+    if not out["ok"]:
+        return {"ok": False, "error": f"re-enable refused: {out['reason']}", "evidence": out}
+    by, note = _by(), reason.strip()
+    evidence = {k: out.get(k) for k in ("ok", "n", "days", "mean", "t_day", "fails")}
+    j.log_decision("setup_ladder_clear", f"{setup} SHADOW -> HALF by {by}: {note}", None,
+                   snapshot={"setup": setup, "mode": s.mode, "by": by, "stop": stop, "evidence": evidence,
+                             "reenabled_at": out["reenabled_at"]})
+    await ks.notify(j, s, "setup_ladder_clear", f"{setup} re-enabled at half size by {by} ({s.mode}): {note}. Evidence "
+                    f"since the stop: {ev['n']} episodes on {ev['days']} days, mean {ev['mean']}, t_day {ev['t_day']}",
+                    urgent=False)
+    return {**out, "setup": setup, "state": (risk_budget._ladder(j, setup) or {}).get("state")}
+
+
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="shortbot-admin", description="Human-only kill-switch controls. Run it in "
-                                "your own terminal, not through Claude.")
+    p = argparse.ArgumentParser(prog="shortbot-admin", description="Human-only kill-switch, equity-peak and "
+                                "setup-ladder controls. Run it in your own terminal, not through Claude.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="state, who set it and why, guardian heartbeat")
     c = sub.add_parser("clear", help="loosen the kill switch (asks for a code on this terminal)")
@@ -144,6 +200,11 @@ def parser() -> argparse.ArgumentParser:
                                            "this terminal)")
     e.add_argument("action", choices=("reset",))
     e.add_argument("--reason", required=True, help="what you reviewed (e.g. a demo top-up, a reviewed drawdown)")
+    lc = sub.add_parser("ladder-clear", help="re-enable a SHADOWed setup at half size, only if the criteria frozen at "
+                                             "its stop pass (asks for a code on this terminal)")
+    lc.add_argument("--setup", required=True)
+    lc.add_argument("--reason", required=True, help="what you reviewed (the shadow evidence, why the stop fired)")
+    sub.add_parser("ladder-status", help="every setup ladder: state, drawdown, its stop and what a clear would get now")
     return p
 
 

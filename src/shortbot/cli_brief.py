@@ -2,7 +2,8 @@
 
 Hook output is not a tool result, so it never carries third-party text (headlines, announcement titles, calendar
 titles): alerts show kind, symbol, time and id, and point to the tool that returns the text as untrusted data. The
-brief only reads (alerts stay until start_session acknowledges them), apart from the guardian watchdog."""
+brief only reads (alerts stay until start_session acknowledges them), apart from the guardian watchdog and a setup
+ladder stop seen for the first time, which it records and alerts once, as sizing would (setup_ladder.status)."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import json
 import time
 from datetime import datetime
 
-from . import alerts_view, killswitch, procs
+from . import alerts_view, killswitch, procs, setup_ladder_view
 from .entries import EntryDesk
 from .untrusted import clean, flat, third_party_alert, third_party_tag
 
@@ -28,6 +29,10 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         lines.append(f"- ⚠️ guardian watchdog failed: {type(e).__name__}: {e}")
     lines.append(killswitch.brief_line(j))
+    try:   # setups the ladder sizes down (#67): one line, only when some setup is HALF, SHADOW or UNKNOWN
+        lines += [ln for ln in (setup_ladder_view.brief_line(j),) if ln]
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- ⚠️ setup ladder check failed: {type(e).__name__}: {e}")
     lines.append(backup_line(j))
     try:   # long-lived processes still on code older than the code on disk (#58)
         lines.append(await asyncio.wait_for(procs.brief_line(j), BRIEF_TIMEOUT_S))

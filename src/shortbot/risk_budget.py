@@ -272,11 +272,17 @@ def _ladder_fallback(journal, setup: str, err: Exception) -> dict[str, Any]:
 
 
 async def governor_status(trader, regime: str, limits: RiskLimits | None = None) -> dict[str, Any]:
-    """Account breakers + the evidence behind the tilts (streak test over all closed R)."""
+    """Account breakers + the evidence behind the tilts (streak test over all closed R), and `ladders`: each setup the
+    setup ladder sizes down (HALF, SHADOW, UNKNOWN) with its multiplier and reasons (setup_ladder_view, cached)."""
     from .tilts import streak_test
     inp = await gather_inputs(trader, regime, limits=limits)
     rs = [r["r_multiple"] for r in trader.j.closed_results() if r["r_multiple"] is not None]
+    try:
+        from .setup_ladder_view import ladders
+        lad: dict[str, Any] = {"ladders": ladders(trader.j)}
+    except Exception as e:  # noqa: BLE001 - visibility only: sizing reads each ladder itself and fails closed
+        lad = {"ladders": None, "ladders_error": f"{type(e).__name__}: {e}"}
     return {**(inp.gov or {}), "regime": regime, "cell": inp.cell, "equity": inp.equity,
             "peak_equity": inp.peak_equity, "streak_test": streak_test(rs),
             "moonshot_quarter_pnl": round(inp.moon_quarter_pnl, 2),
-            "open_risk_usd": round(sum(inp.open_risks.values()), 2)}   # what compute_budget takes off the daily room
+            "open_risk_usd": round(sum(inp.open_risks.values()), 2), **lad}   # open risk: what comes off the daily room
