@@ -22,6 +22,7 @@ from .entries import EntryDesk
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
 from .guardian_margin import MarginChecks
+from .guardian_plan import PlanChecks
 from .guardian_positions import PositionChecks
 from .guardian_watch import WatchChecks
 from .killswitch import HEARTBEAT_KEY
@@ -62,7 +63,7 @@ RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs
 TICK_S = 1.0
 
 
-class Guardian(PositionChecks, WatchChecks, MarginChecks, MarketJobs):
+class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs):
     """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
     the kill-switch loss trips (daily loss, dd_stop) and the governor verdict (its halt withdraws resting entries,
     entry_gates.py) follow an active experiment's limits, the ones the session places and sizes under."""
