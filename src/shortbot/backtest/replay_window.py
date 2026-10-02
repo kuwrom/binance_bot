@@ -94,6 +94,39 @@ def metrics_from_hist(store: Store, hist_db: Path | str, raws: list[str], a: int
     return n
 
 
+async def fill_gaps(store: Store, f: Any, client: Any, raws: list[str], a: int, b: int,
+                    pace_s: float = 0.4) -> dict[str, list[str]]:
+    """Coins hist.db lacks (the non-ASCII perps before #73's fix): 5m metrics from the daily archive, settled
+    funding from /fapi/v1/fundingRate pages. (The archive has no mark / premium klines for them at all.)"""
+    no_m = [r for r in raws if not store.metrics(r, a, b)]
+    no_f = [r for r in raws if not store.funding(r, a, b)]
+    days = [V.day_str(d) for d in range(a // DAY * DAY, b, DAY)]
+
+    async def one(raw: str, day: str) -> None:
+        k = f"{V.UM}/daily/metrics/{raw}/{raw}-metrics-{day}.zip"
+        if store.have(k):
+            return
+        text = await f.csv(k)
+        rows = V.parse_metrics(text) if text else []
+        store.put_metrics(raw, rows)
+        store.done(k, len(rows), int(time.time() * 1000))  # wall-clock: fetch log
+    await asyncio.gather(*(one(r, d) for r in no_m for d in days))
+    for raw in no_f:
+        start = a
+        while start < b:
+            r = await client.get(f"{FAPI}/fapi/v1/fundingRate", timeout=30,
+                                 params={"symbol": raw, "startTime": start, "endTime": b, "limit": 1000})
+            rows = [(int(x["fundingTime"]) // 1000 * 1000, float(x["fundingRate"])) for x in r.json()] \
+                if r.status_code == 200 else []
+            store.put_funding(raw, rows)
+            await asyncio.sleep(pace_s)
+            if len(rows) < 1000:
+                break
+            start = rows[-1][0] + 1
+    store.db.commit()
+    return {"metrics": no_m, "funding": no_f}
+
+
 def movers(store: Store, raws: list[str], times: list[int], depth: int, margin: int) -> list[str]:
     """Coins within the top depth + margin 24h gainers or losers (hourly closes) at any of the scan times."""
     k = depth + margin
@@ -132,6 +165,8 @@ async def build_window(cache: Path | str, t0: int, t1: int, times: list[int], hi
     out["daily_rows"] = daily_from_inputs(store, raws, hist_db, daily_db, (t0 - PERP_LOOKBACK) // DAY * DAY + DAY)
     out["funding_rows"] = funding_from_hist(store, hist_db, raws, t0 - 30 * DAY)
     out["metrics_rows"] = metrics_from_hist(store, hist_db, raws, t0 - 3 * DAY, t1 + LABEL_AHEAD)
+    async with httpx.AsyncClient() as client:
+        out["gaps"] = await fill_gaps(store, f, client, raws, t0 - 3 * DAY, t1 + DAY)
     mv = movers(store, raws, times, depth, margin)
     out["movers"] = len(mv)
     log(f"{len(mv)} movers; 5m mark / premium / spot")
