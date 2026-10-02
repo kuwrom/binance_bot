@@ -29,9 +29,7 @@ def snapshot(live_db: Path | str, dest: Path | str) -> Path:
     is switched to rollback journaling and made read-only on disk."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR)
-        dest.unlink()
+    _remove(dest)
     src = ro_connect(live_db)
     dst = sqlite3.connect(str(dest))
     src.backup(dst)
@@ -47,8 +45,7 @@ def world(snap: Path | str, dest: Path | str) -> Path:
     writes its own) and minus the guardian's market-map cache (the replay rebuilds maps as of each moment)."""
     from ..market.market_map import KV_LAST, KV_PREV_RANKS
     dest = Path(dest)
-    if dest.exists():
-        dest.unlink()
+    _remove(dest)
     shutil.copyfile(snap, dest)
     os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR)
     db = sqlite3.connect(str(dest))
@@ -179,6 +176,14 @@ def offline_feeds(oracle: Oracle | None = None) -> Iterator[None]:
     finally:
         for m, n, f in saved:
             setattr(m, n, f)
+
+
+def _remove(db_path: Path) -> None:
+    """Delete a DB file AND its sidecars: a -wal left by a killed run would be replayed into the new file."""
+    for p in (db_path, *(db_path.with_name(db_path.name + s) for s in ("-wal", "-shm", "-journal"))):
+        if p.exists():
+            os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)
+            p.unlink()
 
 
 def _has(db: sqlite3.Connection, table: str) -> bool:

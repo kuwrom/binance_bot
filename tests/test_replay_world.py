@@ -97,3 +97,26 @@ def test_offline_feeds_block_the_network_and_restore():
     with W.offline_feeds(o):
         assert asyncio.run(social.coingecko_trending()) == {"AAA": 3}
         assert asyncio.run(social.binance_hype())["AAA"]["hype"] == 70
+
+
+def test_world_drops_a_stale_wal_from_a_killed_run(tmp_path):
+    """A killed run leaves world.db-wal behind; SQLite would replay that WAL into the fresh copy (malformed DB)."""
+    import shutil
+    _journal(tmp_path)
+    d = tmp_path / "s"
+    snap = W.snapshot(tmp_path / "live.db", d / "snap.db")
+    w = W.world(snap, d / "world.db")
+    db = sqlite3.connect(str(w))
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA wal_autocheckpoint=0")
+    db.execute("CREATE TABLE junk (x)")
+    db.executemany("INSERT INTO junk VALUES (?)", [("y" * 500,)] * 2000)
+    db.commit()
+    shutil.copy(d / "world.db-wal", tmp_path / "stale-wal")             # what a killed process leaves
+    db.close()
+    W.world(snap, d / "world.db")
+    shutil.copy(tmp_path / "stale-wal", d / "world.db-wal")
+    w2 = W.world(snap, d / "world.db")
+    db2 = sqlite3.connect(str(w2))
+    assert db2.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert db2.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='junk'").fetchone()[0] == 0
