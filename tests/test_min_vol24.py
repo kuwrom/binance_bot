@@ -52,3 +52,14 @@ def test_label_names_a_non_live_floor():
                                long2=False, placebo="matched", dsr="clustered", min_vol24=1e6)
     assert run.label(a) == "bt60_floor1m"
     assert run.label(run.argparse.Namespace(**{**vars(a), "min_vol24": 20e6})) == "bt60"
+
+
+def test_rerun_of_a_run_recorded_before_the_flag_keeps_its_1m_floor():
+    from shortbot import provenance as P
+    old = {"config": {"command": "shortbot.backtest.run", "argv": ["--days60"], "args": {"days60": True}}}
+    assert P.rerun_cmd(old)[-2:] == ["--min-vol24", "1000000"]
+    new = {"config": {"command": "shortbot.backtest.run", "argv": ["--days60"],
+                      "args": {"days60": True, "min_vol24": 20e6}}}
+    assert "--min-vol24" not in P.rerun_cmd(new)
+    other = {"config": {"command": "shortbot.backtest.trail5m", "argv": [], "args": {}}}
+    assert "--min-vol24" not in P.rerun_cmd(other)

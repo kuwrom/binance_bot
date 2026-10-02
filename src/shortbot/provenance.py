@@ -270,12 +270,19 @@ def verify(prov: dict[str, Any]) -> list[str]:
     return diffs
 
 
+# a default that changed: runs recorded before the flag existed rerun with the old value
+LEGACY_DEFAULTS = {"shortbot.backtest.run": (("--min-vol24", "min_vol24", "1000000"),)}   # rounds 0-4 floor (#73)
+
+
 def rerun_cmd(prov: dict[str, Any], out: Path | str | None = None, pin: bool = True) -> list[str]:
     """The command that reruns it; pin=True adds the recorded window (config["pin"]) so a grown hist.db replays it."""
     c = prov["config"]
     argv = list(c["argv"])
     if pin and c.get("pin") and not any(x in argv for x in c["pin"][::2]):
         argv += c["pin"]
+    for flag, key, value in LEGACY_DEFAULTS.get(c["command"], ()):
+        if key not in (c.get("args") or {}) and flag not in argv:   # recorded before the flag existed
+            argv += [flag, value]
     return [sys.executable, "-m", c["command"], *argv, *(["--out", str(out)] if out else [])]
 
 
