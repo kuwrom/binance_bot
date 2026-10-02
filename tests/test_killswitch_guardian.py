@@ -2,7 +2,6 @@
 long, untracked), the stale-heartbeat auto-clear, the loosening tripwire (across restarts too), and hooks that never
 fail the protective pass."""
 
-import asyncio
 import json
 import time
 from datetime import datetime, timezone
@@ -102,7 +101,7 @@ async def test_a_loss_carried_over_midnight_no_longer_trips_the_daily_loss():
     assert ks.read(g.j)["state"] == ACTIVE
 
 
-async def test_a_late_mark_or_a_hung_income_read_falls_back_to_the_old_day_pnl(monkeypatch):
+async def test_a_late_or_unreadable_mark_falls_back_to_the_old_day_pnl(monkeypatch):
     g, fake = guardian()
     day_mark(g, fake.equity, late=True)                     # the guardian slept across midnight
     realized_today(fake, -400)
@@ -112,10 +111,9 @@ async def test_a_late_mark_or_a_hung_income_read_falls_back_to_the_old_day_pnl(m
     day_mark(g2, fake2.equity)
     realized_today(fake2, -400)
 
-    async def hung(*a, **k):
-        await asyncio.sleep(60)
-    monkeypatch.setattr(em, "gather", hung)
-    monkeypatch.setattr(gp, "MARKS_TIMEOUT_S", 0.01)
+    def locked(*a, **k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(em, "_mark", locked)                # kv unreadable: equity_marks.period_pnl degrades
     await g2.check_positions()
     assert ks.read(g2.j)["cause"] == "daily_loss"
     assert json.loads(g2.j.decisions()[0]["snapshot"])["evidence"]["degraded"]

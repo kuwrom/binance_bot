@@ -41,7 +41,7 @@ class AccountState:
     equity: float                  # USDT wallet balance + unrealized PnL
     open_symbols: tuple[str, ...]
     total_open_notional: float
-    day_pnl: float                 # realized + unrealized since 00:00 UTC
+    day_pnl: float                 # Trader.account()'s day P&L: equity vs the 00:00 UTC mark, net of transfers
 
 
 class RiskViolation(Exception):
@@ -139,7 +139,8 @@ def check_open_short(req: ShortRequest, acct: AccountState, limits: RiskLimits) 
                     f"loss at stop {loss_at_stop_pct:.2f}% of equity > {limits.risk_per_trade_pct}% "
                     f"(max notional {max_notional_for_risk(acct.equity, req.entry_price, req.stop_price, limits):.2f})"
                 )
-        if acct.day_pnl / acct.equity * 100 <= -limits.daily_loss_limit_pct:
+        start = acct.equity - acct.day_pnl   # start-of-day equity: the kill switch's and the governor's basis
+        if start > 0 and acct.day_pnl / start * 100 <= -limits.daily_loss_limit_pct:
             reasons.append(f"daily loss limit {limits.daily_loss_limit_pct}% hit; no new shorts today")
 
     if reasons:

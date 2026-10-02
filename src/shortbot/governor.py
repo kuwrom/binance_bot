@@ -29,9 +29,9 @@ REGIME_MULT = {"favorable": 1.0, "caution": 0.75, "hostile": 0.5, "unknown": 0.5
 class GovInputs:
     equity: float
     peak_equity: float
-    day_pnl: float                                   # realized + unrealized since 00:00 UTC
+    day_pnl: float                                   # Trader.account(): equity vs the 00:00 UTC mark, net of transfers
     day_peak_pnl: float = 0.0                        # highest day_pnl seen today
-    week_pnl: float = 0.0                            # realized + unrealized since Monday 00:00 UTC
+    week_pnl: float = 0.0                            # the same against Monday 00:00 UTC
     results: list[tuple[str, float]] = field(default_factory=list)  # (closed_at iso, net pnl), oldest first
     regime: str = "unknown"
     btc_vol_now: float | None = None

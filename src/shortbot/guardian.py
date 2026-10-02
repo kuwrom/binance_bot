@@ -55,6 +55,8 @@ class Guardian(PositionChecks, WatchChecks, MarketJobs):
         self.stop_fails: dict[str, int] = {}
         self.pos_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed checks per symbol
         self.watch_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed watch passes per symbol (#57)
+        self.pnl_streak = Streak(ESCALATE_AFTER_FAILS)     # consecutive passes without a day P&L (income unreadable)
+        self.pnl_tripped = False                           # this outage already tripped REDUCING (once per outage)
         self.untracked_since: dict[str, float] = {}       # symbol -> first seen without a journal trade
         self.kill_seen: dict | None = None                # last kill-switch state seen (loosening tripwire)
         self._last_resync = 0.0

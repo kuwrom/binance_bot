@@ -62,9 +62,11 @@ def test_risk_per_trade():
     assert max_notional_for_risk(200, 1.0, 1.05, LIMITS) == pytest.approx(40)
 
 
-def test_daily_loss_limit():
-    acct = AccountState(equity=10_000, open_symbols=(), total_open_notional=0, day_pnl=-300)
+def test_daily_loss_limit_is_measured_against_start_of_day_equity():
+    """As the kill switch and the governor: -300 on a 10k start is 3%; -295 (3.04% of today's 9705) is not."""
+    acct = AccountState(equity=9_700, open_symbols=(), total_open_notional=0, day_pnl=-300)
     assert "daily loss limit" in reasons(req(), acct)
+    check_open_short(req(), AccountState(equity=9_705, open_symbols=(), total_open_notional=0, day_pnl=-295), LIMITS)
 
 
 def test_multiple_violations_all_reported():

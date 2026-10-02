@@ -66,7 +66,8 @@ async def list_setups() -> list[dict[str, Any]]:
 # ------------------------------------------------------------------ account / orders
 @tool
 async def account() -> dict[str, Any]:
-    """Equity, available margin, realized+unrealized PnL today (from Binance income), mode, effective limits."""
+    """Equity, available margin, day/week P&L (equity vs the period's start mark, net of transfers: what every cap
+    reads) with the old realized+unrealized figures as evidence, the equity peak, mode, effective limits."""
     return await get_app().trader.account()
 
 

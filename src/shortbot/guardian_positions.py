@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_gates, entry_intents, equity_marks, reconcile, stops
+from . import entry_gates, entry_intents, reconcile, stops
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -28,13 +28,15 @@ FALLBACK_STOP_PCT = 10.0
 MAX_STOP_RESTORE_FAILS = 3
 UNTRACKED_GRACE_S = 120     # untracked this long (and no limit of ours resting on it) = reconciliation trip
 HALT_SWEEP_TIMEOUT_S = 60   # a hung cancel must not hold up the fill poll behind it
-MARKS_TIMEOUT_S = 30        # the day-P&L income read; on timeout the daily-loss trip uses the old (worse) day P&L
+ACCOUNT_TIMEOUT_S = 30      # the pass's account read (balance, positions, income): the fill poll waits behind it
+PNL_UNVERIFIED_PASSES = 3   # passes in a row without a day P&L (about 3 min) before REDUCING
+PNL_UNVERIFIED, PNL_KEY = "day_pnl_unverified", "day_pnl"   # the trip's cause; the streak's key
 SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mode_key): the tripwire survives restarts
 
 
 class PositionChecks:
     """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
-    kill_seen."""
+    kill_seen, pnl_streak, pnl_tripped."""
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:
@@ -54,8 +56,6 @@ class PositionChecks:
         for res in closed:
             await self.n.send("trade_closed", f"{res['reason']}: net {res['net']:+.2f} USDT (fees {res['fees']:.2f}, "
                               f"funding {res['funding']:.2f})", res["symbol"], cooldown_s=0, urgent=res["liquidated"])
-        acct = await tr.account(live)
-        track_day_peak(self.j, acct["day_pnl"])   # arms the give-back stop (governor.py)
         held = await tr.positions()
         for p in held:
             sym = p["symbol"]
@@ -72,24 +72,46 @@ class PositionChecks:
                                     f"failures ({r[1] / 60:.0f} min)", sym, cooldown_s=0)
         self.pos_streak.forget(set(self.pos_streak.fails) - {p["symbol"] for p in held})   # closed meanwhile
         self.untracked_since = {s: t for s, t in self.untracked_since.items() if s in {p["symbol"] for p in held}}
-        day_pnl, marks = await self._marks_day_pnl(acct)   # after the stops: it reads income
+        acct = await self._day_pnl_read()   # after the stops: the pass's one income read
+        if acct is None:
+            return
+        day_pnl = acct["day_pnl"]   # the definition every consumer reads (trading.account, equity_marks.py)
+        track_day_peak(self.j, day_pnl)   # arms the give-back stop (governor.py)
         # effective limit, sticky; a human clear holds it (killswitch_rearm.py); the reminder follows the trip exactly
-        hit = await guarded("kill_switch", ks.trip_on_daily_loss(self.j, self.app.settings, acct["equity"], day_pnl,
-                                                                 marks), self.n)
+        hit = await guarded("kill_switch", ks.trip_on_daily_loss(
+            self.j, self.app.settings, acct["equity"], day_pnl,
+            {k: acct[k] for k in ("old_day_pnl", "late", "pending", "degraded")}), self.n)
         await self._daily_loss_alert(day_pnl, hit)
 
-    async def _marks_day_pnl(self, acct: dict) -> tuple[float, dict]:
-        """(day P&L from the equity marks, evidence) (equity_marks.py: a loss carried over midnight isn't today's).
-        One income read per pass, after the position checks so it never delays a stop. Late, degraded or timed out:
-        the old day P&L, which never misses a loss. Never raises.
-        TODO(#9 follow-up): drop this read once trading.account() returns the mark-based day P&L."""
-        old = acct["day_pnl"]
+    async def _day_pnl_read(self) -> dict | None:
+        """trader.account() with fresh positions (a plan close in this pass is in income already); None when it can't
+        be read. The job still succeeds, since its stops were checked (the heartbeat means "protection last worked"),
+        so an income outage never becomes a stale-heartbeat HALTED. Losses can't be checked meanwhile, so nothing is
+        tripped or armed on a guess; after PNL_UNVERIFIED_PASSES in a row: REDUCING, once per outage (no new risk,
+        resting entries stay). Sticky like any trip: a human clears it, and that clear holds through the outage."""
         try:
-            per = await asyncio.wait_for(equity_marks.gather(self.app.trader.t, self.j, acct["equity"], old, old),
-                                         MARKS_TIMEOUT_S)
-        except Exception:  # noqa: BLE001 (incl. TimeoutError) - conservative fallback
-            per = {"day_pnl": old, "late": {}, "degraded": True}
-        return per["day_pnl"], {"old_day_pnl": old, "late": per.get("late", {}), "degraded": per.get("degraded", False)}
+            acct = await asyncio.wait_for(self.app.trader.account(), ACCOUNT_TIMEOUT_S)
+        except Exception as e:  # noqa: BLE001 (incl. TimeoutError)
+            log.warning("day P&L unreadable: %s: %s", type(e).__name__, e)
+            self.pnl_streak.fail(PNL_KEY)
+            n, since = self.pnl_streak.fails[PNL_KEY], self.pnl_streak.started(PNL_KEY)
+            await send_safe(self.n, "day_pnl_unverified", f"day P&L unreadable ({type(e).__name__}: {e}), {n} pass(es) "
+                            f"in a row since {since}: the daily-loss trip and give-back peak are NOT checked. Stops "
+                            f"are. REDUCING after {PNL_UNVERIFIED_PASSES} passes.", cooldown_s=1800)
+            if n >= PNL_UNVERIFIED_PASSES and not self.pnl_tripped:
+                self.pnl_tripped = await guarded("kill_switch", ks.trip(
+                    self.j, self.app.settings, REDUCING, "guardian", f"day P&L unverified: income unreadable for {n} "
+                    f"guardian passes since {since} ({type(e).__name__}): no new risk while losses can't be checked",
+                    {"passes": n, "since": since, "error": f"{type(e).__name__}: {e}"}, cause=PNL_UNVERIFIED),
+                    self.n) is not None
+            return None
+        r, tripped = self.pnl_streak.ok(PNL_KEY), self.pnl_tripped
+        self.pnl_tripped = False
+        if r:
+            await send_safe(self.n, "day_pnl_verified", f"day P&L readable again after {r[0]} failed passes "
+                            f"({r[1] / 60:.0f} min)" + (": the 'day P&L unverified' REDUCING stays until a human "
+                                                         "clears it" if tripped else ""), cooldown_s=0)
+        return acct
 
     async def _daily_loss_alert(self, day_pnl: float, tripped: dict | None) -> None:
         """Reminder while the day's loss is past the limit. It fires exactly when ks.trip_on_daily_loss returned (it

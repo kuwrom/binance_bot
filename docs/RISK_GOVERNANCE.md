@@ -17,6 +17,12 @@
 - **Volatility management:** use it to CUT risk only. Moreira & Muir 2017 found gains; Cederburg et al. 2020 found realistic out-of-sample versions usually earn lower Sharpe.
 
 ## Rules (defaults; the effective values are in `.env` / research params)
+- **Day and week P&L** have one definition, `Trader.account()` (`equity_marks.py`, task #16). Every rule here reads it: the open-short day check, the governor and its give-back peak, and the kill switch's daily-loss trip. Each measures the loss against start-of-day equity.
+  - P&L = equity now − the period's first equity mark − transfers since that mark. A loss carried over midnight in an open position is not today's, and deposits and withdrawals move nothing.
+  - An equity move the income history doesn't explain yet is `pending` for 2 min, and the income view is used meanwhile.
+  - A late or unreadable mark falls back to the old, worse definition: realized since the period start + all unrealized.
+  - One income read per `account()` call. If it fails, there is no figure, and nothing is tripped or armed on a guess. Opening paths (`open_short`, limit entries, amends, adds) refuse.
+  - In the guardian the pass still succeeds, because its stops were checked: the heartbeat stays fresh, so an income outage never becomes a stale-heartbeat HALTED. It alerts `day_pnl_unverified`.
 - **Daily cap** = equity × base% × f, with f = min(1, BTC vol_target/vol_now) × regime factor (favorable 1, caution 0.75, hostile or unknown 0.5), floored at 0.5. Hitting it means no new entries until 00:00 UTC. The research base is 1.5%; ours is `daily_loss_limit_pct`.
 - **Weekly cap:** 4%, then halt until Monday and review.
 - **Drawdown from peak:** ≥ 8% means 0.5× size; ≥ 12% means stop and review. `m_dd` in `risk_budget` also scales continuously.
@@ -54,8 +60,8 @@
   - HALTED: REDUCING + every resting limit entry is withdrawn. A pre-armed stop goes only with a limit confirmed unfilled. Protective stops on open positions are never cancelled: for a short book a generic cancel-all strips them.
   - Flatten-all is a command, not a state: HALTED, then every short market-closed reduce-only (`flatten_all` / `shortbot flatten`).
 - **Who:** anyone may trip it (`halt_trading`, `shortbot kill-switch HALTED --reason ...`, guardian auto-trips, the session watchdog). Only a human loosens it: `.venv/bin/shortbot-admin clear --reason ...` in a real terminal (it reads a code from /dev/tty and refuses under Claude Code). That is a speed bump plus a tripwire (every change is journalled and alerted), not a security boundary.
-- **Auto-trips** (sticky until a human clears, past 00:00 UTC too): daily loss past the effective `daily_loss_limit_pct` and drawdown past `dd_stop_pct` (research override if active, else `.env`), an untracked or long position. A stale guardian heartbeat trips HALTED from any session and lifts itself once the heartbeat is fresh again; withdrawn entries stay withdrawn.
-  - Daily loss uses the equity-mark day P&L (`equity_marks.py`): a loss carried over midnight in an open position is not today's loss. A late, degraded or timed-out mark falls back to the old, worse definition. Drawdown is from the transfer-adjusted peak.
+- **Auto-trips** (sticky until a human clears, past 00:00 UTC too): daily loss past the effective `daily_loss_limit_pct` and drawdown past `dd_stop_pct` (research override if active, else `.env`), an untracked or long position, and a day P&L unreadable for 3 guardian passes in a row (`day_pnl_unverified`: no new risk while losses can't be checked; resting entries stay; one trip per outage, so a clear made during it holds). A stale guardian heartbeat trips HALTED from any session and lifts itself once the heartbeat is fresh again; withdrawn entries stay withdrawn.
+  - Daily loss uses the day P&L from `Trader.account()` (Rules above), read once per guardian pass after the stop checks. Drawdown is from the transfer-adjusted peak.
 - **A clear sticks** (`killswitch_rearm.py`, task #63). Without it the loss trips re-fire on the loss just reviewed.
   - The clear shows and stores a hold: each loss condition at or over its limit, with a guardian reading at most 15 min old, is held at that reading.
   - A held condition trips again only once the loss is `--rearm-margin` points worse (default 1, max 5).

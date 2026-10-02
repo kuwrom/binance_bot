@@ -18,12 +18,14 @@ and trading_manage.py (close, move_stop, ensure_stop).
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, reconcile
+from . import clientid, equity_marks, reconcile
 from .exchange import Exchanges
 from .journal import Journal
 from .risk import AccountState
@@ -32,6 +34,7 @@ from .symlock import SymbolLocks, lock_dir_for
 from .trading_manage import ManageFlow
 from .trading_open import OpenFlow
 
+log = logging.getLogger("shortbot.trading")
 STOP_PARAMS = {"closePosition": True, "workingType": "MARK_PRICE"}
 DEAD = ("canceled", "expired", "rejected")   # final: an order found unfilled in one of these never fills
 Alert = Callable[[str, str, str | None, bool], Awaitable[Any]]
@@ -97,17 +100,42 @@ class Trader(OpenFlow, ManageFlow):
         return [p for p in rows if _f(p.get("contracts")) > 0]
 
     async def account(self, positions: list[dict] | None = None) -> dict:
+        """Balance, day/week P&L and the transfer-adjusted equity peak. day_pnl / week_pnl are THE definition every
+        consumer reads (risk.py's day check, the governor and its give-back peak, the guardian's daily-loss trip)."""
         await self.ex.trade_markets()
         bal = await self.t.fetch_balance()
         info = bal.get("info", {})
         pos = positions if positions is not None else await self._raw_positions()
         unreal = sum(_f(p.get("unrealizedPnl")) for p in pos)
-        day = await reconcile.day_pnl(self.t, unreal)
-        return {"mode": self.ex.settings.mode,
-                "equity": round(_f(info.get("totalMarginBalance"), _f(bal.get("total", {}).get("USDT"))), 2),
-                "wallet": round(_f(info.get("totalWalletBalance")), 2),
-                "available": round(_f(info.get("availableBalance")), 2), **day,
+        equity = round(_f(info.get("totalMarginBalance"), _f(bal.get("total", {}).get("USDT"))), 2)
+        return {"mode": self.ex.settings.mode, "equity": equity, "wallet": round(_f(info.get("totalWalletBalance")), 2),
+                "available": round(_f(info.get("availableBalance")), 2), **await self._period_pnl(equity, unreal),
                 "limits": self.ex.limits.__dict__, "experiment": self.ex.experiment}
+
+    async def _period_pnl(self, equity: float, unreal: float) -> dict:
+        """ONE income read (since the week start, or the peak's transfer cursor if older), then (equity_marks.py):
+        day/week P&L = equity now - the period's mark - transfers since it, so a loss carried over midnight in an open
+        position isn't today's and transfers move nothing; an equity move income doesn't explain yet is `pending`
+        (income view used); a late or unreadable mark keeps the old definition (old_*_pnl: realized since the period
+        start + all unrealized), whichever is worse. Raises only if income can't be read: no figure is better than a
+        guess (the guardian's pass fails after its stop checks)."""
+        now = datetime.now(timezone.utc)
+        now_ms, starts = int(now.timestamp() * 1000), equity_marks.period_starts(now)
+        cursor = int(self.j.get(self.j.mode_key(equity_marks.KV_CURSOR)) or now_ms)
+        rows = await reconcile.income_since(self.t, min(starts["week"][1], cursor))
+        real = {k: reconcile.summarize_income([r for r in rows if int(r.get("time") or 0) >= s])["net"]
+                for k, (_, s) in starts.items()}
+        old_day, old_week = round(real["day"] + unreal, 4), round(real["week"] + unreal, 4)
+        per = equity_marks.period_pnl(self.j, equity, rows, old_day, old_week, now, unreal)   # never raises
+        try:
+            peak = equity_marks.adjusted_peak(self.j, equity, rows, now_ms)
+        except Exception:  # noqa: BLE001 - kv locked: the stored peak; the cursor stays, so no transfer is lost
+            log.warning("equity peak not updated (kv)", exc_info=True)
+            peak = max(_f(self.j.get(self.j.mode_key(equity_marks.KV_PEAK))), equity)
+        return {"realized_today": round(real["day"], 4), "unrealized": round(unreal, 4),
+                "day_pnl": per["day_pnl"], "week_pnl": per["week_pnl"], "old_day_pnl": old_day,
+                "old_week_pnl": old_week, "late": per["late"], "pending": per.get("pending", {}),
+                "degraded": per["degraded"], "equity_peak": round(peak, 2)}
 
     async def account_state(self) -> AccountState:
         pos = await self._raw_positions()

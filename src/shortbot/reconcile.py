@@ -8,7 +8,7 @@
   shorted again since; without its exit fill it is never closed. Rows stuck in 'opening' are recovered or aborted.
   An empty positions answer while trades are open proves nothing (a glitch looks the same): no 'opening' row is
   aborted on it, only a trade's own exit fill closes it, and a trade whose history shows it still open alerts.
-- day_pnl(): realized income since 00:00 UTC + current unrealized PnL (deposits/transfers don't count).
+Day / week P&L: Trader.account() (equity_marks.py).
 """
 
 from __future__ import annotations
@@ -34,11 +34,6 @@ def iso_to_ms(iso: str) -> int:
 
 def ms_to_iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
-
-
-def utc_midnight_ms() -> int:
-    now = datetime.now(timezone.utc)
-    return int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
 
 async def income_since(t, start_ms: int, symbol: str | None = None) -> list[dict[str, Any]]:
@@ -181,9 +176,3 @@ async def _empty_answer(trader, rows: list[dict[str, Any]]) -> None:
                            + ", ".join(f"#{r['id']} {r['symbol']}" for r in rows) + " still open: nothing closed or "
                            "aborted on that answer, and the guardian sees no position to check. Check Binance now.",
                            None, True)
-
-
-async def day_pnl(t, unrealized_total: float) -> dict[str, float]:
-    inc = summarize_income(await income_since(t, utc_midnight_ms()))
-    return {"realized_today": round(inc["net"], 4), "unrealized": round(unrealized_total, 4),
-            "day_pnl": round(inc["net"] + unrealized_total, 4)}

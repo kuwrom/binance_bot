@@ -23,9 +23,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from . import equity_marks, reconcile
 from .book import book_guard, diversity_mult, measured_corr, n_eff, pending_book, slot_cap
 from .config import RiskLimits
 from .entry_intents import external_orders
@@ -169,11 +168,6 @@ def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> floa
     return peak
 
 
-def week_start_ms(now: datetime) -> int:
-    monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    return int(monday.timestamp() * 1000)
-
-
 def quarter_start(now: datetime) -> str:
     return now.replace(month=3 * ((now.month - 1) // 3) + 1, day=1, hour=0, minute=0, second=0,
                        microsecond=0).isoformat()
@@ -210,15 +204,9 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     for e in external_orders(trader.j):   # resting orders the desk didn't place: no known stop, the same worst case
         risks[e["symbol"]] = risks.get(e["symbol"], 0.0) + (
             e["amount"] * e["limit_price"] * lim.max_stop_distance_pct / 100)
-    try:
-        wk = reconcile.summarize_income(await reconcile.income_since(trader.t, week_start_ms(now)))["net"]
-    except Exception:  # noqa: BLE001 - fall back to today only; the daily cap still binds
-        wk = acct.get("realized_today", 0.0)
     rows = trader.j.closed_results()
-    # day/week P&L from equity marks net of transfers, peak moved by transfers (#16, equity_marks.py)
-    per = await equity_marks.gather(trader.t, trader.j, eq, acct["day_pnl"], wk + acct.get("unrealized", 0.0),
-                                   acct.get("unrealized"))
-    peak, day_pnl, week_pnl = per["peak"], per["day_pnl"], per["week_pnl"]
+    # day/week P&L and the transfer-adjusted peak exactly as account() reports them to every other consumer (#16)
+    peak, day_pnl, week_pnl = acct["equity_peak"], acct["day_pnl"], acct["week_pnl"]
     gin = GovInputs(eq, peak, day_pnl, track_day_peak(trader.j, day_pnl, now), week_pnl,
                     [(r["closed_at"], r["pnl"]) for r in rows], regime, vnow, tgt, now)
     s_rows = [r for r in rows if setup and r["setup"] == setup and r["r_multiple"] is not None]
