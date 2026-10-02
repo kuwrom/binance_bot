@@ -111,6 +111,14 @@ class Store:
         self.db.commit()
         return n
 
+    def derive_five(self, kind: str, symbols: list[str] | None = None) -> int:
+        """`<kind>5`: 5m bars from the 1m ones (label and delay windows read 5x fewer rows)."""
+        syms = symbols or [r[0] for r in self.db.execute("SELECT DISTINCT symbol FROM bars WHERE kind=?", (kind,))]
+        n = sum(self.put_bars(f"{kind}5", s, RB.group(self.fine(kind, s, 0, 2 ** 62), 5 * RB.MIN)) for s in syms)
+        self.db.commit()
+        self.set("derived", sorted({*(self.get("derived") or []), f"{kind}5"}))
+        return n
+
     # ------------------------------------------------------------ reads
     def fine(self, kind: str, symbol: str, a: int, b: int) -> list[tuple]:
         return self.db.execute(f"SELECT {COLS} FROM bars WHERE kind=? AND symbol=? AND ts>=? AND ts<? ORDER BY ts",

@@ -42,6 +42,8 @@ class ReplayExchange:
         self.universe, self.lead_ms, self.oi_lag_ms = universe, int(delist_lead_days * DAY), oi_lag_ms
         self.public = _Public(self)
         self.trade = None
+        self.steps = {"perp": MIN, "mark": MIN, "prem": MIN, "spot": MIN, **(store.get("steps") or {})}
+        self.derived = set(store.get("derived") or [])
         self._t: int | None = None
         self._cache: dict[tuple, Any] = {}
 
@@ -102,7 +104,8 @@ class ReplayExchange:
 
     # ------------------------------------------------------------ bars (bounded by the clock in SQL)
     def fine(self, kind: str, raw: str) -> list[tuple]:
-        return self._memo(("fine", kind, raw), lambda t: self.store.fine(kind, raw, t - FINE_LOOKBACK, t - MIN + 1))
+        step = self.steps.get(kind, MIN)
+        return self._memo(("fine", kind, raw), lambda t: self.store.fine(kind, raw, t - FINE_LOOKBACK, t - step + 1))
 
     def _hours(self, kind: str, raw: str) -> list[tuple]:
         return self._memo(("hours", kind, raw), lambda t: self.store.hourly(kind, raw, t - HOURS_LOOKBACK, t - HOUR + 1))
@@ -111,12 +114,24 @@ class ReplayExchange:
         return self._memo(("days", raw), lambda t: self.store.daily(raw, t - DAYS_LOOKBACK, t - DAY + 1))
 
     def klines(self, kind: str, raw: str, tf: str, limit: int) -> list[tuple]:
-        step, t = RB.tf_ms(tf), self.now()
+        step, t, fs = RB.tf_ms(tf), self.now(), self.steps.get(kind, MIN)
+        if step < fs:
+            raise ReplayUnavailable(f"{kind} {tf}: the cache holds {fs // MIN}m bars")
         if step == DAY and kind == "perp":
             return RB.klines(self.fine(kind, raw), tf, t, limit, self._days(raw), DAY)
         if step >= HOUR and kind == "perp":
             return RB.klines(self.fine(kind, raw), tf, t, limit, self._hours(kind, raw), HOUR)
-        return RB.klines(self.fine(kind, raw), tf, t, limit)
+        return RB.klines(self.fine(kind, raw), tf, t, limit, fine_step=fs)
+
+    def klines_since(self, kind: str, raw: str, tf: str, since: int, limit: int) -> list[tuple]:
+        """REST klines with startTime: up to `limit` bars from `since` on, none opening after now (labels)."""
+        step, t = RB.tf_ms(tf), self.now()
+        src, fs = (f"{kind}5", 5 * MIN) if step >= 5 * MIN and f"{kind}5" in self.derived else (
+            kind, self.steps.get(kind, MIN))
+        if step < fs:
+            raise ReplayUnavailable(f"{kind} {tf}: the cache holds {fs // MIN}m bars")
+        rows = self.store.fine(src, raw, since, min(since + limit * step, t - fs + 1))
+        return RB.group([b for b in rows if b[RB.TS] + fs <= t], step)[:limit]
 
     async def flow_klines(self, symbol: str, interval: str = "5m", limit: int = 288) -> list[list[float]]:
         return [[b[0], b[1], b[2], b[3], b[4], b[5], b[8]] for b in self.klines("perp", to_raw(symbol), interval, limit)]
@@ -160,7 +175,8 @@ class ReplayExchange:
         if not s:
             return {}
         iv = RB.funding_interval_h([x[0] for x in s])
-        est = RB.predicted_funding(self.store.fine("prem", raw, s[-1][0], t - MIN + 1), t, s[-1][0], iv)
+        ps = self.steps.get("prem", MIN)
+        est = RB.predicted_funding(self.store.fine("prem", raw, s[-1][0], t - ps + 1), t, s[-1][0], iv, fine_step=ps)
         mark = self.store.last_close("mark", raw, t) or self.store.last_close("perp", raw, t)
         return {"symbol": to_symbol(raw), "fundingRate": est if est is not None else s[-1][1], "interval_h": iv,
                 "fundingTimestamp": s[-1][0] + iv * HOUR, "markPrice": mark,
@@ -208,7 +224,10 @@ class _Public:
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", since: int | None = None, limit: int | None = None,
                           params: dict | None = None) -> list[list[float]]:
         kind = "mark" if (params or {}).get("price") == "mark" else "perp"
-        bars = self.x.klines(kind, to_raw(symbol), timeframe, limit or 500)
+        if since is not None:
+            bars = self.x.klines_since(kind, to_raw(symbol), timeframe, int(since), limit or 500)
+        else:
+            bars = self.x.klines(kind, to_raw(symbol), timeframe, limit or 500)
         return [[b[0], b[1], b[2], b[3], b[4], 0.0 if kind == "mark" else b[5]] for b in bars]
 
     async def fetch_funding_rates(self, symbols: list[str] | None = None, params: dict | None = None) -> dict:

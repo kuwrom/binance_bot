@@ -148,3 +148,43 @@ def test_the_look_ahead_probe_is_sensitive(store, tmp_path):
     F.poison_after(store, F.T - 2 * HOUR)
     early = _scan(store, tmp_path / "b.db")[1]
     assert [r["features"] for r in early] != [r["features"] for r in clean]
+
+
+def _to_five(store, kind):
+    for (sym,) in store.db.execute("SELECT DISTINCT symbol FROM bars WHERE kind=?", (kind,)).fetchall():
+        five = RB.group(store.fine(kind, sym, 0, 2 ** 62), 5 * MIN)
+        store.db.execute("DELETE FROM bars WHERE kind=? AND symbol=?", (kind, sym))
+        store.put_bars(kind, sym, five)
+    steps = {**(store.get("steps") or {}), kind: 5 * MIN}
+    store.set("steps", steps)
+
+
+def test_five_minute_auxiliary_series(store):
+    full = ReplayExchange(store)
+    want_prem = run(full.premium_klines("AAA/USDT:USDT", "1h", 7))
+    want_mark5 = run(full.public.fetch_ohlcv("AAA/USDT:USDT", "5m", limit=12, params={"price": "mark"}))
+    for kind in ("mark", "prem", "spot"):
+        _to_five(store, kind)
+    rex = ReplayExchange(store)
+    t5 = F.T // (5 * MIN) * (5 * MIN)                     # stage 2 scans on the 5-minute grid
+    assert run(rex.premium_klines("AAA/USDT:USDT", "1h", 7), t5)[:-1] == run(full.premium_klines(
+        "AAA/USDT:USDT", "1h", 7), t5)[:-1]
+    assert len(run(rex.public.fetch_ohlcv("AAA/USDT:USDT", "5m", limit=12, params={"price": "mark"}), t5)) == 12
+    with pytest.raises(ReplayUnavailable):
+        run(rex.public.fetch_ohlcv("AAA/USDT:USDT", "1m", limit=60, params={"price": "mark"}))
+    assert run(rex.spot_flow_klines("AAAUSDT", "1h", 7), t5)[-2] == run(full.spot_flow_klines("AAAUSDT", "1h", 7),
+                                                                       t5)[-2]
+    assert want_prem and want_mark5
+
+
+def test_klines_since_like_rest(store):
+    rex = ReplayExchange(store)
+    since = F.T0 + DAY + 7 * MIN
+    start = -(-since // (5 * MIN)) * (5 * MIN)
+    got = run(rex.public.fetch_ohlcv("AAA/USDT:USDT", "5m", since=start, limit=36), F.T0 + 3 * DAY - 1)
+    full = RB.group(store.fine("perp", "AAAUSDT", start, start + 36 * 5 * MIN), 5 * MIN)
+    assert [g[:6] for g in got] == [[b[0], b[1], b[2], b[3], b[4], b[5]] for b in full]
+    near_now = run(rex.public.fetch_ohlcv("AAA/USDT:USDT", "5m", since=F.T - 20 * MIN, limit=36))
+    assert all(b[0] + 5 * MIN <= F.T for b in near_now[:-1]) and near_now[-1][0] <= F.T   # never past the clock
+    store.derive_five("perp")
+    assert run(rex.public.fetch_ohlcv("AAA/USDT:USDT", "5m", since=start, limit=36), F.T0 + 3 * DAY - 1) == got
