@@ -18,9 +18,10 @@ from typing import Any
 
 from . import research_stats as rs
 from .exchange import Exchanges
-from .journal_research import LABEL_VERSION
+from .journal_research import LABEL_MAX_TRIES, LABEL_VERSION
 
 HOUR_MS = 3_600_000
+RETRY_H = 2             # a failed label fetch is retried after 2h, 4h, 8h, 16h (~30h in all), then given up
 NUMERIC_SKIP = {"funding_interval_h"}
 HORIZON_H = 24          # outcome horizon of short_ret_24h / max_adverse_24h: the episode window
 BAR_MS = 300_000        # label bars: 5m, the first one opening at/after the scan (weight 5 per 864-bar request)
@@ -45,20 +46,41 @@ def outcome_from_candles(p0: float, candles: list[list[float]], bars_per_hour: i
     }
 
 
+async def _outcome(ex: Exchanges, r: dict[str, Any], held: bool) -> dict[str, float | None]:
+    """The row's outcome by the current method. Raises when there is nothing to write: no bars, no scan price, or
+    (for a row holding an older label) no 24h close, so a label is never traded for NULLs."""
+    start = -(-r["ts_ms"] // BAR_MS) * BAR_MS                  # first 5m bar opening at/after the scan
+    candles = await ex.public.fetch_ohlcv(r["symbol"], "5m", since=start, limit=72 * BARS_PER_H)
+    if not candles or not r["price"]:
+        raise LookupError("no bars" if not candles else "no scan price")
+    outcome = outcome_from_candles(r["price"], candles, BARS_PER_H)
+    if held and outcome["short_ret_24h"] is None:
+        raise LookupError(f"no 24h close ({len(candles)} bars)")
+    return outcome
+
+
 async def label_outcomes(ex: Exchanges, journal, now_ms: int, limit: int = 120) -> int:
     """Label candidates at least 72h old (all horizons at once), and relabel ones labelled by an older method.
-    120 per hourly run keeps ahead of ~50 logged rows an hour. Returns how many were labelled."""
-    rows = journal.unlabelled_candidates(older_than_ms=now_ms - 73 * HOUR_MS, limit=limit, version=LABEL_VERSION)
+    A failed fetch (delisted symbol, 429, timeout, no bars) writes nothing: retried after RETRY_H, doubling. After
+    LABEL_MAX_TRIES failures an older label is kept as it is (label_v unchanged) and a never-labelled row is labelled
+    empty; either way it leaves the queue. 120 per hourly run keeps ahead of ~50 logged rows an hour.
+    Returns how many labels were written."""
+    rows = journal.unlabelled_candidates(older_than_ms=now_ms - 73 * HOUR_MS, limit=limit, version=LABEL_VERSION,
+                                         now_ms=now_ms)
     n = 0
     for r in rows:
+        held = r["short_ret_24h"] is not None                   # an older method's label, in the reports today
         try:
-            start = -(-r["ts_ms"] // BAR_MS) * BAR_MS          # first 5m bar opening at/after the scan
-            candles = await ex.public.fetch_ohlcv(r["symbol"], "5m", since=start, limit=72 * BARS_PER_H)
-            outcome = outcome_from_candles(r["price"], candles, BARS_PER_H) if candles and r["price"] else {}
-        except Exception:  # noqa: BLE001 - delisted/renamed symbols: label empty so we don't retry forever
-            outcome = {}
-        journal.label_candidate(r["id"], outcome, LABEL_VERSION)
-        n += 1
+            outcome, error = await _outcome(ex, r, held), None
+        except Exception as e:  # noqa: BLE001 - recorded on the row, retried
+            outcome, error = {}, f"{type(e).__name__}: {e}"
+        tries = (r["label_tries"] or 0) + 1
+        if error is None or (tries >= LABEL_MAX_TRIES and not held):
+            journal.label_candidate(r["id"], outcome, LABEL_VERSION)
+            n += 1
+        if error is not None:
+            retry = None if tries >= LABEL_MAX_TRIES else now_ms + RETRY_H * HOUR_MS * 2 ** (tries - 1)
+            journal.label_failed(r["id"], error, tries, retry)
     return n
 
 
@@ -140,6 +162,18 @@ def _rows_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "hit_rate_pct": round(sum(x > 0 for x in r24) / len(r24) * 100, 1),
             "squeeze_rate_pct": round(sum(a > SQUEEZE_PCT for a in adv) / len(adv) * 100, 1) if adv else None,
             "note": "row-based (every rescan counted): overstates n; compare, don't cite"}
+
+
+def label_mix(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Which label method the reported rows carry, so a half-relabelled dataset is visible."""
+    legacy = [r for r in rows if r.get("label_v") is None]
+    out = {"legacy_labels": len(legacy), f"v{LABEL_VERSION}_labels": sum(r.get("label_v") == LABEL_VERSION
+                                                                           for r in rows),
+           "legacy_kept": sum((r.get("label_tries") or 0) >= LABEL_MAX_TRIES for r in legacy)}
+    if legacy and len(legacy) < len(rows):
+        out["label_note"] = (f"mixed: legacy = 1h bars from the scan's floored hour, v{LABEL_VERSION} = 5m bars from "
+                             f"the scan; legacy_kept = relabel gave up after {LABEL_MAX_TRIES} failed fetches")
+    return out
 
 
 def veto_key(v: str) -> str:
@@ -236,7 +270,7 @@ def report(journal, min_n: int = 5) -> dict[str, Any]:
     return {
         "labelled_candidates": len(rows), "basis": BASIS,
         "sample": {"rows": len(rows), "episodes": allx["n"], "days": allx["days"], "n_eff": allx["n_eff"],
-                   "legacy_labels": sum(r.get("label_v") is None for r in rows),
+                   **label_mix(rows),
                    "episode_rule": f"a symbol's first appearance plus its rescans within {HORIZON_H}h (overlapping "
                                    "outcome windows) = one observation"},
         "baseline": {"kind": "same_scan_median", "field": "short_ret_24h", "min_symbols": rs.MIN_SCAN_SYMBOLS,

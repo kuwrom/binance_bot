@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     id INTEGER PRIMARY KEY, ts TEXT NOT NULL, ts_ms INTEGER NOT NULL, symbol TEXT NOT NULL, price REAL,
     score INTEGER, tradable INTEGER, setups TEXT, vetoes TEXT, signals TEXT, features TEXT, regime TEXT,
     short_ret_4h REAL, short_ret_24h REAL, short_ret_72h REAL, max_adverse_24h REAL, max_favorable_24h REAL,
-    labelled_at TEXT, label_v INTEGER
+    labelled_at TEXT, label_v INTEGER, label_tries INTEGER, label_error TEXT, label_retry_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cand_unlabelled ON candidates (labelled_at, ts_ms);
 CREATE TABLE IF NOT EXISTS predictions (
@@ -35,8 +35,13 @@ CREATE TABLE IF NOT EXISTS learnings (
 # Label method of a candidate's outcome. NULL = legacy (1h candles from the scan's floored hour, so the first bar
 # included price action from before the scan); 2 = 5m bars opening at/after the scan time. Older versions are
 # re-queued by unlabelled_candidates, so the whole dataset converges on one method.
+# A failed fetch never overwrites a label (#62): label_tries counts failures since the last label written,
+# label_retry_ms is the backoff, and a row with LABEL_MAX_TRIES failures leaves the queue (a legacy label stays as it
+# is). Bumping LABEL_VERSION: reset label_tries too, or rows that gave up are never relabelled.
 LABEL_VERSION = 2
-CANDIDATE_COLUMNS = {"label_v": "INTEGER"}
+LABEL_MAX_TRIES = 5
+CANDIDATE_COLUMNS = {"label_v": "INTEGER", "label_tries": "INTEGER", "label_error": "TEXT",
+                     "label_retry_ms": "INTEGER"}
 LEARNING_STATUS = ("hypothesis", "supported", "rejected", "adopted")
 CONFIDENCE = ("low", "medium", "high")
 
@@ -61,16 +66,27 @@ class ResearchStore:
         self.db.commit()
         return len(rows)
 
-    def unlabelled_candidates(self, older_than_ms: int, limit: int = 50,
-                              version: int = LABEL_VERSION) -> list[dict[str, Any]]:
-        """Candidates due a label: never labelled, or labelled by an older method (relabelled oldest first)."""
-        return self._rows("SELECT id, symbol, ts_ms, price FROM candidates WHERE ts_ms < ? AND (labelled_at IS NULL"
-                          " OR label_v IS NULL OR label_v < ?) ORDER BY ts_ms LIMIT ?", (older_than_ms, version, limit))
+    def unlabelled_candidates(self, older_than_ms: int, limit: int = 50, version: int = LABEL_VERSION,
+                              now_ms: int | None = None) -> list[dict[str, Any]]:
+        """Candidates due a label: never labelled, or labelled by an older method (relabelled oldest first).
+        Rows that failed LABEL_MAX_TRIES times are out; with now_ms, so are rows still backing off."""
+        backoff = " AND COALESCE(label_retry_ms, 0) <= ?" if now_ms is not None else ""
+        return self._rows("SELECT id, symbol, ts_ms, price, short_ret_24h, label_tries FROM candidates WHERE ts_ms < ?"
+                          " AND (labelled_at IS NULL OR label_v IS NULL OR label_v < ?) AND COALESCE(label_tries, 0) < ?"
+                          f"{backoff} ORDER BY ts_ms LIMIT ?",
+                          (older_than_ms, version, LABEL_MAX_TRIES, *([now_ms] if backoff else []), limit))
 
     def label_candidate(self, cid: int, outcome: dict[str, float | None], version: int = LABEL_VERSION) -> None:
         cols = ("short_ret_4h", "short_ret_24h", "short_ret_72h", "max_adverse_24h", "max_favorable_24h")
         self.db.execute(f"UPDATE candidates SET {', '.join(c + '=?' for c in cols)}, labelled_at=datetime('now'),"
-                        " label_v=? WHERE id=?", (*(outcome.get(c) for c in cols), version, cid))
+                        " label_v=?, label_tries=NULL, label_error=NULL, label_retry_ms=NULL WHERE id=?",
+                        (*(outcome.get(c) for c in cols), version, cid))
+        self.db.commit()
+
+    def label_failed(self, cid: int, error: str, tries: int, retry_ms: int | None) -> None:
+        """A label fetch failed: the row keeps its outcome and label_v; retried from retry_ms (None: gave up)."""
+        self.db.execute("UPDATE candidates SET label_tries=?, label_error=?, label_retry_ms=? WHERE id=?",
+                        (tries, error[:200], retry_ms, cid))
         self.db.commit()
 
     def candidates(self, labelled_only: bool = False, limit: int = 5000) -> list[dict[str, Any]]:
