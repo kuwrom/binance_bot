@@ -128,6 +128,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - data needed: OI hist, funding, depth, !forceOrder@arr: Binance public
 - evidence: HLP +$40-41.5m (~+10%) on the 10-11 Oct 2025 weekend and +$15m on 31-Jan-2026; the two events ~41% of its $136.9m lifetime profit (https://www.coingecko.com/learn/hyperliquid-hlp-vault-analysis); 10-Oct prints ATOM ~$0.001, TON -80%, WLD -70% (https://coinshares.com/us/insights/knowledge/billions-in-liquidations-what-happened/)
 - grade: Practitioner-data
+- result: own test 2026-10-02 (`backtest/rungs.py`, docs/PROPOSALS.md P1a): carving rungs out of automatic targets LOSES in all three samples (hourly −0.005 to −0.010R, t to −2.4; random −0.018 to −0.026R; daily 2020-26 to −0.011R). Rungs added to a runner WIN slightly: 6/12/20% at 50% size +0.005R (t 3.9) hourly, +0.004R daily. Keep rungs for the part of a position with no automatic target
 - risks: rarely fills; the venue may bust trades; outages block cancels; must not race the guardian's own exits
 - fit: High — reduce-only ladders on shorts are nearly free and monetise exactly the 10-Oct wicks; the long version needs a long book
 

@@ -1,6 +1,6 @@
-# Proposals awaiting an owner's decision (2026-10-02)
+# Proposals with their evidence (2026-10-02)
 
-These are designs, not code. Each section says who decides. Evidence lives in [INDUSTRY.md](INDUSTRY.md) §5 and the library cards.
+These are designs, not code. P1a and P2 now carry research-derived answers, not open questions. Evidence lives in [INDUSTRY.md](INDUSTRY.md) §5 and the library cards.
 
 ## P1. Exit and venue hygiene for open shorts (task #14)
 **Who decides:** binance-bot-99, who owns guardian / entries / trading. The human signs off on the defaults.
@@ -18,28 +18,40 @@ These are designs, not code. Each section says who decides. Evidence lives in [I
 - The only orders resting on the exchange are the entry SELL limit, a reduce-only STOP_MARKET pre-arm, one closePosition STOP_MARKET and temporary bridge stops.
 - There is no ADL monitoring, no check of the margin asset or multi-asset mode, and no margin-ratio or liquidation-distance check once a position is open. The liquidation checks run only at entry: risk.py:37-47 and trading_open.py:171-173, the latter a warning only.
 
-### P1a. Deep reduce-only take-profit rungs ("wick harvest")
-For every open short, rest 3 GTC reduce-only BUY limits below the deepest plan target:
+### P1a. Resting reduce-only take-profit orders: research result (2026-10-02, `backtest/rungs.py`)
+**Method:** a pre-registered grid of 3 depth sets × 3 sizes, tested on three samples, with the uplift paired per signal and a day-clustered t:
+- all 34,800 signals of the 60-day hourly ledger;
+- 2,465 random-entry shorts, as a control;
+- 5,281 daily top-gainer fades from 2020 to 2026, which include October 2025.
 
-| rung | price | size (of the position at placement) |
-|---|---|---|
-| R1 | deepest target or entry, whichever is lower, × (1 − 6%) | 15% |
-| R2 | … × (1 − 12%) | 15% |
-| R3 | … × (1 − 20%) | 20% |
+**Baselines:**
+- **"targets":** the plan's targets execute.
+- **"runner":** targets only alert, as in live plans with `auto.targets` off.
 
-**How they interact with the rest of the system:**
-- **Plan logic:** fills reduce `cur`, and `plan_actions` already counts fractions against the original size, so a rung fill naturally counts toward later targets.
-- **Re-placement:**
-  - Rungs never sit above a plan target and never exceed the remaining size.
-  - After any partial close the guardian cancels and re-places them (one batch call: `POST /fapi/v1/batchOrders`, 5 orders max, weight 5).
-- **Kill switch:** rungs are risk-reducing, so they stay in REDUCING and HALTED. A generic cancel-all must skip them, like the protective stop.
-- **Flat position:** cancel all rungs when the position reads flat. **Verify on demo** whether Binance cancels reduce-only orders itself when a position closes. The design must not rely on that, because a rung that survives a flat position and then fills would open a LONG.
-- **Fakes first** (tests/fakes.py / fake_engine.py, per the CLAUDE.md rule):
-  - fill resting BUY limits on the way DOWN;
-  - model reduce-only rejection when no position exists;
-  - cancel rungs on flat.
-- **Measure:** rung fills and the R they add, per trade (`rung_fills` in the trade's entry features).
-- **Defaults** (human): sizes 15/15/20% and depths 6/12/20%. They are cheap to change. A deeper or larger last rung raises the payoff in a cascade but gives up more if price bounces before reaching it.
+| variant (50% of size) | hourly strategies: uplift R (t) | random control | daily fades 2020-26 |
+|---|---|---|---|
+| rungs carved out of the targets, 4/8/12% | −0.005 (−1.9) | −0.018 (−3.4) | −0.011 (−3.2) |
+| rungs carved out of the targets, 6/12/20% | −0.008 (−2.2) | −0.022 (−3.2) | −0.004 (−3.1) |
+| rungs carved out of the targets, 10/20/30% | −0.010 (−2.4) | −0.026 (−3.5) | −0.000 (−0.7) |
+| rungs added to a runner, 4/8/12% | +0.008 (3.6) | +0.010 (2.9) | −0.003 (−0.2) |
+| rungs added to a runner, 6/12/20% | +0.005 (3.9) | +0.006 (2.9) | +0.004 (0.7) |
+| rungs added to a runner, 10/20/30% | +0.003 (2.2) | +0.002 (1.6) | +0.008 (1.7) |
+
+Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill on 19% of hourly trades and 75% of daily fades.
+
+**Evidence-based rule:**
+1. **Never carve rungs out of automatic targets.** It lost R in every sample, because the carved slice gives up a target fill and often never reaches the deeper rung.
+2. **Rest rungs only on the part of a position with no automatic target:** the runner after the last target, or plans whose targets only alert. Use 6/12/20% below entry (positive in all three samples; 4/8/12% failed on the daily data) at up to 70% of that remainder.
+   - The expected gain is small, about +0.005-0.01R per trade. It is a free option on wicks, not an edge.
+3. **The bigger gap is execution, not depth.** The backtest credits targets as resting limits that fill on any last-price touch. Live, the guardian closes targets at market when its 60-second mark-price check sees them, and mark price smooths out last-price wicks.
+   - Rule: make automatic targets resting reduce-only limit orders at the target prices. This is the execution the backtest already assumes, and it adds no carve cost.
+   - **To measure:** per-target fill prices are not journalled today (`targets_hit` stores target prices only). Record them, and run the demo probe below.
+
+**Still unverified** (both on binance-bot-99's demo-probe list):
+- whether Binance cancels reduce-only orders itself when the position goes flat (cancel-on-flat stays mandatory either way);
+- the ADL endpoint format.
+
+**Fakes first:** `fake_engine` never fills BUY limits on the way down, and refuses TAKE_PROFIT below price.
 
 ### P1b. ADL watch
 - Poll the position ADL quantile (`GET /fapi/v1/adlQuantile`, USER_DATA) every 5 min while a position is open. Poll every 60 s while BTC has moved > 3% in 1h or the liquidation stream bursts.
@@ -54,26 +66,70 @@ For every open short, rest 3 GTC reduce-only BUY limits below the deepest plan t
 - **Position:** marginMode must be `isolated`. `_prepare` sets it at entry; re-check it in the resync pass and alert on a mismatch.
 - **Margin buffer:** for each isolated short, keep isolated margin ≥ 2× maintenance margin, and keep the liquidation price ≥ `liq_buffer_pct` beyond the stop. On a breach, alert `margin_thin` with "add margin or reduce". This reuses `liquidationPrice` from positions(). There is no new endpoint unless the maintenance margin rate is needed (leverage brackets).
 
-## P2. Per-setup drawdown ladder, "pods" (task #21)
-**Who decides:** the human, on the thresholds and on whether the stop needs a human clear. It would be implemented with binance-bot-15, who owns risk_budget.py / allocator.py.
+## P2. Per-setup drawdown ladder ("pods"): research result (task #21, 2026-10-02)
+**Sources:**
+- Literature: scratchpad r7 → summarised here. [V] means read from the source this session.
+- Own numbers: `backtest/drawdown.py` on the selected trades of the 60-day ledger, per-trade R block-bootstrapped with its fat tails and serial correlation.
 
-**Why:**
-- Pod shops kill bad streams early and mechanically. Millennium halves a team's capital at −5% and closes it at −7.5%. Even so it lost ~$900m on crowded index-rebalance bets in Feb-2025.
-- Our governor caps the ACCOUNT (daily, weekly and drawdown caps, streaks), but nothing caps a single setup that keeps losing while the others carry it.
+**What the data says about our trade R:**
+- Volatility is σ = 0.63-1.08R per trade.
+- Lag-1 autocorrelation is positive, 0.11 to 0.30: losing streaks cluster.
+- Kaminski & Lo [V]: stop rules lower expected return under a random walk, but add value when outcomes persist. Our autocorrelation meets that condition, so a de-risking ladder is justified.
 
-**Proposal:**
-- **Ledger:** each setup's closed trades in R (net of fees and funding), chronological. Track the running peak of cumulative R and the drawdown from it, with `exp_*` experiments as their own setups.
-- **Ladder:**
-  - **DD ≥ 5R:** that setup trades at 0.5× size. The guardian or governor applies this, and every proposal shows it.
-  - **DD ≥ 8R:** no new entries for that setup until a review. The review is a `research-review` session that writes a learning and clears with a reason (journalled, like kill-switch clears).
-  - **Recovery:** full size again once DD ≤ 2.5R (hysteresis), or after a review resets the peak.
-- **Gross vs net:** add `avg_r_gross` (before fees, slippage and funding) next to `avg_r` in `journal.stats.by_setup`. If gross is positive and net negative, the problem is costs, not the trigger.
-- **Mechanism retirement:** a setup whose venue mechanism disappears is retired on the day, not after a drawdown. Examples: Binance changes the delisting process, or the funding cap.
-- **Questions for the human:**
-  1. Are 5R / 8R right, given ~1% risk per trade? That is ~5% / 8% of equity lost by one setup.
-  2. Should the 8R stop require a human clear, like the kill switch, or can a research-review session clear it?
-  3. All-time peak, or a rolling 90-day peak?
-  4. Do experiments count toward their parent setup, or stand alone?
+**Minimum edge to protect: μ = +0.10R per trade.** That is a per-trade Sharpe of about 0.13, or about 1.0 a year at about 50 trades per setup, matching the desk's net Sharpe target of 0.5-1.0.
+
+**Q1, thresholds.** A threshold at quantile q of the worst drawdown over the next 100 trades, for a setup that truly earns +0.10R, wrongly hits that setup with probability 1 − q.
+
+| setup (σ, lag-1) | 80% quantile = halve | 95% = stop | 250-trade 95% |
+|---|---|---|---|
+| pump_fade (0.74, 0.11) | 8.6R | 12.3R | 16.0R |
+| post_pump_decay (0.63, 0.17) | 7.7R | 10.8R | 14.2R |
+| funding_hi (0.74, 0.09) | 8.2R | 11.5R | 15.4R |
+| bounce_fade (1.08, 0.03) | 11.1R | 15.7R | 20.8R |
+| level_fade (0.81, 0.24) | 11.3R | 16.2R | 22.3R |
+
+**Rule:**
+- **Halve** at about 12σ and **stop** at about 17σ of the setup's own per-trade R (around 9R / 12.5R at σ 0.75). Recompute from the journal once a setup has 50 or more trades.
+- **The proposed 5R / 8R is rejected.** Probability of firing within 100 trades (bootstrap of the setup's own R):
+
+  | setup | rule | genuine +0.10R: halved / stopped | zero edge: halved / stopped |
+  |---|---|---|---|
+  | pump_fade | 5R / 8R | 65% / 24% | 88% / 57% |
+  | pump_fade | 9R / 12.5R | 17% / 5% | 47% / 23% |
+  | post_pump_decay | 9R / 12.5R | 12% / 2% | 41% / 18% |
+  | funding_hi | 9R / 12.5R | 15% / 3% | 47% / 22% |
+
+  At 9R / 12.5R the stop is the 95% test of the claimed edge (Bailey-LdP's stop-out logic). 5R / 8R mostly punishes good setups. The literature agent's simulation (σ 1.55R) agrees: +0.2R setups hit 8R within 100 trades 78% of the time.
+- **Limit equity loss through size, not tighter R:** a 12.5R stop at 0.7% risk per trade is about 8.75% of equity. Grossman & Zhou [V] control drawdown by scaling risk with the distance above a high-water-mark floor.
+- **Do not use the Bailey & López de Prado closed form (z·σ)²/(4μ) as a live threshold:**
+  - It measures loss from one starting point. The exact single-episode quantile, σ²·ln(1/(1−α))/(2μ), is more than twice as large at 95%.
+  - A rule watched from every new peak fires far more often.
+  - Their [V] triple-penance result still holds: recovery takes about 3× as long as the fall.
+- **Time under water:** also review a setup when the trades since its peak exceed (1.645σ/μ)², about 150 trades at σ 0.74.
+- **Any fixed stop eventually fires on a good setup.** Expected max drawdown grows like ln T (Magdon-Ismail et al. [V]). So a stop sends a setup to review, not retirement. Retirement on evidence is the registry's CI/decay alarm.
+- **Power, honestly:** with σ ≈ 0.75R, telling +0.10R from 0R takes about 225 trades. A drawdown stop is a brake on tail losses, not a skill test.
+
+**Q2, who re-enables.**
+- **Evidence:**
+  - EU RTS 6 Art. 15(3) [V]: "automatically disabled until re-enabled by a designated staff member".
+  - FIA 2024 §3.2 [V]: "disabled until an authorized person re-enables it"; §1.5: the trader must not be able to override.
+  - Behavioural: the person responsible for a losing course escalates commitment (Staw 1976), and people avoid realising losses (disposition effect).
+- **Rule:**
+  - The halve step recovers automatically (DD back under half the halve threshold).
+  - A stop sends the setup to shadow / paper only. Re-enable criteria are fixed at stop time, and the trading agent cannot edit them.
+  - The re-enable is evaluated by code (governor or registry), never by the agent that proposed the trades. The human is notified.
+  - In LIVE mode a human clear is required (RTS 6 / FIA).
+  - The setup returns at half size.
+
+**Q3, peak.** All of the theory measures drawdown from the running maximum (Grossman-Zhou; Magdon-Ismail; Bailey-LdP), and 90 days is only 10-30 trades per setup.
+- In the agent's simulation, a 20-trade window gave fewer false stops (0.25 vs 0.37) but caught a dead setup more slowly (median 56 vs 40 trades). Windows of 40+ trades behave like the all-time peak.
+- **Rule:** use the high-water mark since the setup's current registry version, counted in trades. Reset it only at a journalled review or a rule change (new version).
+
+**Q4, variants.** The Deflated Sharpe paper [V] counts effective independent trials as N̂ = ρ̄ + (1−ρ̄)M, and Harvey & Liu [V] note that correlation "effectively reduces the number of independent tests".
+- **Rule:** variants whose daily R correlates ≥ 0.5 with the parent, or whose episodes overlap ≥ 70% (`registry.duplicates`), count in the parent's ladder. This also blocks dodging a stop by relabelling.
+- Each variant keeps its own research ledger, and the best variant's Sharpe is deflated by every variant tried.
+
+**Gross vs net and mechanism retirement:** unchanged from the earlier draft. Add `avg_r_gross` next to `avg_r` in `journal.stats.by_setup`, and retire a setup on the day its venue mechanism disappears.
 
 ## P3. Shadow candidates from the 2026-10-02 studies (no decision needed; for the record)
 **Logged, not traded:**
