@@ -52,17 +52,22 @@ Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill
    - The market fallback stays: a target the mark crossed without its limit having filled (gone from the book, refused, part-filled) is closed at market by the guardian, idempotently (`of_original`), as before.
    - **Measured:** each fill is a `target_fill` decision (target, order, price, qty, time, slip in bps) plus the row in `target_orders` (status history, why it left the book) and a mainnet reference (`fill_refs`, type `target`). Orders Binance took away are `target_gone` decisions.
 
-**Still unverified** (Binance's docs leave them open; the code is safe either way: it re-lists the book every pass and cancels on flat):
-- whether an untriggered conditional reduce-only order (a stop swap's bridge, a pre-arm) takes part in the reduce-only competition and cancels targets;
-- whether Binance expires reduce-only limits at flat (Binance staff, dev.binance.vision/t/802, say EXPIRED), and what a partly filled one reads;
+**Answered by the demo drill** (2026-10-02, trade 15 XRPUSDT, learning #49):
+- a stop swap's bridge (an untriggered conditional reduce-only order) does **not** cancel resting targets: both stayed `resting` across `move_stop`;
+- a resting target fills at its own price: T1 filled at 1.5268, slip 0 bp, journalled as `target_fill` with a mainnet reference;
+- at flat via the exchange stop, Binance **expires** the leftover reduce-only target itself (`history[-1].ex` = `expired`, a `target_gone` decision); the guardian's cancel-on-flat is the backstop;
+- a guardian restart adopts `sb-t` orders without duplicates.
+
+**Still unverified** (the code is safe either way: it re-lists the book every pass and cancels on flat):
+- what a partly filled target reads when Binance expires it;
 - what a cut that is not an order (a partial ADL) does to them;
-- the ADL endpoint format.
+- the ADL endpoint's populated format.
 
 **Demo drill (#65, owner-approved, run by the coordinator):** a minimum-size short on a liquid coin with `auto.targets` on and two targets a little below the price.
 1. Wait for a guardian pass: `sqlite3 -readonly data/shortbot.db "select id,target,qty,status,order_id,history from target_orders order by id desc limit 5"`. Expect two `resting` rows; the book shows two reduce-only BUY limits `sb-t<trade>-…`.
 2. `move_stop` once (a bridge is placed and cancelled). Same query: are the rows still `resting`? A `target_gone` decision (`select ts,snapshot from decisions where action='target_gone'`) means the bridge's competition took them; the next pass places them again.
 3. Let one target fill (or move a target just under the price with `update_plan`): a `target_fill` decision shows price, qty, time and slip; for a partial fill, `filled` < `qty` while it stays `resting`.
-4. Close the rest by hand on Binance (not through the desk), and look at the rows before the next pass: `history[-1].ex` is Binance's own status at flat (`expired` or `canceled`), or the row is still `resting` and the next pass cancels it (`why` = "flat: the position is closed").
+4. Let the exchange flatten the rest (the drill tightened the stop just above the market; closing by hand on Binance would break the "exchange only through shortbot" rule), and look at the rows before the next pass: `history[-1].ex` is Binance's own status at flat (`expired` or `canceled`), or the row is still `resting` and the next pass cancels it (`why` = "flat: the position is closed").
 
 ### P1b. ADL watch: built (#64, `guardian_margin.py`, facts and sources in `margin.py`)
 - **Endpoint** (Binance's SDK carries the doc text; JKorf/Binance.Net #1107 for the shape): `GET /fapi/v1/adlQuantile`, weight 5, values update every 30 s, 0-4 = queue position low to high. One-way Mode answers LONG, SHORT and BOTH (ours: BOTH). Without `symbol` a list (`[]` when flat, demo read 2026-10-02), with one a single object. A populated answer is still unverified on demo: the parser is tolerant, anything unexpected is logged as an ERROR with the raw answer, and the first non-empty answer is kept in kv `adl_sample`.
