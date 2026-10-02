@@ -150,8 +150,25 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
 3. **DataHub reads candles from the local store** when fresh, falling back to REST.
 4. **The guardian research lane** runs triggers at each 15m close plus on events, deep-scores the triggered coins and alerts through scan_job.
 
-## Not verified (docs site renders client-side)
-- the per-connection stream cap and message-rate limits;
-- the connection lifetime (24h is common practice).
+## Stream limits (Binance docs, websocket-market-streams/Connect, read 2026-10-02)
+- a connection carries at most 1024 streams and is cut at 24 h;
+- the server pings every 3 min and drops a connection with no pong within 10 min;
+- clients may send 10 messages/s;
+- "IPs that are repeatedly disconnected may be banned": reconnect with backoff.
 
-Design for ≤ 200 streams per connection, reconnect daily, and check the live docs when building.
+`market/streams.py` uses ≤ 200 streams per connection (2 sockets for ~183 coins × 2 timeframes), reconnects at 23 h, and buffers the ~1,400 kline msg/s into one SQLite commit per second.
+
+## Measured trigger rates (tier 1)
+Replay of the move and volume rules (`scan_triggers.py`) on real 15m bars from `data/hist5m.db`: 103 coins with ≥ 10 days of 5m bars, 5,734 windows (59.7 days).
+
+| rule | coins/window mean | median | p90 | p99 | max |
+|---|---|---|---|---|---|
+| 1h move \|z\| ≥ 2 | 1.5 | 1 | 3 | 9 | 21 |
+| 4h move \|z\| ≥ 2 | 2.2 | 2 | 5 | 10 | 17 |
+| volume z ≥ 2 | 4.7 | 4 | 8 | 13 | 25 |
+| any of the three | 5.9 | 6 | 10 | 16 | 26 |
+
+- Scaled to the ~183-coin universe: ~10 coins per window, ~18 at p90, ~28 at p99. A cap of 20 deep scores per window (~150 weight) is binding only in the busiest ~5% of windows; the excess queues by strength.
+- Fat tails make |z| ≥ 2 rarer than the Gaussian 4.6% (1.5% for 1h moves): σ is inflated by the outliers.
+- **Persistence:** 84% of 4h-move triggers and 60% of 1h-move triggers also fired the window before. `select(recent=...)` therefore skips a coin re-triggering with no new rule within RESCORE_S (1 h).
+- Funding/premium deciles, liquidation bursts and the lower-high rule aren't replayed yet (no stored 15m premium history); their counts get logged live from day one.
