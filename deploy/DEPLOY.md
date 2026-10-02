@@ -28,6 +28,8 @@ exit                 # re-login so the docker group applies
 
 ## 4. Run the guardian (always on)
 > **macOS local runs:** don't use Docker. SQLite's shared-memory (WAL) mode doesn't work across the Mac↔Docker file share, so the guardian's writes get lost. Run `nohup .venv/bin/shortbot-guardian >> data/logs/guardian.log 2>&1 &` instead. Docker is fine on Linux, for example EC2.
+>
+> flock doesn't cross that VM boundary either: the per-symbol locks in `data/locks` would not serialise a containerised guardian with the MCP servers on the Mac. At startup the guardian sends an urgent `guardian_docker_vm` alert when it sees Docker Desktop's VM (a `linuxkit` kernel) or a data dir on a VM file share (virtiofs, fakeowner, grpcfuse, osxfs, 9p, sshfs).
 
 ```bash
 cd ~/binance_bot
@@ -35,6 +37,8 @@ docker compose up -d --build
 docker compose logs -f guardian     # expect "Guardian online (demo)" and a Telegram ping
 ```
 It restarts automatically (`restart: unless-stopped`). After code changes, run `deploy/sync.sh`, then `docker compose up -d --build`.
+
+**One user for every process.** The guardian, every Claude Code session (its MCP server), the CLI and the backup job must run as the same user, the one that owns `data/`, including `data/locks`. Never use `sudo`. docker compose already runs the guardian as your UID and GID. If a lock file was created by another user, the others lock it read-only. That still excludes them (flock(2) works whatever the open mode), but the holder info that a busy symbol reports is lost, and the log warns once per process. On NFS an exclusive flock needs write access, so keep `data/` on a local disk.
 
 ## 5. Trading sessions with Claude Code
 Run Claude Code **on the server**, so the MCP server and the guardian share `data/shortbot.db`:
@@ -44,6 +48,12 @@ tmux new -A -s desk          # the session survives disconnects
 cd ~/binance_bot && claude   # first run: log in; approve the project's 'shortbot' MCP server
 ```
 Then say "run a trading session". Claude loads the `trading-session` skill. `open_short`, `close_position`, `update_plan` and `set_risk_params` are flagged `requiresUserInteraction`, so Claude Code asks you on **every** call, even in auto or bypass mode. That needs Claude Code v2.1.199 or later; check with `claude --version`. Claude is also denied read and write access to `.env` (`.claude/settings.json`). Shell deny rules are best-effort, so don't give Claude a shell on a box with live keys if you don't trust the session.
+
+**After a code change** (a merge in the checkout the editable install points at, or `deploy/sync.sh`), the long-lived processes keep running the code they imported at startup, without any fix merged since:
+- restart the guardian (Mac: `pkill -f shortbot-guardian`, then the `nohup` line in section 4; Linux: `docker compose up -d --build`);
+- in every open Claude Code session, reconnect shortbot via `/mcp`.
+
+Each guardian and MCP server records the code it imported in kv `proc:<pid>`. Every hour the guardian lists the live `shortbot-mcp` and `shortbot-guardian` processes. It sends an urgent `stale_process:<pid>` alert, with the pid, the age and the fix, for each one that is unregistered (code from before this check) or whose code differs from the code on disk now, at most once per pid every 6 h. It also removes the rows of dead pids. The session brief shows the count on one line. It is detection only: nothing is signalled or killed. A guardian in a container only sees its own processes, so on Linux the brief on the host is what covers the MCP servers.
 
 ## 6. Going live (only after demo results in the journal)
 1. Create the live key (step 2) and add it to `.env` as `BINANCE_LIVE_API_KEY` / `BINANCE_LIVE_API_SECRET`.

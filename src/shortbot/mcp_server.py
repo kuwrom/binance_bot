@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from . import procs
 from .app import close_app
 
 INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Start with the `trading-session` skill.
@@ -32,6 +33,7 @@ REQUIRES_HUMAN = {"anthropic/requiresUserInteraction": True}
 
 @asynccontextmanager
 async def lifespan(_server):
+    procs.register_app("mcp")   # #58: the guardian flags MCP servers whose code is older than the code on disk
     try:
         yield None
     finally:

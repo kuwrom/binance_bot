@@ -11,7 +11,7 @@ import json
 import time
 from datetime import datetime
 
-from . import alerts_view, killswitch
+from . import alerts_view, killswitch, procs
 from .entries import EntryDesk
 from .untrusted import clean, flat, third_party_alert, third_party_tag
 
@@ -29,6 +29,10 @@ async def brief(app) -> str:
         lines.append(f"- ⚠️ guardian watchdog failed: {type(e).__name__}: {e}")
     lines.append(killswitch.brief_line(j))
     lines.append(backup_line(j))
+    try:   # long-lived processes still on code older than the code on disk (#58)
+        lines.append(await asyncio.wait_for(procs.brief_line(j), BRIEF_TIMEOUT_S))
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- ⚠️ stale-process check failed: {type(e).__name__}: {e}")
     live: list[dict] = []
     if app.ex.trade:
         try:

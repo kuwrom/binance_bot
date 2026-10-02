@@ -15,7 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 
+from . import procs
 from .app import close_app, get_app
 from .entries import EntryDesk
 from .guardian_jobs import MarketJobs
@@ -33,7 +35,7 @@ log = logging.getLogger("shortbot.guardian")
 PROTECTIVE = {"entries": (5, 240), "positions": (60, 240), "entry_reconcile": (60, 240)}
 WATCH = {"watch": (60, 240)}   # streaks escalate too (silent squeeze checks matter on a short book); no heartbeat
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
-           "housekeeping": (86400, 240)}
+           "housekeeping": (86400, 240), "processes": (3600, 240)}
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600)}
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
@@ -74,6 +76,7 @@ class Guardian(PositionChecks, WatchChecks, MarketJobs):
                "entry_reconcile": self.reconcile_entries, "watch": self.watch_positions,
                "governor": self.check_governor, "announcements": self.check_announcements,
                "social": self.record_social, "refresh": self.research_refresh, "housekeeping": self.housekeeping,
+               "processes": self.check_processes,
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
                "ladder": self.ladder_shadow, "laggard": self.laggard_study}
@@ -94,9 +97,19 @@ class Guardian(PositionChecks, WatchChecks, MarketJobs):
         self.j.set("guardian_heartbeat", str(time.time()))
 
     # ------------------------------------------------------------ run
-    async def run(self) -> None:
+    async def _startup(self) -> None:
         await send_safe(self.n, "guardian_started", f"Guardian online ({self.app.settings.mode}). Trading keys: "
                         f"{'yes' if self.ex.trade else 'NO (monitor-only)'}", cooldown_s=0)
+        procs.register(self.j, "guardian", self.app.settings.mode)   # #58: the processes job compares its code
+        vm = procs.docker_vm(Path(self.app.settings.db_path).expanduser().resolve().parent)
+        if vm:
+            await send_safe(self.n, "guardian_docker_vm", f"The guardian runs in a container behind a VM: {vm}. flock "
+                            "on data/locks and SQLite WAL don't cross the VM boundary, so it is NOT serialised with "
+                            "the MCP servers and CLI on the host. Run it natively (deploy/DEPLOY.md section 4).",
+                            urgent=True, cooldown_s=0)
+
+    async def run(self) -> None:
+        await self._startup()
         self.lanes = self._lanes()
         runs = {name: (lambda ln=ln, d=RESEARCH_START_DELAY_S if name == "research" else 0.0: ln.run(d))
                 for name, ln in self.lanes.items()}

@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import killswitch as ks
-from . import entry_gates, news, research
+from . import entry_gates, news, procs, research
 from .exchange import to_raw
 from .guardian_loop import guarded
 from .market.regime import market_regime
@@ -98,6 +98,14 @@ class MarketJobs:
             stderr=asyncio.subprocess.DEVNULL)
         await self.n.send("research_refresh", "weekly research refresh started (data, backtest ledger, registry)",
                           None, cooldown_s=3600)
+
+    async def check_processes(self) -> None:
+        """Hourly (#58): live shortbot-mcp / shortbot-guardian processes that are unregistered or run code older than
+        the code on disk ignore fixes such as the kill switch and the symbol lock. Alert each; never signal one."""
+        findings, dead, _ = await procs.check(self.j)
+        procs.forget(self.j, dead)
+        for f in findings:
+            await self.n.send(f"stale_process:{f['pid']}", f["text"], urgent=True, cooldown_s=procs.ALERT_COOLDOWN_S)
 
     async def housekeeping(self) -> None:
         n = self.j.prune_kv(("news_seen:", "ann_seen:", "alert_ts:"), 30 * 86400)

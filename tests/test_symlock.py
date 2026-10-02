@@ -144,3 +144,49 @@ def test_locks_live_next_to_the_journal_file(tmp_path):
     j = Journal(tmp_path / "data" / "shortbot.db")
     assert lock_dir_for(j.db) == tmp_path / "data" / "locks"
     assert lock_dir_for(Journal(":memory:").db).is_dir()   # tests: a private dir, real flocks
+
+
+def readonly_lock(tmp_path, content=b'{"pid": 1, "process": "old", "action": "x", "since": "then"}'):
+    from shortbot.symlock import _key
+    f = tmp_path / f"{_key(STX)}.lock"
+    f.write_bytes(content)
+    f.chmod(0o444)
+    return f
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write a 0444 file")
+async def test_a_lock_file_this_user_cannot_write_still_excludes_other_processes(tmp_path):
+    """#58: flock works on a read-only descriptor (flock(2): 'regardless of the mode in which the file was opened';
+    checked on macOS). Only the holder info is lost: the file isn't rewritten."""
+    f = readonly_lock(tmp_path)
+    p = holder_process(tmp_path)          # the child falls back to O_RDONLY too
+    try:
+        with pytest.raises(SymbolBusy):
+            async with SymbolLocks(tmp_path).hold(STX, "close", wait_s=0.2):
+                pytest.fail("entered while another process held the read-only lock")
+    finally:
+        p.stdin.close()
+        p.wait(10)
+    async with SymbolLocks(tmp_path).hold(STX, "close", wait_s=2):
+        assert b'"pid": 1' in f.read_bytes()
+
+
+async def test_read_only_fallback_when_open_for_writing_is_refused(tmp_path, monkeypatch):
+    from shortbot import symlock
+    f = readonly_lock(tmp_path)
+    real_open = os.open
+
+    def no_write(path, flags, *a):
+        if flags & (os.O_RDWR | os.O_WRONLY):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, flags, *a)
+    monkeypatch.setattr(symlock.os, "open", no_write)
+    a, b = SymbolLocks(tmp_path), SymbolLocks(tmp_path)
+    async with a.hold(STX, "close"):
+        with pytest.raises(SymbolBusy):
+            async with b.hold(STX, "other", wait_s=0.1):
+                pass
+    assert b'"pid": 1' in f.read_bytes()
+    with pytest.raises(PermissionError):    # no file and no way to create it: the open error, not a silent no-lock
+        async with a.hold(ETH, "close"):
+            pass

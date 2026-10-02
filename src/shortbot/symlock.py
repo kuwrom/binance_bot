@@ -14,6 +14,9 @@ The guardian, each MCP server and every CLI call are separate processes. Each or
   never holds two symbols: asking for a second one is a bug (RuntimeError), so symbols can't deadlock each other.
 Lock order: Trader.lock (process-wide, open_short only) -> one symbol lock -> SQLite writes. Never wait for a symbol
 lock while holding an open SQLite write transaction: autocommit writes inside the lock are fine.
+- a lock file this user can't write (another user created it) is opened read-only: flock(2) places a lock "regardless
+  of the mode in which the file was opened" (Linux man page; checked on macOS), so exclusion holds and only the holder
+  info is lost. Not on NFS, where an exclusive flock needs write access. Run every shortbot process as one user.
 Limits: advisory and same-host only (not the Binance app, not a guardian on another host or behind a VM mount);
 the real fix is one gateway process that owns every exchange write (#36).
 """
@@ -25,6 +28,7 @@ import atexit
 import errno
 import fcntl
 import json
+import logging
 import os
 import re
 import shutil
@@ -38,6 +42,8 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from .exchange import to_raw
+
+log = logging.getLogger("shortbot.symlock")
 
 LOCK_WAIT_S = 60.0       # session callers: a close can hold it ~1-10 s, a degraded network far longer
 GUARDIAN_WAIT_S = 5.0    # guardian protective lane: skip the symbol and retry next pass, never stall the others
@@ -61,6 +67,7 @@ class _Hold:
 
 
 _MEM_ROOT: str | None = None
+_RO_WARNED = False
 
 
 def lock_dir_for(db) -> Path:
@@ -140,7 +147,7 @@ class SymbolLocks:
     @asynccontextmanager
     async def _flock(self, symbol: str, key: str, action: str, wait: float, deadline: float) -> AsyncIterator[None]:
         self.dir.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.dir / f"{key}.lock", os.O_RDWR | os.O_CREAT, 0o664)   # non-inheritable (PEP 446)
+        fd, writable = _open(self.dir / f"{key}.lock")
         try:
             delay = 0.05
             while True:
@@ -155,7 +162,8 @@ class SymbolLocks:
                     raise SymbolBusy(symbol, wait, _holder(fd))
                 await asyncio.sleep(min(delay, left))
                 delay = min(delay * 2, 0.5)
-            _describe(fd, action)
+            if writable:
+                _describe(fd, action)
             try:
                 yield
             finally:
@@ -165,6 +173,23 @@ class SymbolLocks:
                     pass   # closing the descriptor below releases it anyway
         finally:
             os.close(fd)
+
+
+def _open(path: Path) -> tuple[int, bool]:
+    """(fd, writable); non-inheritable (PEP 446). Read-only when this user may not write the file (#58)."""
+    try:
+        return os.open(path, os.O_RDWR | os.O_CREAT, 0o664), True
+    except PermissionError as e:
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError:
+            raise e from None
+    global _RO_WARNED
+    if not _RO_WARNED:
+        _RO_WARNED = True
+        log.warning("%s is not writable by this user: locking it read-only (holder info lost). Run every shortbot "
+                    "process as the same user (deploy/DEPLOY.md)", path)
+    return fd, False
 
 
 def _describe(fd: int, action: str) -> None:
