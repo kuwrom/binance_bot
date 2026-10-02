@@ -14,6 +14,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from .. import clock
 from ..exchange import Exchanges, to_raw, to_symbol
 
 _FUNDING_TTL = 60
@@ -48,13 +49,13 @@ class DataHub:
     async def funding_tables(self) -> tuple[dict, dict]:
         """(funding rates by ccxt symbol, funding intervals by raw symbol), shared by all contexts, cached 60 s."""
         async with self._funding_lock:
-            if self._funding and time.time() - self._funding[0] < _FUNDING_TTL:
+            if self._funding and time.time() - self._funding[0] < _FUNDING_TTL:  # wall-clock: cache TTL
                 return self._funding[1], self._funding[2]
             rates, intervals = await asyncio.gather(
                 self.ex.public.fetch_funding_rates(), self.ex.funding_intervals(), return_exceptions=True)
             if isinstance(rates, BaseException):
                 raise rates
-            self._funding = (time.time(), rates, intervals if isinstance(intervals, dict) else {})
+            self._funding = (time.time(), rates, intervals if isinstance(intervals, dict) else {})  # wall-clock: TTL
             return self._funding[1], self._funding[2]
 
 
@@ -207,7 +208,7 @@ class MarketContext:
                 pass
             store = self.hub.extensions.get("social")
             if store is not None:
-                since = int(time.time() * 1000) - 7 * 86_400_000
+                since = clock.now_ms() - 7 * 86_400_000
                 out["square_posts_series"] = store.series(base, "posts_total", since)
                 p7 = store.series(base, "posts_7d", since)
                 out["square_posts_7d"] = p7[-1][1] if p7 else None

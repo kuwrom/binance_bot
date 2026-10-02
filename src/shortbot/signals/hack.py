@@ -5,8 +5,9 @@ matched headline, source and URL are logged so false positives can be audited.""
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 
+from .. import clock
 from ..market import MarketContext
 from ..news import source_of
 from ..untrusted import wrap
@@ -47,4 +48,4 @@ async def hack_flag(ctx: MarketContext) -> SignalOut:
     reimbursement/bounty is being discussed. Shadow feature only: no points, no vetoes."""
     n = await ctx.news()
     items = list(n.get("binance_announcements") or []) + list(n.get("headlines") or [])
-    return SignalOut(features=match(items, datetime.now(timezone.utc)))
+    return SignalOut(features=match(items, clock.now_dt()))

@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from .. import clock
 from ..untrusted import token, wrap
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) shortbot-research"}
@@ -40,10 +41,10 @@ _square_last = 0.0
 
 async def _cached(key: str, ttl: float, fn):
     hit = _cache.get(key)
-    if hit and time.time() - hit[0] < ttl:
+    if hit and time.time() - hit[0] < ttl:  # wall-clock: cache TTL
         return hit[1]
     val = await fn()
-    _cache[key] = (time.time(), val)
+    _cache[key] = (time.time(), val)  # wall-clock: cache TTL
     return val
 
 
@@ -80,10 +81,10 @@ async def square_hashtag(base: str) -> dict[str, float] | None:
     """Binance Square #BASE stats. Throttled globally; call from the guardian, not from scans."""
     global _square_last
     async with _square_lock:
-        wait = SQUARE_MIN_INTERVAL_S - (time.time() - _square_last)
+        wait = SQUARE_MIN_INTERVAL_S - (time.time() - _square_last)  # wall-clock: rate limiter
         if wait > 0:
             await asyncio.sleep(wait)
-        _square_last = time.time()
+        _square_last = time.time()  # wall-clock: rate limiter
         async with httpx.AsyncClient(headers=UA, timeout=15) as c:
             r = await c.get(SQUARE_URL, params={"hashtag": f"#{base}", "pageIndex": 1, "pageSize": 1,
                                                 "orderBy": "LATEST"})
@@ -106,14 +107,15 @@ class SocialStore:
         self.db.commit()
 
     def series(self, symbol: str, metric: str, since_ms: int) -> list[tuple[int, float]]:
+        """Snapshots from since_ms up to now, never after it (a replay pins the clock)."""
         cur = self.db.execute("SELECT ts_ms, value FROM social_snapshots WHERE symbol=? AND metric=? AND ts_ms>=?"
-                              " ORDER BY ts_ms", (symbol, metric, since_ms))
+                              " AND ts_ms<=? ORDER BY ts_ms", (symbol, metric, since_ms, clock.now_ms()))
         return [(int(t), float(v)) for t, v in cur.fetchall()]
 
 
 async def snapshot(store: SocialStore, bases: list[str]) -> int:
     """Guardian job: record one snapshot for each base asset. Returns rows written."""
-    now = int(time.time() * 1000)
+    now = int(time.time() * 1000)  # wall-clock: recorder timestamp
     rows: list[tuple] = []
     try:
         cg = await coingecko_trending()

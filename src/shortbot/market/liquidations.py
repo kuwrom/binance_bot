@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import clock
+
 log = logging.getLogger("shortbot.liquidations")
 STREAM_URL = "wss://fstream.binance.com/market/ws/!forceOrder@arr"  # /market path since 2026-04-23
 SCHEMA = """
@@ -44,12 +46,13 @@ class LiquidationStore:
         self.db.commit()
 
     async def recent(self, symbol: str, since_ms: int) -> list[dict[str, Any]]:
-        cur = self.db.execute("SELECT * FROM liquidations WHERE symbol=? AND ts_ms>=? ORDER BY ts_ms", (symbol, since_ms))
+        cur = self.db.execute("SELECT * FROM liquidations WHERE symbol=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms",
+                              (symbol, since_ms, clock.now_ms()))   # never after now (a replay pins the clock)
         return [dict(r) for r in cur.fetchall()]
 
     def prune(self) -> int:
         n = self.db.execute("DELETE FROM liquidations WHERE ts_ms < ?",
-                            (int((time.time() - KEEP_DAYS * 86400) * 1000),)).rowcount
+                            (int((time.time() - KEEP_DAYS * 86400) * 1000),)).rowcount  # wall-clock: retention
         self.db.commit()
         return n
 
@@ -81,15 +84,15 @@ class LiquidationRecorder:
                 async with websockets.connect(STREAM_URL, ssl=ctx, ping_interval=60, max_size=2**20) as ws:
                     log.info("liquidation stream connected")
                     backoff = 1
-                    last_flush = time.time()
+                    last_flush = time.time()  # wall-clock: recorder flush
                     async for raw in ws:
                         row = parse(json.loads(raw))
                         if row:
                             self.buffer.append(row)
                             self.received += 1
-                        if time.time() - last_flush > 2 and self.buffer:
+                        if time.time() - last_flush > 2 and self.buffer:  # wall-clock: recorder flush
                             self.store.record(self.buffer)
-                            self.buffer, last_flush = [], time.time()
+                            self.buffer, last_flush = [], time.time()  # wall-clock: recorder flush
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 - network hiccups: reconnect

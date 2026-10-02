@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 import sqlite3
 import ssl
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import truststore
+
+from .. import clock
 
 NY = ZoneInfo("America/New_York")
 BLS_ICS = "https://www.bls.gov/schedule/news_release/bls.ics"
@@ -100,7 +101,7 @@ class MacroCalendar:
         return got
 
     def around(self, now_ms: int | None = None, hours: float = 48) -> list[dict[str, Any]]:
-        now_ms = now_ms or int(time.time() * 1000)
+        now_ms = now_ms or clock.now_ms()
         rows = [dict(r) for r in self.db.execute(
             "SELECT * FROM macro_events WHERE ts_ms BETWEEN ? AND ? ORDER BY ts_ms",
             (now_ms - 2 * 3_600_000, now_ms + int(hours * 3_600_000))).fetchall()]

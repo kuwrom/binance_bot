@@ -13,6 +13,7 @@ import statistics
 import time
 from typing import Any
 
+from .. import clock
 from .sectors import base_of, sector_map
 
 BETA_SHRINK, BETA_CLIP = 0.3, (0.0, 3.0)
@@ -174,7 +175,7 @@ async def _klines(ex, sym: str, sem: asyncio.Semaphore, limit: int = 170) -> lis
 
 
 async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str, Any]:
-    t0 = time.time()
+    t0 = time.time()  # wall-clock: build timing
     perps = await ex.coin_perps()
     tickers, rates, sectors = await asyncio.gather(ex.public.fetch_tickers(), ex.public.fetch_funding_rates(),
                                                    sector_map(journal))
@@ -207,10 +208,16 @@ async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str,
     vetoes = market_vetoes(header, table, *m15)
     coins = {r["symbol"]: {k: r.get(k) for k in ("sector", "beta", "r1h", "r4h", "r24h", "resid4h", "resid24h",
                                                  "resid_sector24h", "resid_sector_z", "vol_surge")} for r in rows}
-    out = {"ts": int(time.time()), "built_s": round(time.time() - t0, 1), "header": header,
+    out = {"ts": int(clock.now_s()), "built_s": round(time.time() - t0, 1), "header": header,  # wall-clock: built_s
            "btc_15m": _r(m15[0]), "eth_15m": _r(m15[1]), "sectors": table, "vetoes": vetoes, "coins": coins}
     journal.set(KV_LAST, json.dumps(out))
     return out
+
+
+def _fresh(m: dict[str, Any], max_age_s: float) -> bool:
+    """Built at most max_age_s before now and not after it (a replay pins the clock; 60 s of skew allowed)."""
+    age = clock.now_s() - m["ts"]
+    return -60 <= age <= max_age_s
 
 
 def cached(journal, max_age_s: float = 1800) -> dict[str, Any] | None:
@@ -218,7 +225,7 @@ def cached(journal, max_age_s: float = 1800) -> dict[str, Any] | None:
     if not raw:
         return None
     m = json.loads(raw)
-    return m if time.time() - m["ts"] <= max_age_s else None
+    return m if _fresh(m, max_age_s) else None
 
 
 class MapCache:
@@ -234,7 +241,7 @@ class MapCache:
         except Exception:  # noqa: BLE001 - no kv table yet
             return None
         m = json.loads(row[0]) if row else None
-        return m if m and time.time() - m["ts"] <= max_age_s else None
+        return m if m and _fresh(m, max_age_s) else None
 
 
 def render(m: dict[str, Any]) -> str:

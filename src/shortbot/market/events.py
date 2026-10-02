@@ -6,10 +6,11 @@ investor mild, ecosystem slightly positive; larger unlocks fall harder."""
 from __future__ import annotations
 
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .. import clock
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS unlocks (
@@ -41,14 +42,16 @@ class EventStore:
         cur = self.db.execute(
             "INSERT INTO unlocks (base, unlock_ts_ms, pct_supply, recipient, source, notes, added_at)"
             " VALUES (?,?,?,?,?,?,?)", (base.upper().removeprefix("1000"), int(dt.timestamp() * 1000), pct_supply,
-                                       recipient, source, notes, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                                       recipient, source, notes,
+                                       datetime.now(timezone.utc).isoformat(timespec="seconds")))  # wall-clock: added
         self.db.commit()
         return int(cur.lastrowid)
 
     def upcoming(self, base: str | None = None, days: float = 60, include_past_days: float = 7) -> list[dict[str, Any]]:
-        now = time.time() * 1000
-        q = "SELECT * FROM unlocks WHERE unlock_ts_ms BETWEEN ? AND ?"
-        args: list[Any] = [now - include_past_days * 86_400_000, now + days * 86_400_000]
+        now = clock.now_ms()   # point in time: only events known (added) by now
+        q = "SELECT * FROM unlocks WHERE unlock_ts_ms BETWEEN ? AND ? AND added_at <= ?"
+        args: list[Any] = [now - include_past_days * 86_400_000, now + days * 86_400_000,
+                           clock.now_dt().isoformat(timespec="seconds")]
         if base:
             q += " AND base=?"
             args.append(base.upper().removeprefix("1000"))

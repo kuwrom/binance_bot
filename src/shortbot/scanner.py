@@ -4,10 +4,9 @@ candidates, and build per-coin snapshots. The scanner orchestrates only; signals
 from __future__ import annotations
 
 import asyncio
-import time
-from datetime import datetime, timezone
 from typing import Any
 
+from . import clock
 from . import indicators as ind
 from . import news
 from .exchange import Exchanges, to_symbol
@@ -60,14 +59,17 @@ async def scan_shorts(ex: Exchanges, min_change: float = 10.0, top_n: int = 10, 
     evals = await asyncio.gather(*(evaluate(hub.context(t["symbol"], t), groups) for t in movers))
     rows = [_row(ev) for ev in evals]
     if journal is not None and evals:
-        now = datetime.now(timezone.utc)
+        now = clock.now_dt()
+        scan = {"direction": direction, "min_change": min_change, "depth": depth, "top_n": top_n,
+                "groups": list(groups) if groups else None}   # makes the scan replayable without guessing
         journal.log_candidates(now.isoformat(timespec="seconds"), int(now.timestamp() * 1000), [
-            {**row, "price": ev.features.get("last"), "features": {**ev.features, "tape_state": row["tape"]["state"]}}
+            {**row, "price": ev.features.get("last"),
+             "features": {**ev.features, "tape_state": row["tape"]["state"], "scan": scan}}
             for ev, row in zip(evals, rows)], regime)   # tape state as classified NOW (the registry needs scan-time)
         _log_research_brackets(journal, evals, rows, regime)
     tradable = sorted((r for r in rows if not r["vetoes"]), key=lambda r: r["score"], reverse=True)
     vetoed = [{"symbol": r["symbol"], "change_24h": r["change_24h"], "vetoes": r["vetoes"]} for r in rows if r["vetoes"]]
-    now_ms = time.time() * 1000
+    now_ms = clock.now_ms()
     new_listings = sorted(
         ({"symbol": s, "age_d": round((now_ms - int(m["info"]["onboardDate"])) / 864e5, 1),
           "change_24h": round(tickers.get(s, {}).get("percentage") or 0, 1)}
@@ -141,12 +143,10 @@ async def coin_snapshot(ex: Exchanges, symbol: str) -> dict:
 
 def _sweep_proof(ex, last, high_24h, atr, stop_option) -> dict[str, Any]:
     """Stop measured from our own level-sweep study (sweeps.py), when it has enough events."""
-    from datetime import datetime, timezone
-
     from .sessions import session_bucket
     from .sweeps import guide, sweep_proof_stop
     try:
-        g = guide(ex.settings.db_path, session_bucket(datetime.now(timezone.utc)))
+        g = guide(ex.settings.db_path, session_bucket(clock.now_dt()))
         sp = sweep_proof_stop(last, high_24h, atr, g) if last else None
     except Exception:  # noqa: BLE001 - research aid only
         sp = None

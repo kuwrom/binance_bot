@@ -54,10 +54,10 @@ async def fetch_supply(pages: int = PAGES) -> dict[str, dict[str, Any]]:
 async def refresh(journal, force: bool = False) -> dict[str, Any]:
     cur = journal.get(KV_KEY)
     cached = json.loads(cur) if cur else {}
-    if not force and cached and time.time() - cached.get("ts", 0) < TTL_S:
+    if not force and cached and time.time() - cached.get("ts", 0) < TTL_S:  # wall-clock: cache TTL
         return {"cached": True, "coins": len(cached.get("coins", {}))}
     coins = await fetch_supply()
-    journal.set(KV_KEY, json.dumps({"ts": time.time(), "coins": coins}))
+    journal.set(KV_KEY, json.dumps({"ts": time.time(), "coins": coins}))  # wall-clock: cache TTL
     return {"cached": False, "coins": len(coins)}
 
 

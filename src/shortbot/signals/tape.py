@@ -5,8 +5,7 @@ Missing tape data never vetoes (only the core inputs are critical)."""
 
 from __future__ import annotations
 
-import time
-
+from .. import clock
 from .. import robust_math as rm
 from .. import tape_math as tm
 from ..decay import decayed_points, heat
@@ -46,7 +45,7 @@ async def sweep(ctx: MarketContext) -> SignalOut:
         out.features["sweep_age_h"] = age_h
         out.points.append((decayed_points(10, "sweep", age_h),
                            f"failed sweep of {s['level_type']} {s['swept']:.6g} (wick {s['sweep_high']:.6g}, {age_h:.2g}h ago)"))
-        liqs = await ctx.liquidations(int(time.time() * 1000) - 3 * 900_000)
+        liqs = await ctx.liquidations(clock.now_ms() - 3 * 900_000)
         shorts = sum(x["notional"] for x in liqs if x["side"] == "short_liquidated")
         out.features["sweep_short_liq_usd"] = shorts
         if shorts > 0:
@@ -143,7 +142,7 @@ async def pump(ctx: MarketContext) -> SignalOut:
 async def liquidations(ctx: MarketContext) -> SignalOut:
     """Recorded forced orders: a long-liquidation cascade overshoots then gets bought back (Brunnermeier &
     Pedersen): veto fresh shorts into it. Empty if the guardian's recorder isn't running."""
-    now = int(time.time() * 1000)
+    now = clock.now_ms()
     rows = await ctx.liquidations(now - 3_600_000)
     last15 = [r for r in rows if r["ts_ms"] >= now - 900_000]
     prior = [r for r in rows if r["ts_ms"] < now - 900_000]
