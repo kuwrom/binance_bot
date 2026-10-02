@@ -213,7 +213,8 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
         wk = acct.get("realized_today", 0.0)
     rows = trader.j.closed_results()
     # day/week P&L from equity marks net of transfers, peak moved by transfers (#16, equity_marks.py)
-    per = await equity_marks.gather(trader.t, trader.j, eq, acct["day_pnl"], wk + acct.get("unrealized", 0.0))
+    per = await equity_marks.gather(trader.t, trader.j, eq, acct["day_pnl"], wk + acct.get("unrealized", 0.0),
+                                   acct.get("unrealized"))
     peak, day_pnl, week_pnl = per["peak"], per["day_pnl"], per["week_pnl"]
     gin = GovInputs(eq, peak, day_pnl, track_day_peak(trader.j, day_pnl, now), week_pnl,
                     [(r["closed_at"], r["pnl"]) for r in rows], regime, vnow, tgt, now)

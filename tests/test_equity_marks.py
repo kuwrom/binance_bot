@@ -58,7 +58,7 @@ def test_never_raises():
         def set(self, k, v):
             raise RuntimeError("database is locked")
     r = em.period_pnl(BadJournal(), 1000.0, [], -7.0, -9.0, now=T0)
-    assert r == {"day_pnl": -7.0, "week_pnl": -9.0, "late": {}, "degraded": True}
+    assert r == {"day_pnl": -7.0, "week_pnl": -9.0, "late": {}, "pending": {}, "degraded": True}
 
 
 async def test_gather_falls_back_when_income_is_unreachable():
@@ -90,3 +90,38 @@ def test_a_late_reported_transfer_is_counted_on_the_next_pass():
     assert em.adjusted_peak(j, 900.0, late, now) == 1000                         # not counted yet
     assert em.adjusted_peak(j, 900.0, late, now + 120_000) == 950                # counted once, next pass
     assert em.adjusted_peak(j, 900.0, late, now + 240_000) == 950
+
+
+def test_a_deposit_inside_the_lag_window_is_not_counted_twice_in_the_peak():
+    j = Journal(":memory:")
+    j.set(em.KV_PEAK, "10000")
+    j.set(em.KV_CURSOR, str(ms(T0)))
+    now = ms(at(2))
+    dep = [{"incomeType": "TRANSFER", "income": "1000", "time": now - 10_000}]    # in the balance, inside the lag
+    assert em.adjusted_peak(j, 11000.0, dep, now) == 10000                       # not yet in the high-water mark
+    assert em.adjusted_peak(j, 11000.0, dep, now + 120_000) == 11000             # counted once: no phantom 12000
+
+
+def test_a_withdrawal_in_the_balance_before_its_income_row_is_pending_not_a_loss():
+    j = Journal(":memory:")
+    em.period_pnl(j, 1000.0, [], 0, 0, now=T0, unrealized=0.0)                     # marks with unrealized 0
+    r = em.period_pnl(j, 880.0, [], -999, -999, now=at(1), unrealized=0.0)        # -120 withdrawn, row not seen
+    assert r["pending"]["day"] and r["day_pnl"] == 0                               # income view: no trading loss
+    wd = [{"incomeType": "TRANSFER", "income": "-120", "time": ms(at(1))}]
+    r = em.period_pnl(j, 880.0, wd, -999, -999, now=at(1, 1), unrealized=0.0)      # row arrived: views agree
+    assert not r["pending"]["day"] and r["day_pnl"] == 0
+
+
+def test_a_persistent_disagreement_takes_the_worse_view():
+    j = Journal(":memory:")
+    em.period_pnl(j, 1000.0, [], 0, 0, now=T0, unrealized=0.0)
+    em.period_pnl(j, 950.0, [], 0, 0, now=at(1), unrealized=0.0)                   # first seen: pending
+    r = em.period_pnl(j, 950.0, [], 0, 0, now=at(1, 5), unrealized=0.0)            # still unexplained after 5 min
+    assert not r["pending"]["day"] and r["day_pnl"] == -50
+
+
+def test_trading_income_counts_only_pnl_types():
+    rows = [{"incomeType": "REALIZED_PNL", "income": "-10", "time": ms(at(1))},
+            {"incomeType": "COMMISSION", "income": "-1", "time": ms(at(1))},
+            {"incomeType": "TRANSFER", "income": "500", "time": ms(at(1))}]
+    assert em.trading_income(rows, ms(T0)) == -11

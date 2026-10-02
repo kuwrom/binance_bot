@@ -1,6 +1,6 @@
 """Day / week P&L and an equity peak that survive midnight carry-overs and transfers (task #16).
 
-The old definition (reconcile.day_pnl) is realized income since 00:00 UTC + ALL unrealized P&L, so a loss carried in
+The old definition was realized income since 00:00 UTC + ALL unrealized P&L, so a loss carried in
 an open position trips the daily cap at midnight with no new loss, and deposits/withdrawals move `equity_peak` (a 12%
 withdrawal looks like a 12% drawdown). Here:
 - marks: the first equity seen in each UTC day and ISO week is stored in kv (`eq_mark:day:<date>`,
@@ -35,14 +35,20 @@ def period_starts(now: datetime) -> dict[str, tuple[str, int]]:
             "week": (f"{iso[0]}-W{iso[1]:02d}", int(week0.timestamp() * 1000))}
 
 
-def _mark(journal, kind: str, key: str, equity: float, now_ms: int) -> dict[str, Any]:
+def _mark(journal, kind: str, key: str, equity: float, now_ms: int, unrealized: float | None = None) -> dict[str, Any]:
     k = journal.mode_key(f"eq_mark:{kind}:{key}")
     raw = journal.get(k)
     if raw:
         return json.loads(raw)
-    m = {"equity": equity, "ts": now_ms}
+    m = {"equity": equity, "ts": now_ms, **({"unrealized": unrealized} if unrealized is not None else {})}
     journal.set(k, json.dumps(m))
     return m
+
+
+def trading_income(rows: list[dict[str, Any]], since_ms: int) -> float:
+    """Realized P&L + fees + funding + liquidation fees since since_ms (reconcile.PNL_TYPES; never transfers)."""
+    return sum(float(r.get("income") or 0) for r in rows
+               if r.get("incomeType") in reconcile.PNL_TYPES and int(r.get("time") or 0) >= since_ms)
 
 
 def transfers(rows: list[dict[str, Any]], since_ms: int, until_ms: int | None = None) -> float:
@@ -52,24 +58,47 @@ def transfers(rows: list[dict[str, Any]], since_ms: int, until_ms: int | None = 
                and (until_ms is None or int(r.get("time") or 0) < until_ms))
 
 
+PENDING_MS = 120_000     # how long an unexplained equity move is treated as income not yet reported
+
+
 def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_day: float, old_week: float,
-               now: datetime | None = None) -> dict[str, Any]:
-    """{'day_pnl', 'week_pnl', 'late': {...}, 'degraded': bool} from the marks. Never raises: any failure (kv lock,
-    bad mark) returns the old definitions with degraded=True (the kill switch calls this inside guardian hooks)."""
+               now: datetime | None = None, unrealized: float | None = None) -> dict[str, Any]:
+    """{'day_pnl', 'week_pnl', 'late': {...}, 'pending': {...}, 'degraded': bool} from the marks.
+
+    transfer_rows are the raw /fapi/v1/income rows since (at least) the week mark. With `unrealized` (and a mark
+    that stored it) the equity view (A = equity - mark - transfers) is cross-checked against the income view
+    (B = trading income since the mark + change in unrealized). They agree unless an income row lags the balance:
+    a withdrawal not yet reported would read as a loss in A, a deposit as a gain. A disagreement younger than
+    PENDING_MS uses B (pending); one that persists uses min(A, B) (conservative for the caps). Never raises: any
+    failure returns the old definitions with degraded=True (the kill switch calls this inside guardian hooks)."""
     try:
         now = now or datetime.now(timezone.utc)
         now_ms = int(now.timestamp() * 1000)
-        out: dict[str, Any] = {"late": {}, "degraded": False}
+        out: dict[str, Any] = {"late": {}, "pending": {}, "degraded": False}
         for kind, old in (("day", old_day), ("week", old_week)):
             key, start_ms = period_starts(now)[kind]
-            m = _mark(journal, kind, key, equity, now_ms)
-            pnl = equity - float(m["equity"]) - transfers(transfer_rows, int(m["ts"]))
-            late = int(m["ts"]) - start_ms > LATE_MARK_S * 1000
+            m = _mark(journal, kind, key, equity, now_ms, unrealized)
+            ts = int(m["ts"])
+            pnl = equity - float(m["equity"]) - transfers(transfer_rows, ts)
+            out["pending"][kind] = False
+            if unrealized is not None and m.get("unrealized") is not None:
+                b = trading_income(transfer_rows, ts) + (unrealized - float(m["unrealized"]))
+                pk = journal.mode_key(f"eq_pending:{kind}")
+                if abs(pnl - b) > max(1.0, 0.001 * abs(equity)):
+                    first = int(journal.get(pk) or 0) or now_ms
+                    if first == now_ms:
+                        journal.set(pk, str(now_ms))
+                    young = now_ms - first < PENDING_MS
+                    out["pending"][kind] = young
+                    pnl = b if young else min(pnl, b)
+                elif journal.get(pk) not in (None, "0"):
+                    journal.set(pk, "0")
+            late = ts - start_ms > LATE_MARK_S * 1000
             out["late"][kind] = late
             out[f"{kind}_pnl"] = round(min(pnl, old) if late else pnl, 4)
         return out
     except Exception:  # noqa: BLE001
-        return {"day_pnl": old_day, "week_pnl": old_week, "late": {}, "degraded": True}
+        return {"day_pnl": old_day, "week_pnl": old_week, "late": {}, "pending": {}, "degraded": True}
 
 
 CURSOR_LAG_MS = 60_000   # income can be reported a few seconds late: count transfers only up to now - lag
@@ -91,7 +120,9 @@ def adjusted_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], n
         peak = float(row[0]) if row else 0.0
         if upto > cursor:
             peak += transfers(transfer_rows, cursor, upto)
-        peak = max(peak, equity)
+        # transfers inside the lag window are already in equity but not yet in the peak: leave them out of the
+        # high-water mark, or the next pass adds them a second time (phantom drawdown, #16 review)
+        peak = max(peak, equity - transfers(transfer_rows, max(cursor, upto)))
         db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (kp, str(peak)))
         db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (kc, str(max(cursor, upto))))
         db.commit()
@@ -111,14 +142,15 @@ def reset_peak(journal, equity: float, reason: str) -> dict[str, Any]:
     return {"ok": True, "old_peak": float(old) if old else None, "new_peak": equity}
 
 
-async def gather(t, journal, equity: float, old_day: float, old_week: float) -> dict[str, Any]:
+async def gather(t, journal, equity: float, old_day: float, old_week: float,
+                 unrealized: float | None = None) -> dict[str, Any]:
     """One income read covering the week mark and the peak cursor; returns day/week P&L and the adjusted peak.
     Income unreachable -> old definitions and the stored peak (never blocks the budget)."""
     now = datetime.now(timezone.utc)
     try:
         starts = [period_starts(now)["week"][1], int(journal.get(journal.mode_key(KV_CURSOR)) or time.time() * 1000)]
         rows = await reconcile.income_since(t, min(starts))
-        out = period_pnl(journal, equity, rows, old_day, old_week, now)
+        out = period_pnl(journal, equity, rows, old_day, old_week, now, unrealized)
         out["peak"] = adjusted_peak(journal, equity, rows, int(now.timestamp() * 1000))
         return out
     except Exception:  # noqa: BLE001
@@ -126,4 +158,4 @@ async def gather(t, journal, equity: float, old_day: float, old_week: float) -> 
             peak = max(float(journal.get(journal.mode_key(KV_PEAK)) or 0), equity)
         except Exception:  # noqa: BLE001
             peak = equity
-        return {"day_pnl": old_day, "week_pnl": old_week, "peak": peak, "late": {}, "degraded": True}
+        return {"day_pnl": old_day, "week_pnl": old_week, "peak": peak, "late": {}, "pending": {}, "degraded": True}
