@@ -84,7 +84,7 @@ async def book_plan(app, top: int = 6, min_change: float = 5.0, direction: str =
     from .scanner import scan_shorts
     scan = await scan_shorts(app.ex, min_change=min_change, top_n=top, journal=None, direction=direction)
     positions = await app.trader.positions()
-    _, pend = pending_book(app.journal.db, "")
+    _, pend = pending_book(app.journal.db, "", getattr(app.journal, "mode", None))
     m = cached(app.journal, 900) or {}
     sector_of = lambda s: ((m.get("coins") or {}).get(s) or {}).get("sector")  # noqa: E731
     book = [{"symbol": p["symbol"], "setup": p.get("setup"), "sector": sector_of(p["symbol"])} for p in positions]

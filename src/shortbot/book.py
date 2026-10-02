@@ -33,17 +33,20 @@ def slot_cap(equity: float, limits, cluster: str) -> float:
     return max(0.0, equity) * pct / 100 / max(1, int(limits.max_positions))
 
 
-def pending_book(db, exclude_symbol: str) -> tuple[dict[str, float], list[dict[str, Any]]]:
+def pending_book(db, exclude_symbol: str, mode: str | None = None) -> tuple[dict[str, float], list[dict[str, Any]]]:
     """({symbol: worst-case risk of its resting groups}, [{symbol, setup} per pending group]) for every OTHER
-    symbol. Same-symbol rows are excluded: they are this trade's own legs or a plan it replaces."""
+    symbol. Same-symbol rows are excluded: they are this trade's own legs or a plan it replaces. With `mode`
+    (demo / live, #32) only that account's entries count; None counts every mode (errs safe)."""
     try:
         cols = {r[1] for r in db.execute("PRAGMA table_info(entries)")}
         if not cols:
             return {}, []
         tr = "tranche" if "tranche" in cols else "NULL"
+        by_mode = bool(mode) and "mode" in cols
         q = (f"SELECT id, group_id, symbol, setup, amount, limit_price, stop_price, {tr} FROM entries"
-             f" WHERE status IN ({','.join('?' * len(PENDING_STATUSES))}) AND symbol != ?")
-        rows = db.execute(q, (*PENDING_STATUSES, exclude_symbol)).fetchall()
+             f" WHERE status IN ({','.join('?' * len(PENDING_STATUSES))}) AND symbol != ?"
+             + (" AND mode = ?" if by_mode else ""))
+        rows = db.execute(q, (*PENDING_STATUSES, exclude_symbol, *((mode,) if by_mode else ()))).fetchall()
     except Exception:  # noqa: BLE001 - no entries table yet
         return {}, []
     groups: dict[str, dict[str, tuple[str, str, float]]] = {}

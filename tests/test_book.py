@@ -116,3 +116,15 @@ def test_budget_reports_the_book_it_would_join():
     r = b(book=book, book_rho=0.5)
     assert r["book"] == {"n": 3, "rho": 0.5, "n_eff": 1.5}
     assert b()["book"] == {"n": 1, "rho": None, "n_eff": None}
+
+
+def test_pending_book_counts_only_this_accounts_mode():
+    db = _db()
+    db.execute("ALTER TABLE entries ADD COLUMN mode TEXT DEFAULT 'demo'")
+    db.execute("INSERT INTO entries (group_id, symbol, status, setup, amount, limit_price, stop_price, mode)"
+               " VALUES ('g9','L/USDT:USDT','pending','pump_fade',100,1.0,1.2,'live')")
+    demo, _ = pending_book(db, SYM, "demo")
+    live, _ = pending_book(db, SYM, "live")
+    everything, _ = pending_book(db, SYM)
+    assert "L/USDT:USDT" not in demo and set(live) == {"L/USDT:USDT"} and "L/USDT:USDT" in everything
+    assert abs(live["L/USDT:USDT"] - 20) < 1e-9

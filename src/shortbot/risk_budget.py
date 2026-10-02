@@ -222,7 +222,7 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     from .market.market_map import cached
     m = cached(trader.j, 900) or {}
     sector_of = lambda s: ((m.get("coins") or {}).get(s) or {}).get("sector")  # noqa: E731
-    pend, pbook = pending_book(trader.j.db, symbol or "")
+    pend, pbook = pending_book(trader.j.db, symbol or "", getattr(trader.j, "mode", None))
     book = [{"symbol": p["symbol"], "setup": p.get("setup"), "kind": "open"} for p in pos] + pbook
     for b in book:
         b["sector"] = sector_of(b["symbol"])
