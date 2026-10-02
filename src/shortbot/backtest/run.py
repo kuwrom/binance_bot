@@ -191,6 +191,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--round4", action="store_true", help="add the round-4 corrections section (report_v5)")
     ap.add_argument("--compare", type=Path, help="--round4: an earlier results.json to diff every verdict against")
     ap.add_argument("--long", action="store_true", help="ledger = the long sleeve (strategies_long; research)")
+    ap.add_argument("--flow", action="store_true", help="ledger = the positioning cards (strategies_flow; research)")
     given = list(sys.argv[1:] if argv is None else argv)
     a = ap.parse_args(given)
     path, tables = source(a.days60, a.db)
@@ -214,6 +215,9 @@ def main(argv: list[str] | None = None) -> None:
     if a.long:
         from .strategies_long import trials_long
         led = trials_long()
+    if a.flow:
+        from .strategies_flow import trials_flow
+        led = trials_flow()
     res = run_all(m, ledger=led, placebo=a.placebo)
     rep = build(res, m, stress=run_all(m, STRESS, controls=False, ledger=led), dsr_mode=a.dsr)
     md = markdown(rep)
