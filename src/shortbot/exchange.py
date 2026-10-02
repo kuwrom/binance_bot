@@ -6,12 +6,14 @@ Demo trading has no fapiData endpoints, so all analytics always read from prod p
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from typing import Any
 
 import ccxt.async_support as ccxt
 
+from . import weight
 from .config import Settings
 from .risk import bracket_for
 
@@ -28,6 +30,59 @@ BRACKETS_TTL = 6 * 3600       # leverage brackets per symbol (GET /fapi/v1/lever
 
 async def _sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)  # indirection so tests can skip real waits
+
+
+_CALL: contextvars.ContextVar[dict | None] = contextvars.ContextVar("shortbot_ccxt_call", default=None)
+
+
+class _Guarded:
+    """The weight guard (weight.py) on a ccxt client. `fetch` (one per HTTP attempt) waits its turn by class before
+    sending; `on_rest_response` (ccxt calls it with each response's own headers, before error handling) records the
+    reading. ccxt's `last_response_headers` is one attribute per client, overwritten by concurrent calls: not used.
+    A 418/429 is never resent by ccxt's own retry loop (maxRetriesOnFailure retries every OperationFailed, which
+    includes DDoSProtection): retrying a 429 within seconds is the 'failing to back off' that earns a 418 ban."""
+
+    async def fetch2(self, path, api="public", method="GET", params={}, headers=None, body=None, config={}):  # noqa: B006
+        call = {"cost": self.calculate_rate_limiter_cost(api, method, path, params, config), "limited": None}
+        token = _CALL.set(call)
+        try:
+            return await super().fetch2(path, api, method, params, headers, body, config)
+        finally:
+            _CALL.reset(token)
+
+    async def fetch(self, url, method="GET", headers=None, body=None):
+        call = _CALL.get()
+        if call and call["limited"]:
+            raise call["limited"]   # ccxt retrying a 418/429: the same answer, nothing sent
+        await weight.admit(url, method, call["cost"] if call else 1)
+        try:
+            return await super().fetch(url, method, headers, body)
+        except ccxt.DDoSProtection as e:
+            if call is not None:
+                call["limited"] = e
+            raise
+
+    async def sleep(self, milliseconds):
+        call = _CALL.get()
+        if not (call and call["limited"]):   # no pause before a retry that won't be sent
+            await super().sleep(milliseconds)
+
+    def on_rest_response(self, code, reason, url, method, response_headers, response_body, request_headers,
+                         request_body):
+        try:
+            weight.record(url, code, response_headers, response_body)
+        except Exception:  # noqa: BLE001 - bookkeeping must never fail a request
+            log.exception("weight reading of %s failed", url)
+        return super().on_rest_response(code, reason, url, method, response_headers, response_body,
+                                        request_headers, request_body)
+
+
+class GuardedUSDM(_Guarded, ccxt.binanceusdm):
+    pass
+
+
+class GuardedSpot(_Guarded, ccxt.binance):
+    pass
 
 
 def to_symbol(s: str) -> str:
@@ -50,11 +105,11 @@ class Exchanges:
     def __init__(self, settings: Settings):
         self.settings = settings
         # market data only: retry transient network failures (never on the trade client: no duplicate orders)
-        self.public = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 20000,
+        self.public = GuardedUSDM({"enableRateLimit": True, "timeout": 20000,
                                         "options": {"maxRetriesOnFailure": 3, "maxRetriesOnFailureDelay": 1000}})
         self.trade: ccxt.binanceusdm | None = None
         if settings.api_key and settings.api_secret:
-            self.trade = ccxt.binanceusdm({
+            self.trade = GuardedUSDM({
                 "apiKey": settings.api_key, "secret": settings.api_secret,
                 "enableRateLimit": True, "timeout": 20000,
                 # clock drift (e.g. after the Mac sleeps) causes -1021; wider window + resync_time() on error
@@ -95,11 +150,13 @@ class Exchanges:
         return self.trade
 
     async def markets(self) -> dict[str, Any]:
-        """Public (prod) markets for analytics. A failed refresh keeps the cached copy."""
+        """Public (prod) markets for analytics. A failed refresh keeps the cached copy. Loads under a shared lock run
+        as protective: a research caller waiting for budget here would hold up every caller behind the lock (#70)."""
         async with self._lock:
             if time.time() - self._markets_at > MARKETS_TTL:
                 try:
-                    await self.public.load_markets(reload=True)
+                    with weight.tagged(weight.PROTECTIVE):
+                        await self.public.load_markets(reload=True)
                     self._markets_at = time.time()
                 except Exception:
                     if not self.public.markets:
@@ -140,10 +197,12 @@ class Exchanges:
                 return
             self._trade_tried_at = time.time()
             if not t.markets:
-                await self._load_trade_markets(t)
+                with weight.tagged(weight.PROTECTIVE):   # nobody waits for budget holding the lock (#70)
+                    await self._load_trade_markets(t)
             else:
                 try:
-                    await t.load_markets(reload=True)
+                    with weight.tagged(weight.PROTECTIVE):
+                        await t.load_markets(reload=True)
                 except Exception as e:  # noqa: BLE001 - stale markets beat none; retried after RELOAD_RETRY_S
                     log.warning("trade markets refresh failed, keeping the cached copy: %s: %s", type(e).__name__, e)
                     self._trade_next_load = time.time() + RELOAD_RETRY_S
@@ -267,7 +326,7 @@ class Exchanges:
     @property
     def spot(self) -> ccxt.binance:
         if self._spot is None:
-            self._spot = ccxt.binance({"enableRateLimit": True, "timeout": 20000,
+            self._spot = GuardedSpot({"enableRateLimit": True, "timeout": 20000,
                                        "options": {"maxRetriesOnFailure": 3, "maxRetriesOnFailureDelay": 1000}})
         return self._spot
 

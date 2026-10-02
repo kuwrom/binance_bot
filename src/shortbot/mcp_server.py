@@ -21,7 +21,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import app as _app_mod
-from . import audit, procs, stale_guard
+from . import audit, procs, stale_guard, weight
 from .app import close_app
 from .redact import install_log_redaction
 
@@ -42,6 +42,11 @@ UNLOGGED = frozenset({
     "upcoming_unlocks", "list_signals", "risk_params", "log_decision", "journal", "research_report",
     "governor_status", "session_clock", "warmup_check", "market_map", "coin_profile", "read_coin", "position_ladder",
     "trading_state", "book_plan"})
+# Exchange weight classes (#70, weight.py): order / close / stop / amend paths never wait for budget; scans yield to
+# them. Every other tool is a desk read (untagged): it waits only while the host is above 80%.
+PROTECTIVE_TOOLS = frozenset({"open_short", "close_position", "move_stop", "widen_stop", "add_to_winner", "update_plan",
+                              "propose_entries", "cancel_entry_group", "amend_entry", "flatten_all", "halt_trading"})
+RESEARCH_TOOLS = frozenset({"scan_shorts", "book_plan", "market_map"})
 
 
 @asynccontextmanager
@@ -71,7 +76,8 @@ def tool(fn=None, *, human: bool = False):
 
         @functools.wraps(f)
         async def wrapper(*args, **kwargs):
-            with audit.acting(f"mcp:{name}"):
+            with audit.acting(f"mcp:{name}"), weight.tagged(weight.pick(name, PROTECTIVE_TOOLS, RESEARCH_TOOLS),
+                                                            wait_s=weight.ENTRY_WAIT_S):
                 code = await stale_guard.verdict()   # #68: on stale code writes never run, reads carry a warning
                 try:
                     if name in UNLOGGED:

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import histdata_vision as V
+from . import weight
 from .config import Settings
 from .exchange import NO_DELIVERY, Exchanges, to_raw, to_symbol
 from .histdata_rest import Pacer, tail
@@ -359,7 +360,8 @@ def main() -> None:
                         handlers=[logging.FileHandler(a.log), logging.StreamHandler()])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if a.cmd == "build":
-        print(json.dumps(asyncio.run(build(a.days, a.symbols, a.db, a.concurrency, not a.no_tail)), indent=1))
+        with weight.tagged(weight.RESEARCH):   # the REST tail yields to the desk and guardian (#70)
+            print(json.dumps(asyncio.run(build(a.days, a.symbols, a.db, a.concurrency, not a.no_tail)), indent=1))
     else:
         now = int(time.time() * 1000)
         print(json.dumps(summary(connect(a.db), now // DAY * DAY - a.days * DAY, now), indent=1))

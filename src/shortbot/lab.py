@@ -23,6 +23,7 @@ from typing import Any
 from . import indicators as ind
 from . import research as _research
 from . import scanner as _scanner
+from . import weight
 from .config import Settings
 from .exchange import Exchanges, to_symbol
 from .journal import Journal
@@ -35,7 +36,8 @@ def _with_ex(fn: Callable[[Exchanges], Any]) -> Any:
     async def run():
         ex = Exchanges(Settings.from_env())
         try:
-            return await fn(ex)
+            with weight.tagged(weight.RESEARCH, wait_s=weight.ENTRY_WAIT_S):   # yields to the desk and guardian (#70)
+                return await fn(ex)
         finally:
             await ex.close()
     return asyncio.run(run())

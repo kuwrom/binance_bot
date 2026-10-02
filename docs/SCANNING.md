@@ -125,6 +125,25 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
 - a 429 on one host doesn't block the other host;
 - demo's split hosts are tracked separately.
 
+**Built (`weight.py`, `exchange.GuardedUSDM`):**
+- **Where it hooks:** each response is read in ccxt's `on_rest_response`, and each request is admitted in `fetch`, before it is sent. ccxt's `last_response_headers` is one attribute per client that concurrent calls overwrite, so it isn't used.
+- **No resent 429s:** ccxt's own retry loop never resends a 418/429. The public client's `maxRetriesOnFailure` used to resend a 429 three times within 3 s, which is the "failing to back off" that earns a ban.
+- **Where the class is set:**
+  - each guardian lane in `Lane._run` (a job's deadline is its timeout − 5 s), with governor and margin_mode protective;
+  - MCP tools in `mcp_server.PROTECTIVE_TOOLS` / `RESEARCH_TOOLS`;
+  - CLI commands in `cli.PROTECTIVE_CMDS` / `RESEARCH_CMDS`;
+  - admin is protective; lab and histdata are research.
+- **Writes:** any write (non-GET) makes the rest of its scope protective.
+- **Shared locks:** markets reloads under `Exchanges`' shared locks always run as protective.
+- **Measured limits (2026-10-02):**
+  - fapi.binance.com allows **2,400**/min; demo-fapi allows **6,000**/min. Each host's own exchangeInfo sets its limit.
+  - `x-mbx-used-weight-1m` arrives lowercase.
+- **Ignored readings:** responses from `ticker/bookTicker` and `ticker/price`. The official SDK calls their header inaccurate.
+- **Reading lifetime:** Binance doesn't document whether the minute is fixed or rolling, so a reading is trusted for 60 s.
+- **Follow-ups:**
+  - the state is per process: the MCP server, CLI, guardian and lab learn the IP's usage only from their own responses. Sharing the last reading through kv is a follow-up.
+  - `lifecycle_data.py` calls fapi over raw httpx, so it is not guarded.
+
 ## Build (who)
 1. **Stream collector + local candle store** (`market/streams.py`): tickers, mark/premium/funding, klines for the liquid universe, a reconnect at 24h, SQLite. It is a guardian process like `LiquidationRecorder`, so binance-bot-99 wires it.
 2. **Trigger rules** (`scan_triggers.py`, pure and tested), each logged with its own counts for later evaluation.

@@ -30,7 +30,7 @@ import os
 import secrets
 from typing import Any
 
-from . import audit, equity_marks, risk_budget
+from . import audit, equity_marks, risk_budget, weight
 from . import killswitch as ks
 from . import killswitch_rearm as rearm
 from . import setup_ladder as L
@@ -212,7 +212,8 @@ def main() -> None:
     install_log_redaction()
     args = parser().parse_args()
     audit.set_process("admin")
-    with audit.acting(f"admin:{args.cmd}"):   # the human's kill-switch rows say so (#24)
+    # the human's kill-switch rows say so (#24); a flatten never waits for exchange budget (#70)
+    with audit.acting(f"admin:{args.cmd}"), weight.tagged(weight.PROTECTIVE):
         out = asyncio.run(run(args))
     print(json.dumps(out, indent=2, default=str))
     if out.get("ok") is False:

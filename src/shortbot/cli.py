@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import allocator, audit, audit_view, backup, killswitch_ops, news, research, scanner, setups
+from . import allocator, audit, audit_view, backup, killswitch_ops, news, research, scanner, setups, weight
 from .app import close_app, get_app
 from .cli_args import build_parser
 from .cli_brief import brief
@@ -240,8 +240,16 @@ def tool_body(module: str, name: str):
     return getattr(mod, name).__wrapped__
 
 
+# Exchange weight classes (#70, weight.py), as for the MCP tools: order / close / stop / amend paths never wait for
+# budget, scans and studies yield to them, every other command is a desk read (untagged).
+PROTECTIVE_CMDS = frozenset({"open", "close", "move-stop", "widen-stop", "add", "propose", "cancel-group", "amend",
+                             "update-plan", "set-params"})
+RESEARCH_CMDS = frozenset({"scan", "map", "sweeps", "study", "book-plan"})
+
+
 async def _audited(args: argparse.Namespace) -> object:
-    with audit.acting(f"cli:{args.cmd}"):
+    with audit.acting(f"cli:{args.cmd}"), weight.tagged(weight.pick(args.cmd, PROTECTIVE_CMDS, RESEARCH_CMDS),
+                                                        wait_s=weight.ENTRY_WAIT_S):
         if args.cmd in READS:
             return await _run(args)
         j = get_app().journal   # the singleton _run uses; close_app leaves its journal open

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from . import audit
+from . import audit, weight
 from .stops import is_clock_drift
 
 log = logging.getLogger("shortbot.guardian")
@@ -126,7 +126,8 @@ class Lane:
 
     async def _run(self, job: Job) -> None:
         try:   # a hung await (socket, DB lock) only ever holds up this lane
-            with audit.acting(f"guardian:{job.name}"):   # what it journals is attributed to the job (#24)
+            # what it journals is attributed to the job (#24); its exchange calls wait their turn by lane (#70)
+            with audit.acting(f"guardian:{job.name}"), weight.lane_job(self.name, job.name, job.timeout_s):
                 await asyncio.wait_for(job.fn(), job.timeout_s)
         except Exception as e:  # noqa: BLE001  (incl. TimeoutError from wait_for)
             await self._failed(job, e)

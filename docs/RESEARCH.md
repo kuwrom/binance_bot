@@ -35,6 +35,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 | Default management of a setup | `Setup.default_plan` in `setups.py` | `by_setup` avg R, MAE/MFE |
 | Backtest slippage model | `fill_report.calibrated_costs(journal)` once `calibrate()` is ok (30 trades, 20 days, one mode) | `journal` → `stats.fill_quality`: demo fills vs the mainnet price at each fill, in bps, vs the model |
 | Guardian alert thresholds | Constants at the top of `guardian_positions.py` (job cadence and timeouts: `guardian.py`) | alert usefulness (journal alerts) |
+| New exchange caller (job, tool, script) | Tag its entry point with a weight class (`weight.tagged`): order paths protective, scans research, untagged = desk. A new guardian lane goes in `weight.GUARDIAN_LANES` (docs/SCANNING.md, weight guard) | `budget_wait` errors, 429/418 warnings in the logs |
 | New data source (paid API later, etc.) | New module, then add it to `build_metrics`/`news` behind `data_missing` so failures fail closed. Any third-party text it returns reaches the agent only as `untrusted.wrap(...)`, never in the brief | as above |
 
 ## Rules of evidence
