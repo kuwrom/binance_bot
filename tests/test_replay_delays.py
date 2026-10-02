@@ -53,3 +53,12 @@ def test_episodes_and_table():
     assert t0["mean_r"] == pytest.approx(0.6) and t0["coins"] == 2 and tab[1]["n"] == 0
     reg = RD.register_rows(tab, 30, "both/5/25")
     assert len(reg) == 1 and reg[0]["family"] == "replay.pump_fade" and reg[0]["params"]["delay_min"] == 0
+
+
+def test_table_reports_the_paired_cost_of_waiting():
+    cs = [cand(sym=f"S{k}", t=T + k * 86_400_000) for k in range(4)]
+    res = {"pump_fade": [(c, {0: {"filled": True, "r": 0.5}, 5: {"filled": True, "r": 0.3 + k / 100}})
+                         for k, c in enumerate(cs)]}
+    tab = RD.table(res, delays=(0, 5))
+    assert tab[0]["delta_r"] == 0 and tab[1]["delta_r"] == pytest.approx(-0.185) and tab[1]["delta_n"] == 4
+    assert tab[1]["delta_t_2way"] is not None and tab[1]["delta_t_2way"] < 0

@@ -91,11 +91,16 @@ def table(results: dict[str, list[tuple[dict[str, Any], dict[int, dict | None]]]
             daily: dict[str, float] = {}
             for v, dd in zip(vals, days):
                 daily[dd] = daily.get(dd, 0.0) + v
+            pairs = [(c, r[d]["r"] - r[delays[0]]["r"]) for c, r in items
+                     if r.get(d) and r[d].get("filled") and r.get(delays[0]) and r[delays[0]].get("filled")]
+            dinf = CS.mean_inference([x for _, x in pairs], [rs.day_of(c["ts_ms"]) for c, _ in pairs],
+                                     [c["symbol"] for c, _ in pairs])
             out.append({"setup": setup, "delay_min": d, "episodes": len(items), "n": inf["n"], "mean_r": inf["mean"],
                         "t_day": inf["t_day"], "t_coin": inf["t_coin"], "t_2way": inf["t_2way"],
                         "se_2way": inf["se_2way"], "days": inf["days"], "coins": inf["coins"],
                         "win": sum(v > 0 for v in vals) / len(vals) if vals else None,
                         "stopped": sum(str(x.get("reason", "")).startswith("stop") for _, x in done),
+                        "delta_r": dinf["mean"], "delta_n": dinf["n"], "delta_t_2way": dinf["t_2way"],
                         "daily": daily})
     return out
 

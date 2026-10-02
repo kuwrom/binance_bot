@@ -134,10 +134,12 @@ def report_md(tab: list[dict[str, Any]], rep: dict[str, Any], cfg: dict[str, Any
              "coin perp listed at the moment; risk limits in force then. Plan: the scan's bracket (stop +1σ√24h, "
              "target −2σ√24h), the setup's time stop (≤ 72 h) and breakeven; one trade per setup-episode.", "",
              "## Setups' R by entry delay (after costs)", "",
-             "| setup | delay | n | mean R | t (day) | t (2-way) | win | days | coins |", "|---|---|---|---|---|---|---|---|---|"]
+             "| setup | delay | n | mean R | t (day) | t (2-way) | vs +0 (paired) | t (2-way) | win | days | coins |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in tab:
         lines.append(f"| {r['setup']} | +{r['delay_min']} min | {r['n']} | {f(r['mean_r'], 3)} | {f(r['t_day'])} | "
-                     f"{f(r['t_2way'])} | {f(r['win'])} | {r['days']} | {r['coins']} |")
+                     f"{f(r['t_2way'])} | {f(r['delta_r'], 3)} | {f(r['delta_t_2way'])} | {f(r['win'])} | "
+                     f"{r['days']} | {r['coins']} |")
     keys = ("n", "days", "avg_short_ret_24h", "avg_excess_ret_24h", "avg_net_ret_24h", "hit_rate_pct",
             "squeeze_rate_pct")
     lines += ["", "## Desk research report on the replayed scans (research.report, 24h short return %)", "",
