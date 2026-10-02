@@ -130,6 +130,17 @@ def infer_args(rows: list[dict[str, Any]], depth: int = 25) -> dict[str, Any]:
             "inferred": True}
 
 
+def now_threshold(coins: dict[str, dict[str, Any]], n_logged: int, depth: int = 25) -> float:
+    """min_change of an old "now" scan (ranked by |4h| move >= min_change / 2 from the market map; the 4h moves were
+    not logged): the largest usual threshold that lets at least as many coins through as the scan logged, so only
+    the COUNT of the logged scan is used, never which coins it held."""
+    moves = [abs(c["r4h"]) for c in coins.values() if c.get("r4h") is not None]
+    for m in THRESHOLDS:
+        if min(sum(1 for x in moves if x >= m / 2), depth) >= n_logged:
+            return m
+    return 10.0
+
+
 class Oracle:
     """Optional stand-ins for the blocked feeds (verification only): what the live scan logged for each coin."""
 

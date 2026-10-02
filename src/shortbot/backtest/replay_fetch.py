@@ -27,7 +27,7 @@ import httpx
 from .. import clock
 from .. import histdata_vision as V
 from ..exchange import NO_DELIVERY
-from ..histdata import _is_coin_perp
+from ..histdata import INDEX_PERPS
 from . import replay_bars as RB
 from .replay_store import Store, daily_from_inputs, parse_klines, ro_connect
 
@@ -62,7 +62,7 @@ def build_meta(prod: list[dict], demo: list[dict], hist_coins: dict[str, dict], 
     out = {}
     for s in prod:
         raw = s["symbol"]
-        if s.get("contractType") != "PERPETUAL" or not _is_coin_perp(raw, s):
+        if not _coin_perp(s):
             continue
         onboard = int(s.get("onboardDate") or 0)
         d = int(s.get("deliveryDate") or NO_DELIVERY)
@@ -76,6 +76,13 @@ def build_meta(prod: list[dict], demo: list[dict], hist_coins: dict[str, dict], 
                     "demo": raw in demo_set, "min_notional": notional,
                     "spot": [h["spot_raw"], h.get("spot_mult") or 1.0] if h.get("spot_raw") else None}
     return out
+
+
+def _coin_perp(s: dict[str, Any]) -> bool:
+    """exchange.coin_perps' rule on exchangeInfo fields. Not histdata's ASCII-only name pattern: Binance lists coin
+    perps with Chinese names (牛来USDT, 我踏马来了USDT...), which the live scanner ranks like any other."""
+    return (s.get("contractType") == "PERPETUAL" and s.get("underlyingType") == "COIN" and s.get("quoteAsset") == "USDT"
+            and s["symbol"].endswith("USDT") and s["symbol"] not in INDEX_PERPS)
 
 
 def hist_coins(hist_db: Path | str | None) -> dict[str, dict]:

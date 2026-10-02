@@ -120,3 +120,11 @@ def test_world_drops_a_stale_wal_from_a_killed_run(tmp_path):
     db2 = sqlite3.connect(str(w2))
     assert db2.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert db2.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='junk'").fetchone()[0] == 0
+
+
+def test_now_threshold_matches_the_logged_count():
+    coins = {f"C{i}": {"r4h": r} for i, r in enumerate([11.0, -6.8, 5.6, 3.9, 2.7, 1.2, None])}
+    assert W.now_threshold(coins, 5, 25) == 5.0          # |r4h| >= 2.5 passes exactly five coins
+    assert W.now_threshold(coins, 3, 25) == 10.0
+    assert W.now_threshold(coins, 2, 2) == 10.0          # a full scan (depth reached): the MCP default
+    assert W.now_threshold({}, 5, 25) == 10.0

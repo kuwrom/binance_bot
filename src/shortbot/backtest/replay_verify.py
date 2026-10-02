@@ -24,7 +24,7 @@ from typing import Any
 from .. import clock
 from .. import provenance as P
 from ..journal import Journal
-from ..market.market_map import build_map
+from ..market.market_map import build_map, cached
 from ..scanner import scan_shorts
 from . import replay_compare as RC
 from . import replay_world as W
@@ -75,6 +75,10 @@ async def replay(scans: list[dict[str, Any]], rex: ReplayExchange, journal: Jour
                     except Exception as e:  # noqa: BLE001 - live keeps the old map too
                         map_err = f"{type(e).__name__}: {e}"
                 built = m
+            if args["direction"] == "now" and args.get("inferred"):
+                with clock.at(t):
+                    cm = cached(journal, 3600)
+                args["min_change"] = W.now_threshold((cm or {}).get("coins") or {}, len(sc["rows"]), args["depth"])
             if oracle is not None:
                 oracle.load(sc["rows"])
             before = journal.db.execute("SELECT COALESCE(MAX(id), 0) FROM candidates").fetchone()[0]
