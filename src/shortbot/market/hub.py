@@ -146,6 +146,7 @@ class MarketContext:
 
     async def news(self) -> dict:
         from .. import news as _news
+        """Raw (cleaned) news for signals; whatever reaches the agent is wrapped (news.for_agent, signal features)."""
         return await self._get(("news",), "news", lambda: _news.news_for(self.base), {})
 
     async def listing_news(self) -> list[dict]:

@@ -18,6 +18,8 @@ from typing import Any
 
 import httpx
 
+from ..untrusted import token, wrap
+
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) shortbot-research"}
 CG_TRENDING = "https://api.coingecko.com/api/v3/search/trending"
 HYPE_URL = ("https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/social/hype/"
@@ -55,7 +57,8 @@ async def coingecko_trending() -> dict[str, int]:
 
 
 async def binance_hype() -> dict[str, dict[str, Any]]:
-    """{SYMBOL: {hype, sentiment, summary}} across chains (max hype if a symbol appears twice)."""
+    """{SYMBOL: {hype, sentiment, summary}} across chains (max hype if a symbol appears twice). The AI summary is
+    third-party text (wrapped as untrusted data); sentiment is kept only as a short label."""
     async def fetch():
         out: dict[str, dict[str, Any]] = {}
         async with httpx.AsyncClient(headers=UA, timeout=15) as c:
@@ -66,8 +69,8 @@ async def binance_hype() -> dict[str, dict[str, Any]]:
                     info = it.get("socialHypeInfo") or {}
                     hype = float(info.get("socialHype") or 0)
                     if sym and hype >= out.get(sym, {}).get("hype", -1):
-                        out[sym] = {"hype": hype, "sentiment": info.get("sentiment"),
-                                    "summary": (info.get("socialSummaryBrief") or "")[:200],
+                        out[sym] = {"hype": hype, "sentiment": token(info.get("sentiment")),
+                                    "summary": wrap(info.get("socialSummaryBrief") or "", "binance_hype", 200),
                                     "wash_trading_tag": "Wash Trading Behavior" in (it.get("tagInfoList") or {})}
         return out
     return await _cached("hype", 1800, fetch)

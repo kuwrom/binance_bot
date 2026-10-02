@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import research
+from . import alerts_view, research
 from .app import get_app
 from .entries import EntryDesk
 from .mcp_server import tool
@@ -115,23 +115,29 @@ async def journal(limit: int = 20) -> dict[str, Any]:
     and active learnings. Review before trading."""
     j = get_app().journal
     return {"stats": j.stats(), "open_trades": j.open_trades(include_opening=True), "recent_trades": j.trades(limit),
-            "recent_decisions": j.decisions(limit=limit), "recent_alerts": j.alerts(limit),
+            "recent_decisions": j.decisions(limit=limit),
+            "recent_alerts": [alerts_view.for_agent(a) for a in j.alerts(limit)],
             "learnings": j.learnings()}
 
 
 @tool
-async def add_learning(statement: str, evidence: str, setup: str | None = None, status: str = "hypothesis",
-                       confidence: str = "low") -> dict[str, Any]:
+async def add_learning(statement: str, evidence: str, provenance: list[str], setup: str | None = None,
+                       status: str = "hypothesis", confidence: str = "low") -> dict[str, Any]:
     """Record a research finding so future sessions start from it. status: hypothesis|supported|rejected|adopted;
-    confidence: low|medium|high. Evidence should cite trade ids, research_report numbers or sources."""
-    return {"ok": True, "learning_id": get_app().journal.add_learning(statement, evidence, setup, status, confidence)}
+    confidence: low|medium|high. Evidence should cite trade ids, research_report numbers or sources.
+    provenance (required): where the evidence came from, e.g. ["trade:12", "research_report", "coin_news:QNT",
+    "alert:345"]. Learnings resting on third-party text (news, announcements) are flagged in every brief."""
+    if not provenance:
+        raise ToolError("provenance is required: name where the evidence came from, e.g. ['trade:12']")
+    return {"ok": True, "learning_id": get_app().journal.add_learning(statement, evidence, setup, status, confidence,
+                                                                      provenance)}
 
 
 @tool
 async def update_learning(learning_id: int, status: str | None = None, evidence: str | None = None,
-                          confidence: str | None = None) -> dict[str, Any]:
-    """Update a learning as evidence accumulates (evidence is appended, never overwritten)."""
-    get_app().journal.update_learning(learning_id, status, evidence, confidence)
+                          confidence: str | None = None, provenance: list[str] | None = None) -> dict[str, Any]:
+    """Update a learning as evidence accumulates (evidence and provenance are appended, never overwritten)."""
+    get_app().journal.update_learning(learning_id, status, evidence, confidence, provenance)
     return {"ok": True}
 
 
@@ -144,7 +150,8 @@ async def research_report(min_n: int = 5) -> dict[str, Any]:
 
 @tool
 async def start_session(notes: str = "") -> dict[str, Any]:
-    """Start a trading session in the journal (call once at the beginning)."""
+    """Start a trading session in the journal (call once at the beginning). Acknowledges the alerts the brief listed
+    as unacknowledged and returns them (count by kind + the urgent ones), so none is acknowledged unseen."""
     app = get_app()
     return {"session_id": app.journal.start_session(app.settings.mode, notes), "mode": app.settings.mode,
-            "experiment": app.ex.experiment}
+            "experiment": app.ex.experiment, "alerts_acknowledged": alerts_view.acknowledge(app.journal)}

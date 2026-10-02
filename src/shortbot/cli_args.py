@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     le.add_argument("--setup")
     le.add_argument("--status", default="hypothesis", choices=("hypothesis", "supported", "rejected", "adopted"))
     le.add_argument("--confidence", default="low", choices=("low", "medium", "high"))
+    le.add_argument("--provenance", action="append", default=None,
+                    help="where the evidence came from (repeatable): trade:12, research_report, coin_news:QNT")
     sub.add_parser("map", help="market map: regime, breadth, sectors vs BTC, rotation, vetoes").add_argument(
         "--fresh", action="store_true", help="rebuild now instead of using the guardian's cached map")
     sw = sub.add_parser("sweeps", help="level-sweep study: how far price pokes past round numbers / 24h highs")

@@ -1,4 +1,8 @@
-"""Free news sources: Binance announcements (public CMS JSON), crypto RSS feeds, Fear & Greed."""
+"""Free news sources: Binance announcements (public CMS JSON), crypto RSS feeds, Fear & Greed.
+
+Titles, summaries and links are third-party text: cleaned on the way in (untrusted.clean), and returned to the agent
+only wrapped as {"untrusted_text", "source"} (`for_agent`, `coin_news`, `announcements`; signals wrap the text they
+put in features). The raw, cleaned items (`news_for`, `listing_announcements`) are for matching and dedupe."""
 
 from __future__ import annotations
 
@@ -11,6 +15,8 @@ from typing import Any
 
 import feedparser
 import httpx
+
+from .untrusted import clean, safe_url, wrap
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 Chrome/128 Safari/537.36"}
 CMS_LIST = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
@@ -95,9 +101,9 @@ async def binance_announcements(per_catalog: int = 15) -> list[dict]:
                 r.raise_for_status()
                 for cat in r.json().get("data", {}).get("catalogs", []):
                     for a in cat.get("articles", []):
-                        out.append({"catalog": name, "title": a["title"],
+                        out.append({"catalog": name, "title": clean(a["title"]),
                                     "time": _iso(a["releaseDate"] / 1000),
-                                    "url": ANNOUNCE_URL.format(code=a["code"])})
+                                    "url": safe_url(ANNOUNCE_URL.format(code=a["code"]))})
         return sorted(out, key=lambda x: x["time"], reverse=True)
     return await _cached("ann", 120, fetch)
 
@@ -113,8 +119,8 @@ async def listing_announcements(pages: int = LISTING_PAGES) -> list[dict]:
                 r.raise_for_status()
                 for cat in r.json().get("data", {}).get("catalogs", []):
                     for a in cat.get("articles", []):
-                        out.append({"title": a["title"], "time": _iso(a["releaseDate"] / 1000),
-                                    "url": ANNOUNCE_URL.format(code=a["code"])})
+                        out.append({"title": clean(a["title"]), "time": _iso(a["releaseDate"] / 1000),
+                                    "url": safe_url(ANNOUNCE_URL.format(code=a["code"]))})
         return sorted(out, key=lambda x: x["time"], reverse=True)
     return await _cached("ann_listing", LISTING_TTL, fetch)
 
@@ -133,8 +139,8 @@ async def rss_headlines(max_age_h: float = 48) -> list[dict]:
                 continue  # undated items would look fresh forever
             epoch = calendar.timegm(ts)  # feedparser structs are UTC
             if time.time() - epoch <= max_age_h * 3600:
-                items.append({"source": src, "title": e.get("title", ""), "time": _iso(epoch),
-                              "url": e.get("link", ""), "summary": _strip(e.get("summary", ""))[:300]})
+                items.append({"source": src, "title": clean(e.get("title", "")), "time": _iso(epoch),
+                              "url": safe_url(e.get("link", "")), "summary": clean(_strip(e.get("summary", "")))})
         return items
 
     async def fetch():
@@ -154,7 +160,8 @@ async def fear_greed() -> dict:
 
 
 async def news_for(base: str, max_items: int = 15) -> dict:
-    """Announcements + headlines mentioning a coin ticker, with bearish keywords flagged."""
+    """Announcements + headlines mentioning a coin ticker, with bearish keywords flagged. Raw: internal only (the
+    guardian matches and dedupes on it); the agent gets `coin_news`."""
     ann, rss = await asyncio.gather(binance_announcements(), rss_headlines(), return_exceptions=True)
     errors = [n for n, v in (("binance_announcements", ann), ("rss", rss)) if isinstance(v, BaseException)]
     ann = ann if isinstance(ann, list) else []
@@ -166,6 +173,36 @@ async def news_for(base: str, max_items: int = 15) -> dict:
     return {"coin": normalize_base(base), "binance_announcements": hits_a[:max_items],
             "headlines": hits_r[:max_items], "errors": errors,
             "note": "news sources failed: absence of news is NOT confirmed" if errors else None}
+
+
+def for_agent(res: dict) -> dict:
+    """A `news_for` result as the agent sees it: every title and summary wrapped as untrusted data."""
+    return {**res, "binance_announcements": [_for_agent(a) for a in res.get("binance_announcements") or []],
+            "headlines": [_for_agent(h) for h in res.get("headlines") or []]}
+
+
+async def coin_news(base: str, max_items: int = 15) -> dict:
+    return for_agent(await news_for(base, max_items))
+
+
+async def announcements(limit: int = 20) -> list[dict]:
+    """Latest Binance announcements as the agent sees them (titles wrapped as untrusted data)."""
+    return [_for_agent(a) for a in (await binance_announcements())[:limit]]
+
+
+def source_of(item: dict) -> str:
+    """Where a news item came from, as untrusted wrappers name it."""
+    return f"rss:{item['source']}" if item.get("source") else "binance_announcements"
+
+
+def _for_agent(item: dict) -> dict:
+    """Our own fields as they are; the third-party text only inside {"untrusted_text", "source"}."""
+    src = source_of(item)
+    out = {k: item[k] for k in ("catalog", "time", "bearish_keywords") if k in item}
+    out.update(url=safe_url(item.get("url")), title=wrap(item.get("title"), src))
+    if item.get("summary"):
+        out["summary"] = wrap(item["summary"], src)
+    return out
 
 
 def _iso(epoch: float) -> str:

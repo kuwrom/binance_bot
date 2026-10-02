@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from ..market import MarketContext
+from ..untrusted import wrap
 from .base import SignalOut, signal
 
 MAX_AGE_D = 90
@@ -54,6 +55,6 @@ async def listing_supply(ctx: MarketContext) -> SignalOut:
         if src:
             pat = dict(SOURCES)[src]
             hit = next(a for a in anns if pat.search(a["title"]))
-            feats.update(listing_source=src, listing_source_title=hit["title"][:160],
+            feats.update(listing_source=src, listing_source_title=wrap(hit["title"], "binance_announcements", 160),
                          listing_source_time=hit.get("time"))
     return SignalOut(features=feats)

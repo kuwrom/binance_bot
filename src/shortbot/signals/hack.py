@@ -8,6 +8,8 @@ import re
 from datetime import datetime, timezone
 
 from ..market import MarketContext
+from ..news import source_of
+from ..untrusted import wrap
 from .base import SignalOut, signal
 
 MAX_AGE_H = 72.0
@@ -32,7 +34,7 @@ def match(items: list[dict], now: datetime) -> dict:
     if not hits:
         return {"hack_flag": False}
     h, a = min(hits, key=lambda x: x[1])
-    return {"hack_flag": True, "hack_headline": (h.get("title") or "")[:200],
+    return {"hack_flag": True, "hack_headline": wrap(h.get("title"), source_of(h), 200),   # third-party text
             "hack_source": h.get("source") or "Binance",
             "hack_url": h.get("url"), "hack_age_h": round(a, 1), "hack_hits": len(hits),
             "hack_reimbursement": any(REIMBURSE_RE.search(x.get("title") or "") for x, _ in recent)}

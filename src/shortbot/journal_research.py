@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS predictions (
 CREATE INDEX IF NOT EXISTS idx_pred_unlabelled ON predictions (labelled_at, ts_ms);
 CREATE TABLE IF NOT EXISTS learnings (
     id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, setup TEXT,
-    statement TEXT NOT NULL, evidence TEXT, status TEXT NOT NULL, confidence TEXT
+    statement TEXT NOT NULL, evidence TEXT, status TEXT NOT NULL, confidence TEXT, provenance TEXT
 );
 """
 # Label method of a candidate's outcome. NULL = legacy (1h candles from the scan's floored hour, so the first bar
@@ -42,6 +42,9 @@ LABEL_VERSION = 2
 LABEL_MAX_TRIES = 5
 CANDIDATE_COLUMNS = {"label_v": "INTEGER", "label_tries": "INTEGER", "label_error": "TEXT",
                      "label_retry_ms": "INTEGER"}
+# provenance: JSON list of where the evidence came from ("trade:12", "research_report", "coin_news:QNT", "alert:345"),
+# so a learning planted by third-party text can be traced and flagged (#22). Learnings outlive sessions.
+LEARNING_COLUMNS = {"provenance": "TEXT"}
 LEARNING_STATUS = ("hypothesis", "supported", "rejected", "adopted")
 CONFIDENCE = ("low", "medium", "high")
 
@@ -54,6 +57,10 @@ class ResearchStore:
         for col, ddl in CANDIDATE_COLUMNS.items():
             if col not in have:
                 self.db.execute(f"ALTER TABLE candidates ADD COLUMN {col} {ddl}")
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(learnings)")}
+        for col, ddl in LEARNING_COLUMNS.items():
+            if col not in have:
+                self.db.execute(f"ALTER TABLE learnings ADD COLUMN {col} {ddl}")
 
     # ------------------------------------------------------------ candidates
     def log_candidates(self, ts: str, ts_ms: int, rows: list[dict[str, Any]], regime: str | None) -> int:
@@ -132,14 +139,16 @@ class ResearchStore:
 
     # ------------------------------------------------------------ learnings
     def add_learning(self, statement: str, evidence: str = "", setup: str | None = None,
-                     status: str = "hypothesis", confidence: str = "low") -> int:
+                     status: str = "hypothesis", confidence: str = "low", provenance: list[str] | None = None) -> int:
         _check(status, confidence)
+        prov = json.dumps(_tags(provenance)) if provenance is not None else None
         return self._insert(
-            "INSERT INTO learnings (created_at, updated_at, setup, statement, evidence, status, confidence)"
-            " VALUES (datetime('now'), datetime('now'), ?,?,?,?,?)", (setup, statement, evidence, status, confidence))
+            "INSERT INTO learnings (created_at, updated_at, setup, statement, evidence, status, confidence, provenance)"
+            " VALUES (datetime('now'), datetime('now'), ?,?,?,?,?,?)",
+            (setup, statement, evidence, status, confidence, prov))
 
     def update_learning(self, lid: int, status: str | None = None, evidence: str | None = None,
-                        confidence: str | None = None) -> None:
+                        confidence: str | None = None, provenance: list[str] | None = None) -> None:
         cur = self._rows("SELECT * FROM learnings WHERE id=?", (lid,))
         if not cur:
             raise ValueError(f"no learning #{lid}")
@@ -149,8 +158,12 @@ class ResearchStore:
         ev = row["evidence"] or ""
         if evidence:
             ev = f"{ev}\n- {evidence}".strip()
-        self.db.execute("UPDATE learnings SET status=?, confidence=?, evidence=?, updated_at=datetime('now')"
-                        " WHERE id=?", (status, confidence, ev, lid))
+        prov = json.loads(row.get("provenance") or "[]")
+        if provenance is not None:
+            prov += [t for t in _tags(provenance) if t not in prov]
+        self.db.execute("UPDATE learnings SET status=?, confidence=?, evidence=?, provenance=?, "
+                        "updated_at=datetime('now') WHERE id=?",
+                        (status, confidence, ev, json.dumps(prov) if prov else row.get("provenance"), lid))
         self.db.commit()
 
     def learnings(self, active_only: bool = True, setup: str | None = None) -> list[dict[str, Any]]:
@@ -160,7 +173,20 @@ class ResearchStore:
         if setup:
             q += " AND (setup=? OR setup IS NULL)"
             args.append(setup)
-        return self._rows(q + " ORDER BY updated_at DESC", tuple(args))
+        rows = self._rows(q + " ORDER BY updated_at DESC", tuple(args))
+        for r in rows:
+            r["provenance"] = json.loads(r["provenance"]) if r.get("provenance") else None
+        return rows
+
+
+def _tags(provenance: list[str]) -> list[str]:
+    """Provenance tags: short one-line strings ("trade:12", "coin_news:QNT", "alert:345"), at most 20."""
+    if isinstance(provenance, str) or not isinstance(provenance, list):
+        raise ValueError("provenance must be a list of strings, e.g. ['trade:12', 'research_report']")
+    tags = [" ".join(str(t).split())[:80] for t in provenance if str(t).strip()]
+    if not tags:
+        raise ValueError("provenance must name where the evidence came from, e.g. ['trade:12', 'coin_news:QNT']")
+    return tags[:20]
 
 
 def _check(status: str, confidence: str) -> None:

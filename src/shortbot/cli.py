@@ -29,7 +29,7 @@ async def _run(args: argparse.Namespace) -> object:
             case "snapshot":
                 return await scanner.coin_snapshot(app.ex, args.symbol)
             case "news":
-                return await news.news_for(args.symbol.upper())
+                return await news.coin_news(args.symbol.upper())
             case "account":
                 return await app.trader.account()
             case "positions":
@@ -47,7 +47,8 @@ async def _run(args: argparse.Namespace) -> object:
                 return await brief(app)
             case "learn":
                 return {"ok": True, "learning_id": app.journal.add_learning(
-                    args.statement, args.evidence, args.setup, args.status, args.confidence)}
+                    args.statement, args.evidence, args.setup, args.status, args.confidence,
+                    args.provenance or ["cli"])}
             case "map":
                 from .market.market_map import build_map, cached, render
                 m = (None if args.fresh else cached(app.journal, 900)) or await build_map(app.ex, app.journal)

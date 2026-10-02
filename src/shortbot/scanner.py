@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import indicators as ind
+from . import news
 from .exchange import Exchanges, to_symbol
 from .market import DataHub
 from .market.regime import market_regime  # noqa: F401  (re-exported: callers import it from here)
@@ -129,7 +130,7 @@ async def coin_snapshot(ex: Exchanges, symbol: str) -> dict:
             **_sweep_proof(ex, last, max(c[2] for c in c1h[-24:]) if c1h else None, atr1h, stop_option),
             "hint": f"Wider stop => smaller size (auto-sized to the risk budget). Max leverage for a stop is "
                     f"~100/(stop% + {lim.liq_buffer_pct + 1})."},
-        "news": nws,
+        "news": news.for_agent(nws),
         **({"signal_errors": ev.errors} if ev.errors else {}),
     }
 
