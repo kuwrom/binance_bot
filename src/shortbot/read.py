@@ -172,6 +172,8 @@ def registry_view(journal, stage: str, game: str, labels: list[str], setups: lis
         return {"nodes": R.node_cards(journal.db, ids),
                 "lessons": R.search(journal.db, " ".join([stage, game, *setups]).replace("_", " "), 5),
                 "how_to_read": "status live = evidence-backed; shadow/draft = hypothesis. mean is per the metric "
-                               "(trade_r in R, else short return %). 'forensics' sources are hindsight-picked."}
+                               "(trade_r in R, else short return %), raw. 'forensics' sources are hindsight-picked. "
+                               "forward = the pre-registered test since the node's plan (vs the same scan's "
+                               "control, after costs): the only evidence that promotes."}
     except Exception as e:  # noqa: BLE001 - the registry is an aid; a read never fails because of it
         return {"error": f"{type(e).__name__}: {e}"}

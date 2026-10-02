@@ -91,6 +91,9 @@ async def _run(args: argparse.Namespace) -> object:
                     return R.card(app.journal.db, args.arg) or {"error": "unknown pattern"}
                 if args.action == "search":
                     return R.search(app.journal.db, args.arg or "", 10)
+                if args.action == "forward":
+                    from .registry_forward import report as forward_report
+                    return forward_report(app.journal.db, args.arg)
                 if args.action == "status":
                     if not (args.arg and args.status):
                         return {"error": "usage: shortbot registry status ID --status S --reason R"}

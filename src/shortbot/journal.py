@@ -212,12 +212,12 @@ class Journal(ResearchStore):
                                                    (*args, limit))]
 
     def closed_results(self, all_modes: bool = False) -> list[dict[str, Any]]:
-        """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input), and the
-        limits each was sized under (entry_features.limits, JSON text) for attribution."""
+        """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input; the
+        registry's forward feed), and the limits each was sized under (entry_features.limits, JSON text)."""
         m, args = self._in_mode(all_modes)
         rows = self._rows(
-            "SELECT setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct, mfe_pct,"
-            " entry_price, initial_stop, amount, plan, CASE WHEN json_valid(entry_features)"
+            "SELECT id, symbol, setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct,"
+            " mfe_pct, entry_price, initial_stop, amount, plan, CASE WHEN json_valid(entry_features)"
             " THEN json_extract(entry_features, '$.limits') END AS limits"
             f" FROM trades WHERE status='closed' AND pnl IS NOT NULL AND {m}"
             " ORDER BY closed_at", args)
@@ -225,7 +225,7 @@ class Journal(ResearchStore):
             pinned = (json.loads(r.pop("plan") or "{}") or {}).get("r1_usdt")   # adds/split entries pin 1R
             risk = pinned or ((r["initial_stop"] - r["entry_price"]) * r["amount"] if r["initial_stop"]
                               and r["entry_price"] and r["amount"] else None)
-            r["r_multiple"] = r["pnl"] / risk if risk else None
+            r["r_multiple"], r["risk_usdt"] = (r["pnl"] / risk if risk else None), risk
             r["session"] = session_bucket(datetime.fromisoformat(r["opened_at"])) if r.get("opened_at") else None
         return rows
 

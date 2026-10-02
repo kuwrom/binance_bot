@@ -88,8 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
                                       "patterns (week event study: pumps, sweeps, squeezes, funding x liquidity)")
     st.add_argument("name", choices=("ladder", "laggard", "sweeps", "patterns"))
     st.add_argument("--fetch", action="store_true", help="patterns: refresh 10 days of hourly data for every perp")
-    rg = sub.add_parser("registry", help="pattern registry: tree | card ID | search TEXT | seed | status ID --status S")
-    rg.add_argument("action", choices=("tree", "card", "search", "seed", "status"))
+    rg = sub.add_parser("registry", help="pattern registry: tree | card ID | search TEXT | seed | status ID --status S"
+                                         " | forward [ID] (the pre-registered forward test of every non-draft node)")
+    rg.add_argument("action", choices=("tree", "card", "search", "seed", "status", "forward"))
     rg.add_argument("arg", nargs="?")
     rg.add_argument("--status", choices=("draft", "shadow", "live", "probation", "retired"))
     rg.add_argument("--reason")

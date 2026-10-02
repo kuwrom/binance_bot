@@ -107,6 +107,20 @@ def test_feature_mining_is_reported_as_exploratory_and_veto_keys_drop_numbers():
     assert fm["features"] == len(r["by_feature_tertile"]) >= 1 and fm["buckets"] >= 3
     assert "exploratory" in fm["note"]
     assert list(r["by_veto_reason"]) == ["OI $#M < $#M"]
+    buckets = [b for t in r["by_feature_tertile"].values() for b in t.values() if b["n"]]
+    assert buckets and all(b["descriptive_only"] is True for b in buckets)     # 3 days: the flag survives compact
+    assert "several buckets" in r["how_to_read"]
+
+
+def test_t_tail_and_quantile_match_the_tables():
+    from shortbot.research_stats import t_ppf, t_sf
+    assert t_sf(2.093, 19) == pytest.approx(0.025, abs=2e-5) and t_sf(12.706, 1) == pytest.approx(0.025, abs=2e-5)
+    assert t_sf(0.0, 7) == 0.5 and t_sf(-2.093, 19) == pytest.approx(0.975, abs=2e-5)
+    assert t_sf(3.0, 19) == pytest.approx(0.003685, abs=2e-5)
+    assert t_ppf(0.975, 19) == pytest.approx(2.093, abs=1e-3) and t_ppf(0.975, 2000) == pytest.approx(1.9612, abs=1e-3)
+    assert t_ppf(0.025, 19) == pytest.approx(-2.093, abs=1e-3)
+    c = clustered_mean([1.0, 2.0, 3.0, 5.0], ["a", "a", "b", "b"])
+    assert c["se"] == pytest.approx((c["ci95"][1] - c["mean"]) / t975(1))
 
 
 def test_report_reads_more_than_5000_rows():

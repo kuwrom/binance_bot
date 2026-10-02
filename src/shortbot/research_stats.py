@@ -13,6 +13,8 @@ overlapping 24h outcome, so rows are not independent draws:
   agree) is raised to it (design effect >= 1, so n_eff <= n), and t(G-1) is kept even then: the more conservative of
   Dean & Pagano's two variants, because with few days a small between-day spread is no evidence of independence.
 - Below MIN_DAYS days the intervals are descriptive only ("few" clusters: < 20-50, Cameron & Miller §VI.A).
+- t_sf / t_ppf: Student's t tail and quantile (regularized incomplete beta) for the registry's forward test, whose
+  Bonferroni hurdle (alpha / M) needs quantiles far beyond t975 (registry_forward.py).
 """
 
 from __future__ import annotations
@@ -102,17 +104,65 @@ def clustered_mean(values: Sequence[float], clusters: Sequence[Hashable]) -> dic
     n_eff = s^2 / V (<= n). ci95 and n_eff are None with fewer than 2 clusters."""
     n = len(values)
     if not n:
-        return {"mean": None, "n": 0, "days": 0, "n_eff": None, "ci95": None}
+        return {"mean": None, "n": 0, "days": 0, "n_eff": None, "ci95": None, "se": None}
     m = math.fsum(values) / n
     v3, g = _cv3(values, clusters)
-    out = {"mean": m, "n": n, "days": g, "n_eff": None, "ci95": None}
+    out = {"mean": m, "n": n, "days": g, "n_eff": None, "ci95": None, "se": None}
     if g < 2:
         return out
     s2 = statistics.variance(values)
     v = max(v3, s2 / n)
     half = t975(g - 1) * math.sqrt(v)
-    out.update(ci95=(m - half, m + half), n_eff=s2 / v if v > 0 else float(n))
+    out.update(ci95=(m - half, m + half), n_eff=s2 / v if v > 0 else float(n), se=math.sqrt(v))
     return out
+
+
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued fraction of the incomplete beta function (modified Lentz; Press et al., Numerical Recipes §6.4)."""
+    tiny = 1e-300
+    c, d = 1.0, 1.0 - (a + b) * x / (a + 1)
+    d = 1.0 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, 400):
+        for aa in (m * (b - m) * x / ((a + 2 * m - 1) * (a + 2 * m)),
+                   -(a + m) * (a + b + m) * x / ((a + 2 * m) * (a + 2 * m + 1))):
+            d = 1.0 + aa * d
+            d = 1.0 / (d if abs(d) > tiny else tiny)
+            c = 1.0 + aa / c
+            c = c if abs(c) > tiny else tiny
+            h *= d * c
+        if abs(d * c - 1.0) < 1e-15:
+            break
+    return h
+
+
+def betainc(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta I_x(a, b)."""
+    if x <= 0 or x >= 1:
+        return 0.0 if x <= 0 else 1.0
+    front = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1) / (a + b + 2):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - front * _betacf(b, a, 1 - x) / b
+
+
+def t_sf(t: float, df: float) -> float:
+    """P(T > t) for Student's t with df degrees of freedom (one-sided p of a mean > 0)."""
+    tail = 0.5 * betainc(df / 2, 0.5, df / (df + t * t))
+    return tail if t >= 0 else 1.0 - tail
+
+
+def t_ppf(q: float, df: float) -> float:
+    """q-quantile of Student's t (bisection on t_sf), e.g. t_ppf(1 - alpha / M, G - 1) for a Bonferroni hurdle."""
+    if q < 0.5:
+        return -t_ppf(1 - q, df)
+    lo, hi = 0.0, 1.0
+    while t_sf(hi, df) > 1 - q:
+        lo, hi = hi, hi * 2
+    for _ in range(100):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if t_sf(mid, df) > 1 - q else (lo, mid)
+    return (lo + hi) / 2
 
 
 def wilson(k: float, n: float, z: float = Z975) -> tuple[float, float]:

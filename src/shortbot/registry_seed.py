@@ -1,11 +1,13 @@
 """Seed the pattern registry (registry.py) from what the desk already knows: tape states, lifecycle stages,
 controller labels, setups, the week-study detectors (with their episodes), the forensics script catalog
 (docs/SCRIPTS.md, data/scripts_catalog.json) and the 60-day backtest (trials + the selected variant's trades).
-Idempotent: re-running adds only what is new; changed definitions become new versions."""
+Idempotent: re-running adds only what is new; changed definitions become new versions. Forward rows (labelled scans,
+closed trades: feed_candidates) are rebuilt from the journal on every feed (registry_forward.py, #26)."""
 
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -150,12 +152,14 @@ def _ts(s: str) -> int:
 def seed_all(journal, bt_dir: str | Path | None = None, week_coins: list | None = None) -> dict[str, Any]:
     db = journal.db
     R.ensure(db)
+    from . import registry_forward as F
     from .library_seed import seed_library
     out: dict[str, Any] = {"static": seed_static(db), "scripts": seed_scripts(db), "library": seed_library(db)}
     if week_coins:
         out["week_study_episodes"] = seed_week_study(db, week_coins)
     if bt_dir and Path(bt_dir, "results.json").exists():
         out["backtest_episodes"] = seed_backtest(db, Path(bt_dir, "results.json"), Path(bt_dir, "trades.json"))
+    out["plans_backfilled"] = F.freeze_missing(db)                 # pre-#26 versions: the forward clock starts now
     out["lessons_indexed"] = R.reindex_lessons(db)
     return out
 
@@ -167,34 +171,121 @@ def _discount(f: dict[str, Any]) -> bool:
     return bool((rate is not None and rate <= -0.001) or iv == 1 or (basis is not None and basis <= -100))
 
 
-def feed_candidates(journal, limit: int = 5000) -> int:
-    """Live episodes: every labelled scan candidate (72h outcome known) becomes an episode of the hierarchy nodes
-    it sat in AT SCAN TIME. Only candidates scanned after the node's current version was registered count (older
-    ones were classified by an older rule), and only nodes whose metric is the scan metric (% short return)."""
+def scan_nodes(c: dict[str, Any]) -> set[str]:
+    """The hierarchy nodes a scan candidate sat in AT SCAN TIME (tape state logged at scan time since #91)."""
     from .tape import classify
-    R.ensure(journal.db)
+    f, setups = c.get("features") or {}, c.get("setups") or []
+    tape_state = f.get("tape_state") or (classify(f)["state"] if f else None)
+    nodes = {f"lifecycle.{f.get('lifecycle_stage')}" if f.get("lifecycle_stage") else None,
+             f"tape.{tape_state}" if tape_state else None,
+             *(f"controller.{x}" for x in f.get("controller_labels") or []), *(f"setup.{s}" for s in setups)}
+    if "pump_fade" in setups and _discount(f):           # learning #19 shadow candidate, live
+        nodes.add("detector.pump_fade_discount_scan")
+    return nodes - {None}
+
+
+def _targets(db, feed: str) -> dict[str, tuple[int, int]]:
+    """node -> (latest version, forward start) for the latest versions whose frozen plan takes this feed."""
+    from . import registry_forward as F
+    out = {}
+    for (pid,) in db.execute("SELECT DISTINCT id FROM patterns"):
+        p = R.latest(db, pid)
+        pl = F.plan_of(db, pid, p["version"])
+        if pl and pl["plan"].get("feed") == feed:
+            out[pid] = (p["version"], pl["registered_ms"])
+    return out
+
+
+def _replace(db, pid: str, version: int, source: str, rows: list[dict[str, Any]]) -> int:
+    """Rewrite a node's forward rows of one source (relabels and late labels propagate; never INSERT OR IGNORE's
+    stale first outcome). Returns the net change in rows."""
+    q = "SELECT COUNT(*) FROM pattern_episodes WHERE pattern_id=? AND version=? AND source=?"
+    before = db.execute(q, (pid, version, source)).fetchone()[0]
+    db.execute("DELETE FROM pattern_episodes WHERE pattern_id=? AND version=? AND source=?", (pid, version, source))
+    R.add_episodes(db, pid, rows, version=version)                    # one transaction with the delete
+    return db.execute(q, (pid, version, source)).fetchone()[0] - before
+
+
+def _median(xs: dict[str, float]) -> float | None:
+    from .research_stats import MIN_SCAN_SYMBOLS
+    return statistics.median(xs.values()) if len(xs) >= MIN_SCAN_SYMBOLS else None
+
+
+def feed_candidates(journal) -> int:
+    """Forward episodes (registry_forward.py, #26): every labelled scan candidate scanned after a node's frozen plan
+    becomes, once per symbol-episode (rescans within 24h are the same bet), a `scan` episode of the nodes it sat in
+    AT SCAN TIME, scored against the same scan's unflagged coins after costs (features.adj); then closed trades
+    (feed_trades). Each node's forward rows are rebuilt on every call. Returns the net change in rows."""
+    from . import registry_forward as F
+    from .research import COST_PCT, HORIZON_H, funding_carry_24h
+    from .research_stats import episodes
+    db = journal.db
+    R.ensure(db)
+    F.freeze_missing(db)
+    targets = _targets(db, "scan")
     n = 0
-    by: dict[str, list[dict[str, Any]]] = {}
-    for c in journal.candidates(labelled_only=True, limit=limit):
-        if c.get("short_ret_24h") is None:
+    if targets:
+        rows = []
+        for r in db.execute("SELECT symbol, ts_ms, short_ret_24h, max_adverse_24h, features, setups, regime, tradable,"
+                            " score FROM candidates WHERE labelled_at IS NOT NULL AND short_ret_24h IS NOT NULL AND"
+                            " ts_ms >= ? ORDER BY ts_ms, id", (min(t for _, t in targets.values()),)):
+            c = {"symbol": r[0], "ts_ms": r[1], "ret": r[2], "adv": r[3], "features": json.loads(r[4] or "{}"),
+                 "setups": json.loads(r[5] or "[]"), "regime": r[6], "tradable": r[7], "score": r[8]}
+            c["nodes"] = scan_nodes(c)
+            rows.append(c)
+        by_scan: dict[int, list[dict[str, Any]]] = {}
+        for c in rows:
+            by_scan.setdefault(c["ts_ms"], []).append(c)
+        mkt = {ts: _median({c["symbol"]: c["ret"] for c in v}) for ts, v in by_scan.items()}
+        for node, (ver, since) in targets.items():
+            eps = []
+            for e in episodes([c for c in rows if node in c["nodes"] and c["ts_ms"] >= since], HORIZON_H):
+                ctl = _median({c["symbol"]: c["ret"] for c in by_scan[e["ts_ms"]] if node not in c["nodes"]})
+                net = e["ret"] - COST_PCT + funding_carry_24h(e["features"])
+                eps.append({"symbol": e["symbol"], "ts_ms": e["ts_ms"], "source": "scan", "oos": True,
+                            "outcome": e["ret"], "win": e["ret"] > 0.1, "mae_pct": e["adv"], "features": {
+                                "regime": e["regime"], "tradable": e["tradable"], "score": e["score"], "net": net,
+                                "vs_market": None if mkt[e["ts_ms"]] is None else e["ret"] - mkt[e["ts_ms"]],
+                                "vs_control": None if ctl is None else e["ret"] - ctl,
+                                "adj": None if ctl is None else net - ctl,
+                                "control_n": sum(node not in c["nodes"] for c in by_scan[e["ts_ms"]])}})
+            n += _replace(db, node, ver, "scan", eps)
+    return n + feed_trades(journal)
+
+
+def _trade_market_r(db, t: dict[str, Any], opened_ms: int, hold_h: float) -> tuple[float | None, int]:
+    """The market's drift over the hold, in the trade's R: median 24h short return of the coins without the trade's
+    setup in the last scan within 6h before entry, x hold / 24h, / the % move that is 1R. None until labelled."""
+    scan = db.execute("SELECT MAX(ts_ms) FROM candidates WHERE ts_ms <= ? AND ts_ms >= ?",
+                      (opened_ms, opened_ms - 6 * 3_600_000)).fetchone()[0]
+    rows = db.execute("SELECT symbol, short_ret_24h, setups FROM candidates WHERE ts_ms=? AND short_ret_24h IS NOT"
+                      " NULL", (scan,)).fetchall() if scan is not None else []
+    ctl = {s: r for s, r, st in rows if s != t["symbol"] and t["setup"] not in json.loads(st or "[]")}
+    size = (t.get("entry_price") or 0) * (t.get("amount") or 0)
+    med, one_r_pct = _median(ctl), (t["risk_usdt"] / size * 100 if size else None)
+    return (None if med is None or not one_r_pct else med * hold_h / 24 / one_r_pct), len(ctl)
+
+
+def feed_trades(journal) -> int:
+    """Closed trades opened after a strategy node's frozen plan become its `live` episodes (setup -> node as in
+    read.SETUP_STRATEGY): outcome = net R (exchange truth: fees and funding included), adj = R - market drift."""
+    from . import registry_forward as F
+    db = journal.db
+    targets = _targets(db, "trades")
+    if not targets:
+        return 0
+    by: dict[str, list[dict[str, Any]]] = {node: [] for node in targets}
+    for t in journal.closed_results(all_modes=True):      # demo and live fills are both market evidence
+        node = F.setup_strategy().get(t.get("setup") or "")
+        if node not in targets or t.get("r_multiple") is None or not t.get("risk_usdt"):
             continue
-        f = c.get("features") or {}
-        tape_state = f.get("tape_state") or (classify(f)["state"] if f else None)   # logged at scan time since #91
-        nodes = [f"lifecycle.{f.get('lifecycle_stage')}" if f.get("lifecycle_stage") else None,
-                 f"tape.{tape_state}" if tape_state else None,
-                 *(f"controller.{x}" for x in f.get("controller_labels") or []),
-                 *(f"setup.{s}" for s in c.get("setups") or [])]
-        if "pump_fade" in (c.get("setups") or []) and _discount(f):   # learning #19 shadow candidate, live
-            nodes.append("detector.pump_fade_discount_scan")
-        ep = {"symbol": c["symbol"], "ts_ms": c["ts_ms"], "source": "scan", "oos": True,
-              "outcome": c["short_ret_24h"], "win": c["short_ret_24h"] > 0.1, "mae_pct": c.get("max_adverse_24h"),
-              "features": {"regime": c.get("regime"), "tradable": c.get("tradable"), "score": c.get("score")}}
-        for node in filter(None, nodes):
-            by.setdefault(node, []).append(ep)
-    for node, rows in by.items():
-        p = R.latest(journal.db, node)
-        if not p or p["metric"] != SCAN_METRIC:
-            continue                                   # never mix units (R vs %) inside one node
-        born = int(datetime.fromisoformat(p["created_at"]).timestamp() * 1000)
-        n += R.add_episodes(journal.db, node, [r for r in rows if r["ts_ms"] >= born], version=p["version"])
-    return n
+        opened = int(datetime.fromisoformat(t["opened_at"]).timestamp() * 1000)
+        if opened < targets[node][1]:
+            continue
+        hold_h = (datetime.fromisoformat(t["closed_at"]).timestamp() * 1000 - opened) / 3_600_000
+        mkt, n_ctl = _trade_market_r(db, t, opened, hold_h)
+        by[node].append({"symbol": t["symbol"], "ts_ms": opened, "source": "live", "oos": True,
+                         "outcome": t["r_multiple"], "win": t["r_multiple"] > 0, "mae_pct": t.get("mae_pct"),
+                         "features": {"trade_id": t["id"], "hold_h": round(hold_h, 2), "market_r": mkt,
+                                      "adj": None if mkt is None else t["r_multiple"] - mkt, "control_n": n_ctl}})
+    return sum(_replace(db, node, targets[node][0], "live", rows) for node, rows in by.items())

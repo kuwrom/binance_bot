@@ -124,12 +124,12 @@ def _ci(c: dict[str, Any]) -> list[float] | None:
     return [round(c["ci95"][0], 2), round(c["ci95"][1], 2)] if c and c.get("ci95") else None
 
 
-COMPACT_DROP = ("n_eff", "ci95_short_ret_24h", "avg_net_ret_24h", "descriptive_only")
+COMPACT_DROP = ("n_eff", "ci95_short_ret_24h", "avg_net_ret_24h")
 
 
 def _summary(vals: list[dict[str, Any]], compact: bool = False) -> dict[str, Any]:
     """One observation per symbol-episode; existing keys keep their names and units, on that basis. compact (the
-    exploratory feature tertiles): existing keys + rows, days and the excess return with its CI."""
+    exploratory feature tertiles): existing keys + rows, days, the excess return with its CI and descriptive_only."""
     rows = [v for v in vals if v.get("short_ret_24h") is not None]
     obs = rs.episodes(rows, HORIZON_H)
     if not obs:
@@ -297,5 +297,7 @@ def report(journal, min_n: int = 5) -> dict[str, Any]:
                        "within 24h count once), rows = raw scan rows, days = distinct UTC days. Compare groups by "
                        "avg_excess_ret_24h (vs the same scan's median) and its ci95; descriptive_only = fewer than "
                        f"{rs.MIN_DAYS} days. avg_net_ret_24h = after costs. A veto is useful if its vetoed coins "
-                       "show a low short_ret or high squeeze_rate. Treat n < 30 episodes as anecdote.",
+                       "show a low short_ret or high squeeze_rate. Treat n < 30 episodes as anecdote. Buckets are "
+                       "descriptive and overlap: a coin with several setups or vetoes, or whose rescans cross a "
+                       "tertile cut, counts in several buckets, so bucket n's don't add up to the total.",
     }

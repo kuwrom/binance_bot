@@ -33,7 +33,7 @@ def test_versions_only_when_the_definition_changes_and_live_cannot_be_registered
         R.register(d, pat(id="x", status="live"))
 
 
-def test_card_is_coin_clustered_and_promotion_needs_oos_evidence():
+def test_card_is_coin_clustered_and_backtest_oos_evidence_never_promotes():
     d = db()
     R.register(d, pat())
     eps = [{"symbol": f"C{i}", "ts_ms": NOW - i * DAY, "source": "t", "oos": True, "outcome": 5.0 + (i % 3),
@@ -41,11 +41,11 @@ def test_card_is_coin_clustered_and_promotion_needs_oos_evidence():
     assert R.add_episodes(d, "script.discount_squeeze", eps) == 35
     assert R.add_episodes(d, "script.discount_squeeze", eps) == 0            # idempotent
     c = R.card(d, "script.discount_squeeze", NOW)
-    assert c["oos"]["n_coins"] == 35 and c["oos"]["ci95"][0] > 0 and c["verdict"] == "eligible for live"
-    assert R.set_status(d, "script.discount_squeeze", "live", "evidence")["ok"]
-    R.register(d, pat(id="weak", definition="w"))
-    R.add_episodes(d, "weak", [{"symbol": "A", "ts_ms": NOW, "source": "t", "oos": True, "outcome": 1.0}])
-    assert not R.set_status(d, "weak", "live", "hope")["ok"]
+    assert c["oos"]["n_coins"] == 35 and c["oos"]["ci95"][0] > 0 and c["oos"]["t_day"] >= 3   # the old gate: live
+    assert c["forward"]["status"] == "no_feed" and c["verdict"] == "keep shadow: no forward feed (not promotable)"
+    res = R.set_status(d, "script.discount_squeeze", "live", "evidence")
+    assert not res["ok"] and "forward" in res["error"]
+    assert R.latest(d, "script.discount_squeeze")["status"] == "shadow"
 
 
 def _eps(ts, n=35, out=lambda i: 5.0 + (i % 3)):
@@ -59,35 +59,16 @@ def _card(eps, **kw):
     return d, R.card(d, "script.discount_squeeze", NOW)
 
 
-def test_single_day_oos_has_no_day_clustered_t_and_is_not_eligible():
-    d, c = _card(_eps(lambda i: NOW - i * 60_000))                      # 35 coins, one day
-    assert c["oos"]["n_coins"] == 35 and c["oos"]["ci95"][0] > 0 and c["oos"]["t"] >= R.PROMOTE_MIN_T
+def test_card_stats_cluster_by_coin_and_by_day():
+    _, c = _card(_eps(lambda i: NOW - i * 60_000))                      # 35 coins, one day
+    assert c["oos"]["n_coins"] == 35 and c["oos"]["ci95"][0] > 0 and c["oos"]["t"] >= 3
     assert c["oos"]["t_day"] is None and c["oos"]["n_days"] == 1
-    assert c["verdict"] == "keep shadow: only 1 OOS day (need 10)"
-    res = R.set_status(d, "script.discount_squeeze", "live", "hope")
-    assert not res["ok"] and "only 1 OOS day" in res["error"]
-    assert R.latest(d, "script.discount_squeeze")["status"] == "shadow"
-
-
-def test_three_days_are_not_eligible_even_with_a_high_day_clustered_t():
-    d, c = _card(_eps(lambda i: NOW - (i % 3) * DAY))                   # 35 coins over 3 days
-    assert c["oos"]["n_days"] == 3 and c["oos"]["t_day"] > 3 * R.PROMOTE_MIN_T   # every other gate clears
-    assert c["verdict"] == "keep shadow: only 3 OOS days (need 10)"
-    assert not R.set_status(d, "script.discount_squeeze", "live", "hope")["ok"]
-
-
-def test_enough_days_but_no_day_clustered_t_is_not_eligible():
+    _, c = _card(_eps(lambda i: NOW - (i % 3) * DAY))                   # 35 coins over 3 days
+    assert c["oos"]["n_days"] == 3 and c["oos"]["t_day"] > 9
     # 12 days x coins scoring 5/6/7: every day's mean is 6, so no day-to-day variance and no t_day
-    d, c = _card(_eps(lambda i: NOW - (i % 12) * DAY, n=36, out=lambda i: 5.0 + i // 12))
+    _, c = _card(_eps(lambda i: NOW - (i % 12) * DAY, n=36, out=lambda i: 5.0 + i // 12))
     assert c["oos"]["n_days"] == 12 and c["oos"]["t_day"] is None and c["oos"]["ci95"][0] > 0
-    assert c["verdict"] == "keep shadow: no day-clustered t (no day-to-day variance)"
-
-
-def test_multi_day_oos_with_a_good_day_clustered_t_is_still_eligible():
-    d, c = _card(_eps(lambda i: NOW - (i % 12) * DAY), status="draft")   # 35 coins over 12 days
-    assert c["oos"]["n_days"] == 12 and c["oos"]["t_day"] >= R.PROMOTE_MIN_T
-    assert c["verdict"] == "eligible for live"
-    assert R.set_status(d, "script.discount_squeeze", "live", "evidence")["ok"]
+    assert c["verdict"] == "keep shadow: no forward feed (not promotable)"
 
 
 def test_decay_puts_a_live_pattern_on_probation():
@@ -98,7 +79,7 @@ def test_decay_puts_a_live_pattern_on_probation():
     new = [{"symbol": f"N{i}", "ts_ms": NOW - i * DAY, "source": "live", "oos": True, "outcome": (-1) ** i * 3.0}
            for i in range(12)]
     R.add_episodes(d, "script.discount_squeeze", old + new)
-    assert R.set_status(d, "script.discount_squeeze", "live", "evidence")["ok"]
+    d.execute("UPDATE patterns SET status='live'")                      # promoted earlier
     assert R.card(d, "script.discount_squeeze", NOW)["verdict"].startswith("probation")
 
 

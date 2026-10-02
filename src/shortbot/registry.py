@@ -3,10 +3,11 @@ is a versioned record with a status, its episodes (as-of features + outcome) and
 
     status: draft -> shadow -> live -> probation -> retired   (retired rows stay: they still count as trials)
 
-- a changed definition / detector / metric = a NEW version (old episodes stay with the old version)
-- promotion to live needs out-of-sample evidence (>= 30 OOS episodes on distinct coins over >= 10 days, CI above
-  0, coin- and day-clustered t >= 3; no day-clustered t fails); the code refuses otherwise.
-  Probation / retirement when the last-90-day CI crosses zero (decay alarm)
+- a changed definition / detector / metric / plan = a NEW version (old episodes stay with the old version)
+- every version freezes a plan at registration (metric, target sample, decision rule, spec hash: pattern_plans)
+- promotion to live needs a passed FORWARD test (registry_forward.py, #26): episodes and trades newer than the plan,
+  baseline- and cost-adjusted, decided once on a fixed sample at alpha / M. Backtest "OOS" rows never promote.
+  Probation / retirement when the last-90-day forward CI (day-clustered) crosses zero (decay alarm)
 - a new pattern whose episodes mostly coincide with an existing one's is flagged as a duplicate
 Evidence cards summarise a node for `read_coin`; lessons are full-text searchable (FTS5)."""
 
@@ -20,10 +21,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from . import registry_forward as F
+
 STATUSES = ("draft", "shadow", "live", "probation", "retired")
 LEVELS = ("regime", "lifecycle", "tape", "controller", "script", "setup", "detector", "strategy", "filter", "veto")
-PROMOTE_MIN_OOS, PROMOTE_MIN_T = 30, 3.0
-PROMOTE_MIN_DAYS = 10              # distinct OOS calendar days: fewer day clusters make t_day meaningless
 DUP_OVERLAP = 0.7
 DAY_MS = 86_400_000
 
@@ -40,6 +41,13 @@ CREATE TABLE IF NOT EXISTS pattern_trials (
     id INTEGER PRIMARY KEY, pattern_id TEXT NOT NULL, version INTEGER NOT NULL, params TEXT, source TEXT,
     n INTEGER, n_coins INTEGER, mean REAL, t REAL, oos_n INTEGER, oos_mean REAL, created_at TEXT,
     UNIQUE (pattern_id, version, params, source));
+CREATE TABLE IF NOT EXISTS pattern_plans (
+    pattern_id TEXT NOT NULL, version INTEGER NOT NULL, registered_at TEXT NOT NULL, spec_hash TEXT NOT NULL,
+    plan TEXT NOT NULL, PRIMARY KEY (pattern_id, version));
+CREATE TRIGGER IF NOT EXISTS pattern_plans_no_update BEFORE UPDATE ON pattern_plans
+    BEGIN SELECT RAISE(ABORT, 'pattern plans are frozen: register a new version'); END;
+CREATE TRIGGER IF NOT EXISTS pattern_plans_no_delete BEFORE DELETE ON pattern_plans
+    BEGIN SELECT RAISE(ABORT, 'pattern plans are frozen: register a new version'); END;
 CREATE TABLE IF NOT EXISTS pattern_learnings (pattern_id TEXT, learning_id INTEGER, PRIMARY KEY (pattern_id, learning_id));
 CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts USING fts5(kind, ref, text);
 """
@@ -65,15 +73,22 @@ def latest(db, pid: str) -> dict[str, Any] | None:
     return dict(zip([c[0] for c in cur.description], row)) if row else None
 
 
+def _same_plan(db, cur: dict[str, Any], plan: dict[str, Any]) -> bool:
+    frozen = F.plan_of(db, cur["id"], cur["version"])
+    return (frozen["plan"] if frozen else F.make_plan(cur["id"], cur["metric"])) == plan
+
+
 def register(db, p: dict[str, Any]) -> dict[str, Any]:
-    """Insert a pattern, or a new version when its definition/detector/metric changed. Same fingerprint = no-op
-    (metadata such as name/mechanism/source is refreshed in place)."""
+    """Insert a pattern, or a new version when its definition/detector/metric changed, or when an explicit
+    p["plan"] ({target_n, min_days}) differs from the frozen one. Same spec = no-op (metadata such as
+    name/mechanism/source is refreshed in place). A new version freezes its plan with its registration time."""
     ensure(db)
     if p["level"] not in LEVELS:
         raise ValueError(f"level must be one of {LEVELS}")
     fp, cur = _fp(p), latest(db, p["id"])
+    plan = F.make_plan(p["id"], p.get("metric"), p.get("plan"))
     now = _now()
-    if cur and cur["fingerprint"] == fp:
+    if cur and cur["fingerprint"] == fp and (p.get("plan") is None or _same_plan(db, cur, plan)):
         db.execute("UPDATE patterns SET name=?, mechanism=?, parent=?, source=?, updated_at=? WHERE id=? AND version=?",
                    (p.get("name"), p.get("mechanism"), p.get("parent"), p.get("source"), now, p["id"], cur["version"]))
         db.commit()
@@ -85,6 +100,7 @@ def register(db, p: dict[str, Any]) -> dict[str, Any]:
     db.execute("INSERT OR IGNORE INTO patterns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",   # concurrent seeders
                (p["id"], ver, p["level"], p.get("parent"), p.get("name"), p.get("mechanism"), p.get("definition"),
                 p.get("detector"), p.get("metric"), status, p.get("source"), fp, now, now, "registered"))
+    F.freeze(db, p, ver, plan, now)
     db.commit()
     return {"id": p["id"], "version": ver, "new": True}
 
@@ -133,8 +149,8 @@ def _clustered_t(xs: list[tuple], key: int) -> float | None:
 
 
 def _stats(eps: list[tuple]) -> dict[str, Any] | None:
-    """eps: (symbol, outcome, win, mae, ts_ms). Coin-clustered mean/CI; t_day clusters by calendar day too (scan
-    outcomes of one sell-off week are one market move, not 30 independent coins)."""
+    """eps: (symbol, outcome, win, mae, ts_ms). Descriptive: raw outcomes, coin-clustered mean/CI; t_day clusters by
+    calendar day too (scan outcomes of one sell-off week are one market move, not 30 independent coins)."""
     xs = [e for e in eps if e[1] is not None]
     if not xs:
         return None
@@ -154,7 +170,8 @@ def _stats(eps: list[tuple]) -> dict[str, Any] | None:
 
 
 def card(db, pid: str, now_ms: int | None = None) -> dict[str, Any] | None:
-    """Evidence card of a pattern's latest version: all / out-of-sample / last 90 days, trials, status."""
+    """Evidence card of a pattern's latest version: all / out-of-sample / last 90 days (raw, descriptive), the
+    forward test and the last-90-day forward rows (what promotion and decay are decided on), trials, status."""
     p = latest(db, pid)
     if not p:
         return None
@@ -166,12 +183,14 @@ def card(db, pid: str, now_ms: int | None = None) -> dict[str, Any] | None:
     sources = dict(db.execute("SELECT source, COUNT(*) FROM pattern_episodes WHERE pattern_id=? AND version=? GROUP BY"
                               " source", (pid, p["version"])).fetchall())
     learn = [r[0] for r in db.execute("SELECT learning_id FROM pattern_learnings WHERE pattern_id=?", (pid,))]
+    fwd, rec = F.forward(db, pid, p["version"]), F.recent(db, pid, p["version"], now_ms)
     return {"id": pid, "version": p["version"], "level": p["level"], "parent": p["parent"], "name": p["name"],
             "status": p["status"], "status_reason": p["status_reason"], "metric": p["metric"],
             "mechanism": p["mechanism"],
             "all": _stats(base), "oos": _stats(_oos(rows)), "last_90d": _stats(_recent(rows, now_ms)),
+            "forward": fwd, "forward_90d": rec,
             "trials": trials, "learnings": learn, "sources": sources,   # 'forensics' = hindsight-picked: anecdotes
-            "verdict": verdict(p["status"], rows, now_ms)}
+            "verdict": F.verdict(p["status"], fwd, rec)}
 
 
 LIVE_SOURCES = ("scan", "live")    # decay is judged on what happened AFTER registration, never on the backtest
@@ -187,29 +206,6 @@ def _recent(rows: list[tuple], now_ms: int) -> list[tuple]:
             if r[6] in LIVE_SOURCES and r[5] and r[5] >= now_ms - 90 * DAY_MS]
 
 
-def verdict(status: str, rows: list[tuple], now_ms: int) -> str:
-    """What the evidence allows (the human/analyst still makes the call through set_status). Fewer than
-    PROMOTE_MIN_DAYS OOS days, or no day-clustered t, fails the gate: one day's episodes are one market move however
-    many coins they span, and a t over a handful of day clusters means little."""
-    oos, recent = _stats(_oos(rows)), _stats(_recent(rows, now_ms))
-    eligible = bool(oos and oos["n_coins"] >= PROMOTE_MIN_OOS and oos["n_days"] >= PROMOTE_MIN_DAYS
-                    and oos["ci95"] and oos["ci95"][0] > 0
-                    and oos["t_day"] is not None and min(oos["t"] or 0, oos["t_day"]) >= PROMOTE_MIN_T)
-    decayed = bool(recent and recent["n_coins"] >= 10 and recent["ci95"] and recent["ci95"][0] <= 0)
-    if status == "live" and decayed:
-        return "probation: last-90d CI crosses 0"
-    if status == "probation" and recent and recent["n_coins"] >= 30 and recent["mean"] < 0:
-        return "retire: edge gone"
-    if status in ("draft", "shadow") and eligible:
-        return "eligible for live"
-    if status in ("draft", "shadow") and oos and oos["n_days"] < PROMOTE_MIN_DAYS:
-        nd = oos["n_days"]
-        return f"keep {status}: only {nd} OOS day{'' if nd == 1 else 's'} (need {PROMOTE_MIN_DAYS})"
-    if status in ("draft", "shadow") and oos and oos["t_day"] is None:
-        return f"keep {status}: no day-clustered t (no day-to-day variance)"
-    return "keep " + status
-
-
 def set_status(db, pid: str, status: str, reason: str) -> dict[str, Any]:
     if status not in STATUSES:
         raise ValueError(f"status must be one of {STATUSES}")
@@ -219,10 +215,10 @@ def set_status(db, pid: str, status: str, reason: str) -> dict[str, Any]:
     if status == "live":
         c = card(db, pid)
         if not c or c["verdict"] != "eligible for live":
-            return {"ok": False, "error": f"not eligible for live ({c and c['verdict']}): {c and c['oos']} (needs >= "
-                                          f"{PROMOTE_MIN_OOS} OOS coins over >= {PROMOTE_MIN_DAYS} days, CI above 0,"
-                                          f" coin- and day-clustered t >= "
-                                          f"{PROMOTE_MIN_T}; a missing day-clustered t fails)"}
+            return {"ok": False, "error": f"not eligible for live ({c and c['verdict']}): needs a passed forward test "
+                                          f"(the frozen plan's first target_n observations over >= min_days days, "
+                                          f"adjusted for the same scan's control and costs, p <= alpha / M): "
+                                          f"{c and c['forward']}"}
         dup = [d for d in duplicates(db, pid) if (latest(db, d["id"]) or {}).get("level") == p["level"]]
         if dup:
             return {"ok": False, "error": f"duplicate of an active pattern at the same level: {dup}"}
@@ -287,8 +283,11 @@ def compact(c: dict[str, Any] | None) -> dict[str, Any] | None:
     if not c:
         return None
     pick = lambda s: s and {k: s[k] for k in ("n", "n_coins", "mean", "ci95") if k in s}  # noqa: E731
+    f = c["forward"]
+    fwd = {"status": f["status"], **({"n": f["interim"]["n"], "target": f["target"]} if "interim" in f else {}),
+           **({"decision": f["decision"], "p": f["test"]["p"], "mean": f["test"]["mean"]} if "test" in f else {})}
     return {"id": c["id"], "v": c["version"], "status": c["status"], "reason": c.get("status_reason"),
-            "metric": c["metric"], "all": pick(c["all"]),
+            "metric": c["metric"], "forward": fwd, "all": pick(c["all"]),
             "oos": pick(c["oos"]), "last_90d": pick(c["last_90d"]), "trials": c["trials"], "sources": c["sources"],
             "verdict": c["verdict"]}
 
@@ -305,5 +304,5 @@ def decay_alarms(db, now_ms: int | None = None) -> list[dict[str, Any]]:
     for (pid,) in db.execute("SELECT DISTINCT id FROM patterns WHERE status IN ('live','probation')"):
         c = card(db, pid, now_ms)
         if c and c["status"] in ("live", "probation") and not c["verdict"].startswith("keep"):
-            out.append({"id": pid, "status": c["status"], "verdict": c["verdict"], "last_90d": c["last_90d"]})
+            out.append({"id": pid, "status": c["status"], "verdict": c["verdict"], "forward_90d": c["forward_90d"]})
     return out
