@@ -154,4 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("price", type=float)
     m.add_argument("--reason", required=True)
     backup.add_args(sub.add_parser("backup", help="verified journal backup (no exchange) | restore FILE --to NEW_PATH"))
+    au = sub.add_parser("audit", help="who did what: decisions and tool/CLI calls with actor, Claude session, code")
+    au.add_argument("--since", help="24h, 7d, 30m or an ISO time (UTC)")
+    au.add_argument("--actor", help="prefix: mcp, cli, guardian, admin, hook, or e.g. mcp:open_short")
+    au.add_argument("--action", help="one action, e.g. call, rejected, open")
+    au.add_argument("--limit", type=int, default=50)
+    sub.add_parser("hook-session", help="SessionStart hook: record the Claude session's model (reads hook JSON on stdin)")
     return p

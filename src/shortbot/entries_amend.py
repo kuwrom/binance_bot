@@ -13,12 +13,14 @@ from __future__ import annotations
 from typing import Any
 
 from . import killswitch
+from .audit import refusals
 from .risk import AccountState, RiskViolation, ShortRequest, check_open_short
 
 
 class EntryAmend:
     """Uses EntryDesk's trader, journal, regime and entry-row storage."""
 
+    @refusals("amend")
     async def amend(self, entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
         rows = self._rows("id=? AND status='pending'", (entry_id,))
         if not rows:

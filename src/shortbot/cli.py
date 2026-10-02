@@ -1,19 +1,26 @@
 """Terminal access: `shortbot scan`, `shortbot snapshot QNT`, `shortbot positions`, `shortbot brief`...
-Arguments live in cli_args.py, `brief` (what the SessionStart hook prints) in cli_brief.py; dispatch is here."""
+Arguments live in cli_args.py, `brief` (what the SessionStart hook prints) in cli_brief.py; dispatch is here.
+Audit (#24): each command runs as actor cli:<cmd>; one not in READS leaves a `call` decision row (audit.py)."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import sys
 
-from . import allocator, backup, killswitch_ops, news, research, scanner, setups
+from . import allocator, audit, audit_view, backup, killswitch_ops, news, research, scanner, setups
 from .app import close_app, get_app
 from .cli_args import build_parser
 from .cli_brief import brief
 from .exchange import to_symbol
 from .entries import EntryDesk
 from .positioning import PositionOps
+
+# Commands that leave no `call` row: they change nothing (or journal their own row, like `log`). Any other is logged.
+READS = frozenset({"regime", "scan", "snapshot", "news", "account", "positions", "params", "setups", "research",
+                   "journal", "brief", "map", "study", "read", "profile", "clock", "entries", "chart", "prob",
+                   "unlocks", "calibration", "signals", "budget", "governor", "reassess", "book-plan", "log", "audit"})
 
 
 async def _run(args: argparse.Namespace) -> object:
@@ -183,15 +190,29 @@ async def _run(args: argparse.Namespace) -> object:
             case "log":
                 sym = to_symbol(args.symbol) if args.symbol else None
                 return {"decision_id": app.journal.log_decision(args.action, args.reasoning, sym)}
+            case "audit":
+                return audit_view.report(app.journal, args.since, args.actor, args.action, args.limit)
     finally:
         await close_app()
+
+
+async def _audited(args: argparse.Namespace) -> object:
+    with audit.acting(f"cli:{args.cmd}"):
+        if args.cmd in READS:
+            return await _run(args)
+        j = get_app().journal   # the singleton _run uses; close_app leaves its journal open
+        return await audit.called(lambda: j, args.cmd, {k: v for k, v in vars(args).items() if k != "cmd"},
+                                  _run(args))
 
 
 def main() -> None:
     args = build_parser().parse_args()
     if args.cmd == "backup":
         raise SystemExit(backup.run_cli(args))
-    out = asyncio.run(_run(args))
+    if args.cmd == "hook-session":   # no exchange app, no output: the hook's stdout would enter the context
+        raise SystemExit(audit_view.hook_session(sys.stdin))
+    audit.set_process("cli")
+    out = asyncio.run(_audited(args))
     print(out if isinstance(out, str) else json.dumps(out, indent=2, default=str))
 
 

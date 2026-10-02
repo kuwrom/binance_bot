@@ -25,6 +25,7 @@ import asyncio
 import sqlite3
 
 from . import clientid, killswitch, reconcile, stops, warmup
+from .audit import refusals
 from .entry_intents import ON_BOOK
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
@@ -62,6 +63,7 @@ def _beside(symbol: str, rows: list[dict]) -> dict:
 class OpenFlow:
     """Uses Trader's exchange, journal, lock (then symbol_lock), prechecks, budget and order primitives."""
 
+    @refusals("open_short")
     async def open_short(self, symbol: str, stop_price: float, setup: str, thesis: str,
                          plan: dict | None = None, notional: float | None = None, leverage: int = 2,
                          veto_override: str | None = None, conviction: str = "B",

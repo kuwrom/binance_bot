@@ -17,7 +17,7 @@ import logging
 import time
 from pathlib import Path
 
-from . import procs
+from . import audit, procs
 from .app import close_app, get_app
 from .entries import EntryDesk
 from .guardian_jobs import MarketJobs
@@ -137,6 +137,7 @@ async def _main() -> None:
 
 
 def main() -> None:
+    audit.set_process("guardian", claude=False)   # started from a Claude Bash, it still acts on its own (#24)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(_main())

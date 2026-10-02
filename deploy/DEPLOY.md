@@ -53,6 +53,12 @@ Then say "run a trading session". Claude loads the `trading-session` skill. `ope
 - restart the guardian (Mac: `pkill -f shortbot-guardian`, then the `nohup` line in section 4; Linux: `docker compose up -d --build`);
 - in every open Claude Code session, reconnect shortbot via `/mcp`.
 
+**Audit trail.** Every decision and alert row records who acted (`mcp:<tool>`, `cli:<cmd>`, `guardian:<job>`, `admin:<cmd>`), the Claude Code session (`CLAUDE_CODE_SESSION_ID`), the code version (the hash shown in `procs`) and the mode. Tool and CLI calls that change state, and refusals on the order paths, get rows too. Decisions are append-only. To review it, run `.venv/bin/shortbot audit --since 24h [--actor mcp]`. The model is visible only to Claude Code's SessionStart hook. To record it, add this entry to the `SessionStart` hooks in `.claude/settings.json`, next to `shortbot brief`. That file is the owner's to edit:
+```json
+{"type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && .venv/bin/shortbot hook-session", "timeout": 30}
+```
+Until it's added, `model` stays unknown. The hook prints nothing and always exits 0.
+
 Each guardian and MCP server records the code it imported in kv `proc:<pid>`. Every hour the guardian lists the live `shortbot-mcp` and `shortbot-guardian` processes. It sends an urgent `stale_process:<pid>` alert, with the pid, the age and the fix, for each one that is unregistered (code from before this check) or whose code differs from the code on disk now, at most once per pid every 6 h. It also removes the rows of dead pids. The session brief shows the count on one line. It is detection only: nothing is signalled or killed. A guardian in a container only sees its own processes, so on Linux the brief on the host is what covers the MCP servers.
 
 ## 6. Going live (only after demo results in the journal)

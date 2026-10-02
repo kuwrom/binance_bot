@@ -24,7 +24,7 @@ import os
 import secrets
 from typing import Any
 
-from . import equity_marks
+from . import audit, equity_marks
 from . import killswitch as ks
 from . import killswitch_rearm as rearm
 from .config import Settings
@@ -147,7 +147,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    out = asyncio.run(run(parser().parse_args()))
+    args = parser().parse_args()
+    audit.set_process("admin")
+    with audit.acting(f"admin:{args.cmd}"):   # the human's kill-switch rows say so (#24)
+        out = asyncio.run(run(args))
     print(json.dumps(out, indent=2, default=str))
     if out.get("ok") is False:
         raise SystemExit(1)

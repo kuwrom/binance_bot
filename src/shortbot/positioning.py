@@ -18,6 +18,7 @@ from typing import Any
 
 from . import clientid, killswitch, stops
 from . import indicators as ind
+from .audit import refusals
 from .exchange import to_symbol
 from .risk import AddRequest, RiskViolation, check_add
 
@@ -133,6 +134,7 @@ class PositionOps:
                     "reward_R_from_here": t["reward_R"], "note": "our thesis must beat these odds to have edge"}
         return res
 
+    @refusals("widen_stop")
     async def widen_stop(self, symbol: str, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr
         symbol = to_symbol(symbol)
@@ -204,6 +206,7 @@ class PositionOps:
         return {"ok": True, "old_stop": cur, "new_stop": new_stop, "size_cut": cut, "remaining": round(left, 8),
                 "max_loss_usdt": round(r1, 2), **({"warnings": res["warnings"]} if res.get("warnings") else {})}
 
+    @refusals("add_to_winner")
     async def add_to_winner(self, symbol: str, notional: float, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr
         symbol = to_symbol(symbol)

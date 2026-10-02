@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import clientid, killswitch, warmup
+from .audit import refusals
 from .entry_gates import market_pause
 from .entry_intents import HINTS, ON_BOOK, SendUnknown
 from .exchange import to_symbol
@@ -33,6 +34,7 @@ def _now_iso() -> str:
 class EntryPlacement:
     """Uses EntryDesk's trader, journal, regime, entry-row storage and cancel (_cancel_entry)."""
 
+    @refusals("propose_group")
     async def propose_group(self, proposals: list[dict[str, Any]], ttl_hours: float = 6.0,
                             prearm_stop: bool = True, warmup_override: str | None = None) -> dict[str, Any]:
         """proposals: [{symbol, limit_price, stop_price, setup, thesis, plan?, leverage?, level_type, level_reason,

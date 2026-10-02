@@ -39,7 +39,8 @@ def _origin(frame) -> str | None:
     while frame:
         f = frame.f_code.co_filename
         if f.startswith(_SRC):
-            outer = frame
+            if not f.endswith("/audit.py"):   # audit.refusals wraps the order paths: it is not the caller
+                outer = frame
         elif not f.startswith(_TESTS):
             break
         frame = frame.f_back

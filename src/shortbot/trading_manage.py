@@ -15,6 +15,7 @@ from __future__ import annotations
 import ccxt.async_support as ccxt
 
 from . import clientid, close_intent, reconcile, stops, tranches
+from .audit import refusals
 from .exchange import to_symbol
 from .stops import is_bridge, is_protective_stop
 
@@ -29,6 +30,7 @@ def _whole(o: dict) -> bool:
 class ManageFlow:
     """Uses Trader's exchange, journal, symbol_lock, position/stop queries and order primitives."""
 
+    @refusals("close")
     async def close(self, symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,
                     expect_contracts: float | None = None, of_original: bool = False) -> dict:
         """fraction: of the CURRENT size, or with of_original the cumulative share of the original size. A partial
@@ -174,6 +176,7 @@ class ManageFlow:
                              "or close it NOW.", symbol, True)
             return f"NO closePosition stop ({e})"
 
+    @refusals("move_stop")
     async def move_stop(self, symbol: str, new_stop: float, reason: str) -> dict:
         """Tighten-only, make before break (stops.set_stop). Only the position's closePosition stop moves: a resting
         entry's pre-armed stop is that entry's protection."""

@@ -6,7 +6,10 @@ Schema grows by adding columns to TRADE_COLUMNS; existing DBs are migrated autom
 
 Demo and live share this file: every trade carries its `mode`, and the readers that feed decisions (open trades,
 closed results, stats) see only the journal's own mode unless asked for all_modes. Account-level kv (equity peak,
-period marks, research overrides) goes through `mode_key`."""
+period marks, research overrides) goes through `mode_key`.
+
+Audit trail (#24, audit.py): every decision, alert and session row is stamped with the actor, the Claude Code session,
+the code version and the mode (+ the journal session and trade id on decisions). Decisions are append-only."""
 
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import audit
 from .journal_research import RESEARCH_SCHEMA, ResearchStore
 from .redact import redact
 from .sessions import session_bucket
@@ -29,6 +33,10 @@ CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY, ts TEXT NOT NULL, session_id INTEGER, symbol TEXT,
     action TEXT NOT NULL, reasoning TEXT NOT NULL, snapshot TEXT
 );
+CREATE TRIGGER IF NOT EXISTS decisions_no_update BEFORE UPDATE ON decisions
+    BEGIN SELECT RAISE(ABORT, 'decisions are append-only: log a new decision instead'); END;
+CREATE TRIGGER IF NOT EXISTS decisions_no_delete BEFORE DELETE ON decisions
+    BEGIN SELECT RAISE(ABORT, 'decisions are append-only: log a new decision instead'); END;
 CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, symbol TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY, ts TEXT NOT NULL, symbol TEXT, kind TEXT NOT NULL, message TEXT NOT NULL
@@ -50,6 +58,15 @@ TRADE_COLUMNS: dict[str, str] = {
     "mfe_pct": "REAL", "low_since_entry": "REAL", "targets_hit": "TEXT", "notes": "TEXT",
     "conviction": "TEXT", "regime_cell": "TEXT", "post_exit": "TEXT", "mode": "TEXT NOT NULL DEFAULT 'demo'",
 }
+# The audit stamp (#24); rows written by a process that predates it keep NULLs.
+AUDIT_COLUMNS: dict[str, dict[str, str]] = {
+    "decisions": {"actor": "TEXT", "claude_session": "TEXT", "code_version": "TEXT", "trade_id": "INTEGER",
+                  "mode": "TEXT"},
+    "alerts": {"actor": "TEXT", "session_id": "INTEGER", "claude_session": "TEXT", "code_version": "TEXT",
+               "mode": "TEXT"},
+    "sessions": {"actor": "TEXT", "claude_session": "TEXT", "code_version": "TEXT"},
+}
+AUDIT_ACTIONS = ("call", "claude_session")   # audit-only rows: `shortbot audit` lists them, decisions() doesn't
 JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit")
 MODES = ("demo", "live")
 
@@ -95,6 +112,7 @@ class Journal(ResearchStore):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         self.mode = mode
+        self.session_id: int | None = None   # the trading session this process started (start_session)
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,14 +123,15 @@ class Journal(ResearchStore):
         self._migrate()
 
     def _migrate(self) -> None:
-        have = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
-        for col, ddl in TRADE_COLUMNS.items():
-            if col not in have:
-                try:
-                    self.db.execute(f"ALTER TABLE trades ADD COLUMN {col} {ddl}")
-                except sqlite3.OperationalError as e:   # the guardian and the MCP server may migrate at once
-                    if "duplicate column" not in str(e):
-                        raise
+        for table, cols in {"trades": TRADE_COLUMNS, **AUDIT_COLUMNS}.items():
+            have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            for col, ddl in cols.items():
+                if col not in have:
+                    try:
+                        self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                    except sqlite3.OperationalError as e:   # the guardian and the MCP server may migrate at once
+                        if "duplicate column" not in str(e):
+                            raise
         self._migrate_research()
         self.db.commit()
 
@@ -134,18 +153,41 @@ class Journal(ResearchStore):
 
     # ------------------------------------------------------------ sessions / decisions
     def start_session(self, mode: str, notes: str = "") -> int:
-        return self._insert("INSERT INTO sessions (started_at, mode, notes) VALUES (?,?,?)", (now_iso(), mode, notes))
+        """Rows this process journals from now on belong to the new session."""
+        st = audit.stamp()
+        self.session_id = self._insert(
+            "INSERT INTO sessions (started_at, mode, notes, actor, claude_session, code_version) VALUES (?,?,?,?,?,?)",
+            (now_iso(), mode, notes, st["actor"], st["claude_session"], st["code_version"]))
+        return self.session_id
+
+    def _session(self, claude_session: str | None) -> int | None:
+        """This process's session, else the latest one its Claude Code session started (a CLI call from its Bash)."""
+        if self.session_id is None and claude_session:
+            row = self.db.execute("SELECT id FROM sessions WHERE claude_session=? ORDER BY id DESC LIMIT 1",
+                                  (claude_session,)).fetchone()
+            return row[0] if row else None
+        return self.session_id
 
     def log_decision(self, action: str, reasoning: str, symbol: str | None = None,
-                     snapshot: dict | None = None, session_id: int | None = None) -> int:
+                     snapshot: dict | None = None, session_id: int | None = None, trade_id: int | None = None) -> int:
+        """Stamped (audit.py); trade_id defaults to snapshot['trade_id']. Text is redacted like alerts."""
+        audit.count_decision()
+        st = audit.stamp()
+        if trade_id is None and isinstance(snapshot, dict) and type(snapshot.get("trade_id")) is int:
+            trade_id = snapshot["trade_id"]
         return self._insert(
-            "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot) VALUES (?,?,?,?,?,?)",
-            (now_iso(), session_id, symbol, action, reasoning, json.dumps(snapshot, default=str) if snapshot else None))
+            "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot, actor, claude_session,"
+            " code_version, trade_id, mode) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), session_id if session_id is not None else self._session(st["claude_session"]), symbol, action,
+             redact(reasoning), json.dumps(audit.clean(snapshot, trim=False), default=str) if snapshot else None,
+             st["actor"], st["claude_session"], st["code_version"], trade_id, self.mode))
 
-    def decisions(self, symbol: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def decisions(self, symbol: str | None = None, limit: int = 50, calls: bool = False) -> list[dict[str, Any]]:
+        """Newest first. calls=True also returns the audit-only rows (AUDIT_ACTIONS: tool/CLI calls, hook rows)."""
+        where, args = ("1=1", ()) if calls else (f"action NOT IN ({','.join('?' * len(AUDIT_ACTIONS))})", AUDIT_ACTIONS)
         if symbol:
-            return self._rows("SELECT * FROM decisions WHERE symbol=? ORDER BY id DESC LIMIT ?", (symbol, limit))
-        return self._rows("SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (limit,))
+            where, args = where + " AND symbol=?", (*args, symbol)
+        return self._rows(f"SELECT * FROM decisions WHERE {where} ORDER BY id DESC LIMIT ?", (*args, limit))
 
     # ------------------------------------------------------------ trades
     def _trade(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -264,8 +306,12 @@ class Journal(ResearchStore):
 
     # ------------------------------------------------------------ alerts / metrics
     def log_alert(self, kind: str, message: str, symbol: str | None = None) -> int:
-        return self._insert("INSERT INTO alerts (ts, symbol, kind, message) VALUES (?,?,?,?)",
-                            (now_iso(), symbol, kind, redact(message)))   # no signed URL or token in a row
+        st = audit.stamp()
+        return self._insert(
+            "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode)"
+            " VALUES (?,?,?,?,?,?,?,?,?)", (now_iso(), symbol, kind, redact(message),   # no signed URL or token in a row
+                                           st["actor"], self._session(st["claude_session"]), st["claude_session"],
+                                           st["code_version"], self.mode))
 
     def alerts(self, limit: int = 30, since: str | None = None) -> list[dict[str, Any]]:
         if since:
