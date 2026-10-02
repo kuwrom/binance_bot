@@ -21,7 +21,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import app as _app_mod
-from . import audit, procs
+from . import audit, procs, stale_guard
 from .app import close_app
 from .redact import install_log_redaction
 
@@ -72,14 +72,20 @@ def tool(fn=None, *, human: bool = False):
         @functools.wraps(f)
         async def wrapper(*args, **kwargs):
             with audit.acting(f"mcp:{name}"):
+                code = await stale_guard.verdict()   # #68: on stale code writes never run, reads carry a warning
                 try:
                     if name in UNLOGGED:
-                        return await f(*args, **kwargs)
-                    return await audit.called(lambda: _journal(f), name, audit.bound_args(sig, args, kwargs),
-                                              f(*args, **kwargs))
-                except ToolError:
-                    raise
+                        return stale_guard.annotate(await f(*args, **kwargs), code)
+                    bound = audit.bound_args(sig, args, kwargs)
+                    if not code.ok and name not in stale_guard.EXEMPT:   # refused: nothing sent, the call row says so
+                        return await audit.called(lambda: _journal(f), name, bound, stale_guard.refuse(name, code))
+                    return stale_guard.annotate(await audit.called(lambda: _journal(f), name, bound,
+                                                                   f(*args, **kwargs)), code)
                 except Exception as e:  # noqa: BLE001
+                    if code.stale:
+                        raise stale_guard.failed(name, e, code) from e
+                    if isinstance(e, ToolError):
+                        raise
                     raise ToolError(f"{type(e).__name__}: {e}") from e
         return mcp.tool(meta=REQUIRES_HUMAN if human else None)(wrapper)
     return register(fn) if fn else register

@@ -27,6 +27,18 @@ def guardian_alive(request, monkeypatch):
         monkeypatch.setattr("shortbot.killswitch.watch_guardian", alive)
 
 
+@pytest.fixture(autouse=True)
+def current_code(request, monkeypatch):
+    """Tool tests assume the MCP server runs the code on disk (editing files mid-run must not refuse them);
+    test_stale_guard.py exercises the real check (#68)."""
+    from shortbot import procs, stale_guard
+    stale_guard.reset()
+    if "test_stale_guard" not in request.node.nodeid:
+        monkeypatch.setattr(stale_guard, "_disk", procs.code_version)
+    yield
+    stale_guard.reset()
+
+
 _SRC = str(Path(__file__).resolve().parents[1] / "src" / "shortbot")
 _TESTS = str(Path(__file__).resolve().parent)
 _WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_orders": 0}   # name: symbol arg
