@@ -131,6 +131,53 @@ Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill
 
 **Gross vs net and mechanism retirement:** unchanged from the earlier draft. Add `avg_r_gross` next to `avg_r` in `journal.stats.by_setup`, and retire a setup on the day its venue mechanism disappears.
 
+### P2 implementation spec (for binance-bot-15; 2026-10-02)
+1. **R per trade:** `journal.closed_results()[i]["r_multiple"]` exactly.
+   - It is net P&L (after fees and funding) divided by the initial risk: the pinned `plan.r1_usdt` for adds or split entries, else (initial_stop − entry) × amount.
+   - Trades with `r_multiple` None are skipped. Demo and live ledgers are kept apart (`_in_mode`).
+2. **Thresholds** (halve / stop, in R):
+   - **n < 50 closed trades in the ladder:** use the prior table from the 60-day backtest (bootstrap, μ = +0.10R, 100-trade horizon, q = 0.80 / 0.95):
+     - pump_fade 8.6 / 12.3;
+     - post_pump_decay 7.7 / 10.8;
+     - funding_hi 8.2 / 11.5;
+     - bounce_fade 11.1 / 15.7;
+     - level_fade 11.3 / 16.2;
+     - every other setup 12σ / 17σ with σ = 0.80, i.e. 9.6 / 13.6.
+   - **n ≥ 50:** recompute weekly as `shortbot.backtest.drawdown.bootstrap_maxdd(resid, mu=0.10, n=100, paths=4000, block=5, seed=7)` at quantiles 0.80 / 0.95, where `resid` = the ladder's R minus its mean, in closed_at order.
+     - Clamp each threshold to [0.75×, 1.5×] its prior, so one noisy week cannot swing it.
+     - Reference vector: on the 60-day ledger's selected pump_fade trades this returns 8.57 / 12.34.
+3. **Ladder key:**
+   - The setup name, plus the epoch = `created_at` of the latest registry version of `setup.<name>`.
+   - Only trades opened at or after the epoch count. The high-water mark (HWM) starts at 0 at the epoch.
+   - A journalled review may also reset the epoch to "now" (row: who, why, old/new HWM).
+4. **State machine** (one kv row per ladder):
+   - **States:** NORMAL (1×) → HALF (0.5×) → SHADOW (0×, the setup's scan detections keep being logged as shadow episodes).
+   - DD = HWM − cumulative R. Evaluate after every closed trade.
+   - **Transitions:**
+     - NORMAL → HALF when DD ≥ halve.
+     - HALF → NORMAL when DD ≤ halve / 2.
+     - NORMAL or HALF → SHADOW when DD ≥ stop.
+     - SHADOW → HALF only on re-enable, which then resets HWM to the current cumulative R.
+   - **At the stop, store immutable criteria:**
+     `{"min_episodes": 30, "min_days": 10, "mean_gt": 0.0, "t_day_ge": 1.0, "size": 0.5, "live_needs_human": true}`
+     - They are evaluated by code on the setup's shadow scan episodes since the stop (72h label, day-clustered t). The registry's ≥ 10 distinct days rule (#30) applies.
+     - Never evaluated by the agent that proposed the trades, and never editable after the stop.
+     - The human is notified at the stop and at re-enable. In live mode re-enable also needs a human clear (RTS 6 Art. 15(3), FIA 2024 §3.2).
+   - **Rationale for the re-enable bar:** the stop was a 95% test of "μ ≥ +0.10R". Coming back at half size needs shadow evidence that does not reject μ > 0 at ~84% one-sided, while the burden stays on the setup.
+5. **Variant roll-up:**
+   - Experiment trades on the same `setup` are already in the parent's ladder (same key).
+   - A separately named setup joins a parent's ladder when either:
+     - **(a)** the Pearson correlation of daily R sums (UTC close date, zeros on no-trade days) is ≥ 0.5, over ≥ 20 days on which both traded; or
+     - **(b)** `registry.duplicates()` reports ≥ 70% episode overlap (same coin within ±6h).
+   - Joined setups share one HWM and one state.
+6. **Test vectors** (prior pump_fade, halve 8.6 / stop 12.3):
+   - **TV1:** R = [+2, −1 × 8] → DD 8.0, NORMAL. One more −1 → DD 9.0 → HALF.
+   - **TV2:** continue from TV1 with −1 × 3 → DD 12.0, still HALF. One more −1 → DD 13.0 → SHADOW; the stored criteria equal the dict above.
+   - **TV3:** from HALF at DD 9.0, +5 → DD 4.0 ≤ 4.3 → NORMAL. Alternatively +4 → DD 5.0 → stays HALF.
+   - **TV4:** trades opened before the epoch are ignored. After an epoch reset, DD = 0 and the state is NORMAL, unless it was SHADOW (SHADOW persists until re-enable).
+   - **TV5:** SHADOW with shadow episodes (n 30, days 10, mean +0.4%, t_day 1.2) → re-enable to HALF with HWM = cumulative R, in demo only. In live: pending a human clear. With n 29, or mean −0.1%, or t 0.9 → stays SHADOW.
+   - **TV6:** with n = 49 the prior is used; at n = 50 the bootstrap is used, clamped to [6.45, 12.9] / [9.2, 18.5].
+
 ## P3. Shadow candidates from the 2026-10-02 studies (no decision needed; for the record)
 **Logged, not traded:**
 - the long side of `premium_index_reversion` (z ≤ −3);
