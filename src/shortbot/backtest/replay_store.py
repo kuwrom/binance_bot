@@ -120,19 +120,11 @@ class Store:
         return self.db.execute(f"SELECT {COLS} FROM bars_h WHERE kind=? AND symbol=? AND ts>=? AND ts<? ORDER BY ts",
                                (kind, symbol, a, b)).fetchall()
 
-    def hourly_all(self, kind: str, a: int, b: int) -> dict[str, list[tuple]]:
-        out: dict[str, list[tuple]] = {}
-        for r in self.db.execute(f"SELECT symbol, {COLS} FROM bars_h WHERE kind=? AND ts>=? AND ts<? "
-                                 "ORDER BY symbol, ts", (kind, a, b)):
-            out.setdefault(r[0], []).append(r[1:])
-        return out
-
-    def fine_all(self, kind: str, a: int, b: int) -> dict[str, list[tuple]]:
-        out: dict[str, list[tuple]] = {}
-        for r in self.db.execute(f"SELECT symbol, {COLS} FROM bars WHERE kind=? AND ts>=? AND ts<? ORDER BY symbol, ts",
-                                 (kind, a, b)):
-            out.setdefault(r[0], []).append(r[1:])
-        return out
+    def last_close(self, kind: str, symbol: str, t_ms: int) -> float | None:
+        """Close of the last 1m bar closed by t."""
+        row = self.db.execute("SELECT c FROM bars WHERE kind=? AND symbol=? AND ts<=? ORDER BY ts DESC LIMIT 1",
+                              (kind, symbol, t_ms - RB.MIN)).fetchone()
+        return row[0] if row else None
 
     def daily(self, symbol: str, a: int, b: int) -> list[tuple]:
         return self.db.execute(f"SELECT {COLS} FROM bars_d WHERE symbol=? AND ts>=? AND ts<? ORDER BY ts",

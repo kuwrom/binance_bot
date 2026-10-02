@@ -138,14 +138,14 @@ class ReplayExchange:
         def build(t: int) -> dict[str, dict]:
             end = t // MIN * MIN
             start = end - DAY
-            hours = self.store.hourly_all("perp", start, end - HOUR + 1)
-            edge_a = self.store.fine_all("perp", start, -(-start // HOUR) * HOUR)
-            edge_b = self.store.fine_all("perp", end // HOUR * HOUR, end)
             out = {}
-            for raw in self.meta:
+            for raw in self.meta:   # primary-key seeks per coin: a ts range over every coin would scan the table
                 if not self.listed(raw, t):
                     continue
-                tk = RB.ticker(edge_a.get(raw, []) + edge_b.get(raw, []), t, hours.get(raw, []))
+                hours = self.store.hourly("perp", raw, start, end - HOUR + 1)
+                edges = (self.store.fine("perp", raw, start, -(-start // HOUR) * HOUR)
+                         + self.store.fine("perp", raw, end // HOUR * HOUR, end))
+                tk = RB.ticker(edges, t, hours)
                 if tk:
                     out[raw] = {"symbol": to_symbol(raw), "info": {}, **tk}
             return out
@@ -160,10 +160,10 @@ class ReplayExchange:
         if not s:
             return {}
         iv = RB.funding_interval_h([x[0] for x in s])
-        est = RB.predicted_funding(self.fine("prem", raw), t, s[-1][0], iv)
-        mark = self.fine("mark", raw) or self.fine("perp", raw)
+        est = RB.predicted_funding(self.store.fine("prem", raw, s[-1][0], t - MIN + 1), t, s[-1][0], iv)
+        mark = self.store.last_close("mark", raw, t) or self.store.last_close("perp", raw, t)
         return {"symbol": to_symbol(raw), "fundingRate": est if est is not None else s[-1][1], "interval_h": iv,
-                "fundingTimestamp": s[-1][0] + iv * HOUR, "markPrice": mark[-1][4] if mark else None,
+                "fundingTimestamp": s[-1][0] + iv * HOUR, "markPrice": mark,
                 "estimated": est is not None}
 
     async def funding_intervals(self) -> dict[str, dict]:
