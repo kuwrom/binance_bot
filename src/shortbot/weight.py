@@ -44,7 +44,9 @@ POLL_S = 2.0
 DEFAULT_WAIT_S = {DESK: 60.0, RESEARCH: 90.0, TIER2: 90.0}   # a scope without a deadline
 ENTRY_WAIT_S = 90.0           # an MCP tool / CLI command / lab call as a whole
 JOB_MARGIN_S = 5.0            # a guardian job's budget_wait comes this long before its timeout
-TIER2_CAP, TIER2_WINDOW_S = 150, 900
+# a deep score costs ~29 weight per coin (ccxt cost model, 2026-10-02; order book 500 alone is 10): 20 coins per 15m
+# window is ~600, ~1.7% of a 2,400/min budget. scan_windows.tier2_weight logs what it really spends (#72).
+TIER2_CAP, TIER2_WINDOW_S = 600, 900
 HEADER = "x-mbx-used-weight-1m"
 UNGUARDED = ("data.binance.vision",)
 # the official SDK's docstrings: "The field X-MBX-USED-WEIGHT-1M in response header is not accurate from this endpoint,
@@ -54,7 +56,8 @@ _CODE_1003 = re.compile(r'"code"\s*:\s*-1003\b')
 _RATE_LIMITS = re.compile(r'"rateLimits"\s*:\s*(\[[^\]]*\])')
 
 # guardian lanes (guardian.py) -> class; a job named in GUARDIAN_JOBS overrides its lane
-GUARDIAN_LANES = {"protective": PROTECTIVE, "watch": PROTECTIVE, "monitor": RESEARCH, "research": RESEARCH}
+GUARDIAN_LANES = {"protective": PROTECTIVE, "watch": PROTECTIVE, "monitor": RESEARCH, "research": RESEARCH,
+                  "scan": RESEARCH}   # the tiered scan (#72); its deep scores narrow themselves to TIER2
 GUARDIAN_JOBS = {"governor": PROTECTIVE,       # the kill-switch drawdown trip; a halt withdraws resting entries
                  "margin_mode": PROTECTIVE}    # margin checks
 
@@ -218,6 +221,12 @@ def tier2_room() -> float:
     """Weight tier 2 may still spend in this 15m window (for the tier-2 scheduler to plan its coins)."""
     _tier2_blocked(0)
     return max(0.0, TIER2_CAP - _tier2[1])
+
+
+def tier2_usage() -> tuple[int, float]:
+    """(15m window index, weight tier 2 has spent in it): the scheduler measures a deep score's cost with it."""
+    _tier2_blocked(0)
+    return int(_tier2[0]), float(_tier2[1])
 
 
 async def admit(url: str, method: str = "GET", cost: float = 1.0) -> None:

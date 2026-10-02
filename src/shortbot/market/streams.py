@@ -112,11 +112,11 @@ class StreamStore:
         return self.db.execute("SELECT MAX(ts) FROM candles WHERE symbol=? AND tf=? AND closed=1",
                                (raw_id(symbol), tf)).fetchone()[0]
 
-    def prune(self, now_ms: int) -> None:
-        """Keep the last KEEP_BARS bars per timeframe (by time)."""
+    def prune(self, now_ms: int) -> int:
+        """Keep the last KEEP_BARS bars per timeframe (by time); returns the bars deleted."""
         with self.db:
-            for tf, step in TF_MS.items():
-                self.db.execute("DELETE FROM candles WHERE tf=? AND ts < ?", (tf, now_ms - KEEP_BARS * step))
+            return sum(self.db.execute("DELETE FROM candles WHERE tf=? AND ts < ?",
+                                       (tf, now_ms - KEEP_BARS * step)).rowcount for tf, step in TF_MS.items())
 
 
 def handle(store: StreamStore, msg: dict[str, Any], now_ms: int) -> str | None:
@@ -246,6 +246,15 @@ def _ssl() -> ssl.SSLContext:
 
 
 # ------------------------------------------------------------------ readers (any process; missing file -> None)
+# Every reader is bounded by "now" (the market clock): rows written after it are a replay's future (#29). Live,
+# nothing in the store is newer than now.
+def path_for(db_path: str | Path | None) -> Path | None:
+    """The store beside the journal (data/shortbot.db -> data/streams.db); None for an in-memory journal (tests)."""
+    if not db_path or str(db_path) == ":memory:":
+        return None
+    return Path(db_path).parent / "streams.db"
+
+
 def _ro(path: str | Path) -> sqlite3.Connection | None:
     p = Path(path)
     if not p.exists():
@@ -256,22 +265,36 @@ def _ro(path: str | Path) -> sqlite3.Connection | None:
         return None
 
 
-def candles(symbol: str, tf: str, n: int, path: str | Path = DB_PATH,
-            now_ms: int | None = None) -> list[list[float]] | None:
+def _now(now_ms: int | None) -> int:
+    return now_ms if now_ms is not None else market_clock.now_ms()
+
+
+def candles(symbol: str, tf: str, n: int, path: str | Path = DB_PATH, now_ms: int | None = None,
+            max_age_s: float | None = None) -> list[list[float]] | None:
     """The last n bars [ts, o, h, l, c, v], closed plus the forming one (like REST), when fresh: the last closed bar
-    is at most 1 bar old and the closed bars have no gap. Otherwise None, and the caller falls back to REST."""
-    db = _ro(path)
-    if db is None or tf not in TF_MS or n < 1:
+    is at most 1 bar old and the closed bars have no gap. With max_age_s, the symbol's kline stream must also have
+    updated within it: complete-looking bars from a socket that went quiet are stale (the forming bar stopped).
+    Otherwise None, and the caller falls back to REST."""
+    if tf not in TF_MS or n < 1:
         return None
+    db = _ro(path)
+    if db is None:
+        return None
+    now, sym = _now(now_ms), raw_id(symbol)
     try:
-        rows = db.execute("SELECT ts, o, h, l, c, v, closed FROM candles WHERE symbol=? AND tf=? ORDER BY ts DESC "
-                          "LIMIT ?", (raw_id(symbol), tf, n + 2)).fetchall()
+        rows = db.execute("SELECT ts, o, h, l, c, v, closed FROM candles WHERE symbol=? AND tf=? AND ts <= ? "
+                          "ORDER BY ts DESC LIMIT ?", (sym, tf, now, n + 2)).fetchall()
+        seen = db.execute("SELECT ts FROM fresh WHERE symbol=? AND stream=?", (sym, f"kline_{tf}")).fetchone() \
+            if max_age_s is not None else None
     except sqlite3.Error:
         return None
     finally:
         db.close()
+    if max_age_s is not None and (seen is None or not now - max_age_s * 1000 <= seen[0] <= now):
+        return None
     step = TF_MS[tf]
-    now = now_ms if now_ms is not None else market_clock.now_ms()
+    if any(r[6] and r[0] + step > now for r in rows):
+        return None                                                  # closed after now: a replay's future
     closed = [r for r in rows if r[6]]
     if not closed or closed[0][0] < now // step * step - 2 * step:   # last closed bar more than 1 bar old
         return None
@@ -289,11 +312,11 @@ def freshness(path: str | Path = DB_PATH, now_ms: int | None = None) -> dict[str
     db = _ro(path)
     if db is None:
         return None
-    now = now_ms if now_ms is not None else market_clock.now_ms()
+    now = _now(now_ms)
     try:
         return {stream: {"symbols": n, "oldest_s": round((now - lo) / 1000), "newest_s": round((now - hi) / 1000)}
                 for stream, n, lo, hi in db.execute("SELECT stream, COUNT(*), MIN(ts), MAX(ts) FROM fresh "
-                                                    "GROUP BY stream")}
+                                                    "WHERE ts <= ? GROUP BY stream", (now,))}
     except sqlite3.Error:
         return None
     finally:
@@ -301,14 +324,27 @@ def freshness(path: str | Path = DB_PATH, now_ms: int | None = None) -> dict[str
 
 
 def stale(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int | None = None) -> list[str]:
-    """Symbols whose last `stream` update is older than max_age_s."""
+    """Symbols whose last `stream` update is older than max_age_s (or after now: unusable at now)."""
     db = _ro(path)
     if db is None:
         return []
-    now = now_ms if now_ms is not None else market_clock.now_ms()
+    now = _now(now_ms)
     try:
-        return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND ts < ? ORDER BY symbol",
-                                         (stream, now - max_age_s * 1000))]
+        return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND (ts < ? OR ts > ?) "
+                                         "ORDER BY symbol", (stream, now - max_age_s * 1000, now))]
+    finally:
+        db.close()
+
+
+def fresh_symbols(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int | None = None) -> list[str]:
+    """Symbols whose last `stream` update is at most max_age_s old: what the collector is streaming right now."""
+    db = _ro(path)
+    if db is None:
+        return []
+    now = _now(now_ms)
+    try:
+        return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND ts BETWEEN ? AND ? "
+                                         "ORDER BY symbol", (stream, now - max_age_s * 1000, now))]
     finally:
         db.close()
 
@@ -319,9 +355,9 @@ def latest(kind: str, path: str | Path = DB_PATH, max_age_s: float = 120,
     db = _ro(path)
     if db is None:
         return {}
-    now = now_ms if now_ms is not None else market_clock.now_ms()
+    now = _now(now_ms)
     try:
-        return {s: json.loads(d) for s, d in db.execute("SELECT symbol, data FROM latest WHERE kind=? AND ts >= ?",
-                                                        (kind, now - max_age_s * 1000))}
+        return {s: json.loads(d) for s, d in db.execute("SELECT symbol, data FROM latest WHERE kind=? AND ts BETWEEN "
+                                                        "? AND ?", (kind, now - max_age_s * 1000, now))}
     finally:
         db.close()

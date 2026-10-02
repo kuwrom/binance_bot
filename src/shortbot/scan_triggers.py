@@ -38,7 +38,7 @@ FUNDING_FLOOR = PREMIUM_FLOOR = 0.0005    # per 8h; the premium index is quoted 
 DECILE = 0.10
 PREMIUM_SPIKE_Z = 4.0                     # cross-sectional robust z of the premium (a fast event)
 LISTING_DAYS = 30
-TIER2_CAP = 20                            # deep scores per 15m window (~150 weight)
+TIER2_CAP = 20                            # deep scores per 15m window (~600 weight at ~29 per coin)
 RESCORE_S = 3600                          # a coin re-triggering with the same rules waits this long (caller's window)
 
 

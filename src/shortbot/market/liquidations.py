@@ -57,6 +57,27 @@ class LiquidationStore:
         return n
 
 
+def recent_many(db_path: Path | str, symbols: list[str], since_ms: int, now_ms: int) -> dict[str, list[dict]]:
+    """{symbol: [{ts_ms, side, notional}, ...]} in [since, now] for these ccxt symbols, read-only from any thread
+    (scan tier 1). Symbols without rows are left out; a missing file is {}."""
+    p = Path(db_path)
+    if not p.exists():
+        return {}
+    db = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=5)
+    try:
+        out: dict[str, list[dict]] = {}
+        for s in symbols:   # one indexed (symbol, ts_ms) seek each
+            rows = db.execute("SELECT ts_ms, side, notional FROM liquidations WHERE symbol=? AND ts_ms BETWEEN ? "
+                              "AND ? ORDER BY ts_ms", (s, since_ms, now_ms)).fetchall()
+            if rows:
+                out[s] = [{"ts_ms": t, "side": side, "notional": n} for t, side, n in rows]
+        return out
+    except sqlite3.Error:   # no liquidations table yet: no bursts
+        return {}
+    finally:
+        db.close()
+
+
 def parse(msg: dict[str, Any]) -> tuple | None:
     o = msg.get("o") or {}
     if msg.get("e") != "forceOrder" or not o:

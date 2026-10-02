@@ -13,6 +13,9 @@ Alert rule:
 - tradable (no vetoes), score >= ALERT_MIN_SCORE, a detected setup, a tape stance that allows an entry;
 - a regime that is not hostile;
 - one alert per symbol per RENOTIFY_S, unless its score rose by SCORE_BUMP.
+
+The guardian runs the tiered scan (scan_tiered.py, #72), whose tiers 2-3 are `score_and_alert`; `run` is the REST
+"both" scan, kept for a one-off pass.
 """
 
 from __future__ import annotations
@@ -24,6 +27,9 @@ EVERY_S = 300
 MIN_CHANGE, TOP_N, DEPTH = 10.0, 12, 25
 ALERT_MIN_SCORE, RENOTIFY_S, SCORE_BUMP = 30, 7200, 10
 ENTRY_STANCES = ("fade", "short_bounces", "wait_for_trigger")
+KV_SEEN = "scan_alert_seen:"   # + symbol -> "<time> <score>": dedup that survives a guardian restart (time first,
+                               # so journal.prune_kv's timestamp cast reads it; housekeeping prunes after RENOTIFY_S)
+TIER2_WAIT_S = 60.0            # a tier-2 call over its cap yields this long, then budget_wait: the coin is requeued
 
 
 def pick_alerts(candidates: list[dict[str, Any]], regime: str, seen: dict[str, dict[str, float]],
@@ -58,3 +64,37 @@ async def run(ex, journal, seen: dict[str, dict[str, float]], now_s: float | Non
     alerts = pick_alerts(res.get("candidates") or [], verdict, seen, now_s if now_s is not None else time.time())
     return {"regime": verdict, "logged": res.get("logged_for_research", 0),
             "candidates": len(res.get("candidates") or []), "alerts": alerts}
+
+
+def load_seen(journal, symbols: list[str], now_s: float) -> dict[str, dict[str, float]]:
+    """The persisted alert dedup of these symbols still inside RENOTIFY_S."""
+    out = {}
+    for sym in symbols:
+        try:
+            t, score = (float(x) for x in (journal.get(KV_SEEN + sym) or "").split())
+        except ValueError:   # never alerted (or an unreadable marker): no dedup
+            continue
+        if now_s - t < RENOTIFY_S:
+            out[sym] = {"t": t, "score": score}
+    return out
+
+
+async def score_and_alert(ex, journal, tickers: list[dict[str, Any]], regime: str, scan: dict[str, Any],
+                          by_symbol: dict[str, dict[str, Any]] | None = None,
+                          now_s: float | None = None) -> dict[str, Any]:
+    """Tiers 2-3 (docs/SCANNING.md, #72): deep-score these coins as TIER2 (its own weight cap), log each complete row
+    as a research candidate (features.scan = the window's wake plus the coin's triggers) and pick alerts like `run`.
+    A coin whose inputs the weight guard held back (data_deferred) isn't logged: it comes back in `deferred` for the
+    caller to requeue. Alert dedup lives in kv (KV_SEEN), so a guardian restart doesn't re-alert within RENOTIFY_S."""
+    from . import scanner, weight
+    with weight.tagged(weight.TIER2, wait_s=TIER2_WAIT_S):
+        evals, rows = await scanner.evaluate_tickers(ex, tickers)
+    done = [(ev, row) for ev, row in zip(evals, rows) if not ev.features.get("data_deferred")]
+    scanner.log_scan(journal, [ev for ev, _ in done], [row for _, row in done], regime, scan, by_symbol)
+    now = now_s if now_s is not None else time.time()
+    seen = load_seen(journal, [row["symbol"] for _, row in done], now)
+    alerts = pick_alerts([row for _, row in done], regime, seen, now)
+    for a in alerts:
+        journal.set(KV_SEEN + a["symbol"], f"{now} {a['score']}")
+    return {"scored": [ev.symbol for ev, _ in done], "alerts": alerts,
+            "deferred": [ev.symbol for ev in evals if ev.features.get("data_deferred")]}

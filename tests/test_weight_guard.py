@@ -156,9 +156,9 @@ async def test_without_a_deadline_each_class_waits_its_default(clock):
 
 async def test_tier2_has_its_own_cap_per_15_minute_window(clock):
     with weight.tagged(TIER2, wait_s=5):
-        for _ in range(15):
+        for _ in range(int(weight.TIER2_CAP // 10)):
             await weight.admit(FAPI, "GET", cost=10)
-        assert weight.tier2_room() == 0
+        assert weight.tier2_room() == 0 and weight.tier2_usage()[1] == weight.TIER2_CAP
         with pytest.raises(BudgetWait, match="tier-2"):
             await weight.admit(FAPI, "GET", cost=10)
     with weight.tagged(RESEARCH, wait_s=5):

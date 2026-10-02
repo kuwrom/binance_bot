@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import killswitch as ks
-from . import entry_gates, news, procs, research, setup_ladder
+from . import entry_gates, news, procs, research, scan_job, setup_ladder, stream_task
 from .exchange import to_raw
 from .guardian_loop import guarded
 from .market.regime import market_regime
@@ -27,7 +27,8 @@ KV_STOP_SENT = "setup_ladder_stop_sent:"   # + alert id: that row went to Telegr
 
 
 class MarketJobs:
-    """Guardian mixin: needs app, ex, j, n, entries, liq_store, social_store, _social_task, _refresh_proc."""
+    """Guardian mixin: needs app, ex, j, n, entries, liq_store, social_store, _social_task, _refresh_proc, streams_db,
+    tiered."""
 
     # ------------------------------------------------------------ monitor lane
     async def check_announcements(self) -> None:
@@ -112,8 +113,10 @@ class MarketJobs:
 
     async def housekeeping(self) -> None:
         n = self.j.prune_kv(("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)
+        n += self.j.prune_kv((scan_job.KV_SEEN,), scan_job.RENOTIFY_S)   # scan alert dedup: past its window
         m = self.liq_store.prune()
-        log.info("pruned %d kv markers, %d old liquidations", n, m)
+        b = await asyncio.to_thread(stream_task.prune, self.streams_db) if self.streams_db else 0
+        log.info("pruned %d kv markers, %d old liquidations, %d old stream bars", n, m, b)
 
     async def setup_ladder_check(self) -> None:
         """Daily (#69): the frozen re-enable check on every SHADOW setup ladder of this account. Demo re-enables at
@@ -242,6 +245,11 @@ class MarketJobs:
         from . import long_shadow
         if long_shadow.due(int(time.time() * 1000)):
             log.info("long shadow: %s", await long_shadow.run(self.ex))
+
+    async def tiered_scan(self) -> None:
+        """Tiers 1-3 of the scanner (scan_tiered.py, docs/SCANNING.md): triggers at each 15m close and on fast events,
+        deep scores of the selected coins under the tier-2 cap, research candidates, alerts."""
+        await self.tiered.step()
 
     async def laggard_study(self) -> None:
         """Shadow study (docs/LADDER.md A): log sector-leader breakdowns with their laggards and a random control."""

@@ -116,4 +116,6 @@ async def evaluate(ctx: MarketContext, groups: tuple[str, ...] | None = None,
     total = min(sum(p for p, _ in points), 100)
     merged["score"] = total
     merged["data_missing"] = sorted(ctx.missing)
+    merged["candle_source"] = dict(sorted(getattr(ctx, "sources", {}).items()))   # stream / rest per timeframe
+    merged["data_deferred"] = sorted(getattr(ctx, "deferred", ()))                # held back by the weight guard
     return Evaluation(ctx.symbol, merged, total, [f"+{p} {why}" for p, why in points], vetoes, errors)

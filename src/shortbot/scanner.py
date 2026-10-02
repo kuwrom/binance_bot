@@ -32,6 +32,32 @@ def _row(ev: Evaluation) -> dict[str, Any]:
     }
 
 
+async def evaluate_tickers(ex: Exchanges, tickers: list[dict], groups: tuple[str, ...] | None = None
+                           ) -> tuple[list[Evaluation], list[dict[str, Any]]]:
+    """Evaluate these coins (ccxt-shaped tickers) with the signal plug-ins: (evaluations, rows). Shared by the desk's
+    scan and the guardian's tier-2 deep score (scan_job.score_and_alert)."""
+    hub = DataHub(ex)
+    await hub.funding_tables()  # warm the shared cache once before fanning out
+    evals = list(await asyncio.gather(*(evaluate(hub.context(t["symbol"], t), groups) for t in tickers)))
+    return evals, [_row(ev) for ev in evals]
+
+
+def log_scan(journal, evals: list[Evaluation], rows: list[dict[str, Any]], regime: str | None, scan: dict[str, Any],
+             by_symbol: dict[str, dict[str, Any]] | None = None) -> int:
+    """Every evaluated coin becomes a research candidate (labelled 72h later) with its scan's arguments in
+    features.scan (a tier-2 row adds its triggers via by_symbol), plus a research bracket. Returns rows logged."""
+    if not evals:
+        return 0
+    now = clock.now_dt()
+    journal.log_candidates(now.isoformat(timespec="seconds"), int(now.timestamp() * 1000), [
+        {**row, "price": ev.features.get("last"),
+         "features": {**ev.features, "tape_state": row["tape"]["state"],
+                      "scan": {**scan, **(by_symbol or {}).get(ev.symbol, {})}}}
+        for ev, row in zip(evals, rows)], regime)   # tape state as classified NOW (the registry needs scan-time)
+    _log_research_brackets(journal, evals, rows, regime)
+    return len(evals)
+
+
 async def scan_shorts(ex: Exchanges, min_change: float = 10.0, top_n: int = 10, depth: int = 25,
                       journal=None, regime: str | None = None, direction: str = "gainers",
                       groups: tuple[str, ...] | None = None) -> dict:
@@ -54,19 +80,10 @@ async def scan_shorts(ex: Exchanges, min_change: float = 10.0, top_n: int = 10, 
     else:
         movers = {"gainers": gainers[:depth], "losers": losers[:depth],
                   "both": gainers[:depth // 2 + 1] + losers[:depth // 2 + 1]}[direction]
-    hub = DataHub(ex)
-    await hub.funding_tables()  # warm the shared cache once before fanning out
-    evals = await asyncio.gather(*(evaluate(hub.context(t["symbol"], t), groups) for t in movers))
-    rows = [_row(ev) for ev in evals]
-    if journal is not None and evals:
-        now = clock.now_dt()
-        scan = {"direction": direction, "min_change": min_change, "depth": depth, "top_n": top_n,
-                "groups": list(groups) if groups else None}   # makes the scan replayable without guessing
-        journal.log_candidates(now.isoformat(timespec="seconds"), int(now.timestamp() * 1000), [
-            {**row, "price": ev.features.get("last"),
-             "features": {**ev.features, "tape_state": row["tape"]["state"], "scan": scan}}
-            for ev, row in zip(evals, rows)], regime)   # tape state as classified NOW (the registry needs scan-time)
-        _log_research_brackets(journal, evals, rows, regime)
+    evals, rows = await evaluate_tickers(ex, movers, groups)
+    if journal is not None:
+        log_scan(journal, evals, rows, regime, {"direction": direction, "min_change": min_change, "depth": depth,
+                                                "top_n": top_n, "groups": list(groups) if groups else None})
     tradable = sorted((r for r in rows if not r["vetoes"]), key=lambda r: r["score"], reverse=True)
     vetoed = [{"symbol": r["symbol"], "change_24h": r["change_24h"], "vetoes": r["vetoes"]} for r in rows if r["vetoes"]]
     now_ms = clock.now_ms()

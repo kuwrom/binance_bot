@@ -29,7 +29,7 @@ The question: should we poll every coin every minute, or is there a better way? 
 | `<sym>@kline_15m` (any interval) | live, `x` flags the close | OHLCV plus taker-buy volume, so local candles and the taker ratio need no REST |
 | `!forceOrder@arr` | at most 1 order per symbol per s | liquidations (the guardian already records it) |
 
-Only open interest, the long/short ratios and depth still need REST: about 6-8 weight per coin.
+Only open interest, the long/short ratios and depth still need REST: about 6-8 weight per coin, if every kline came from streams. Measured (#72): ~29 per coin today (see "Tier-2 cost, measured").
 
 **The universe:**
 - 460 coin perps;
@@ -65,7 +65,7 @@ The research says this is where the edge is: events, flows and crowding (docs/st
 |---|---|---|---|
 | 0 Streams | `!ticker@arr`, `!markPrice@arr@1s`, `!forceOrder@arr`, plus `kline_15m` / `kline_1h` for the liquid universe → local rolling candles and taker flow | all 460 (klines: the ~180 liquid) | 0 weight |
 | 1 Triggers | evaluated locally at every 15m close AND immediately on fast events | all liquid coins | CPU only |
-| 2 Deep score | the existing signal stack, with candles from the local cache; REST only for OI history, ratios and depth | only coins that triggered, ~5-20 per 15m | ~6-8 weight/coin, < 1% of the budget |
+| 2 Deep score | the existing signal stack, with candles from the local cache; REST only for OI history, ratios and depth | only coins that triggered, ~5-20 per 15m | estimated ~6-8 weight/coin; measured ~29 (#72), ≤ 600 per 15m, ~1.7% of the budget |
 | 3 Agent | alert only on tradable A+ candidates (scan_job.pick_alerts) | a few per day | LLM time |
 
 **Tier 1 triggers:**
@@ -84,7 +84,7 @@ The research says this is where the edge is: events, flows and crowding (docs/st
 
 **Logging:** every tier-2 evaluation is logged as a research candidate, exactly as today. Tier-1 trigger counts are logged too, so the triggers themselves can be evaluated later.
 
-**Interim:** until tier 0/1 exist, `scan_job.run` every 5 min (EVERY_S = 300) is the safe REST version.
+**Interim:** before tier 0/1 existed, `scan_job.run` every 5 min (EVERY_S = 300) was the safe REST version. The guardian now runs the tiered scan ("Wired (#72)"); `scan_job.run` stays for a one-off pass.
 
 ## Weight budget: protective first
 One IP budget (2,400/min) is shared by:
@@ -101,8 +101,8 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
    - Research jobs (scan, tier 2, labelling) pause while used weight > 50% (1,200).
    - They also pause for 2 minutes after any 429.
    - The protective lane never waits.
-2. **Tier 2 caps itself** at ~150 weight per 15m window (about 20 coins). Excess triggers queue to the next window, highest trigger score first.
-3. **Streams first:** with candles from tier 0, a deep score is ~6-8 weight instead of ~30. Research falls from ~800 per pass to < 1% of the budget, leaving the rest to the protective lane.
+2. **Tier 2 caps itself** at 600 weight per 15m window (`weight.TIER2_CAP`; 20 coins at the measured ~29 each; it was 150 on the ~6-8 estimate). Excess triggers queue to the next window, highest trigger score first.
+3. **Streams first:** with every kline from tier 0, a deep score would be ~6-8 weight instead of ~30. Today only the 15m/1h OHLCV come from tier 0, so it is ~29 (measured, #72). Still, 20 coins per 15m is ~40 weight/min (~1.7% of the budget) against ~160/min for the 5-minute REST scan.
 
 ### Weight guard spec (task #70)
 **Track weight per host**, from each response's `x-mbx-used-weight-1m`, keyed by the request's host. A host's budget is its `exchangeInfo` REQUEST_WEIGHT limit.
@@ -116,7 +116,7 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
 |---|---|---|
 | protective | never waits | the guardian's PROTECTIVE lane (entries, positions, entry_reconcile); WATCH; margin/ADL checks; kill-switch sweeps and flatten; every MCP/CLI order, close, stop and amend path (trading*, entries*, positioning) |
 | desk | waits only above 80%, and never after it has already started an order sequence | MCP/CLI reads the analyst needs before acting: positions, account, coin_snapshot, read_coin, governor/budget reads |
-| research | yields above 50%, and for 2 min after any 429, -1003 or 418 on that host; tier 2 also has its own ~150 weight per 15m cap | the scanner (scan_shorts, scan_job, tier 2 deep scores); guardian MONITOR/RESEARCH lanes (metrics, research/labelling, market_map, sweeps, supply, laggard, calendar, social, refresh); `shortbot.lab`; histdata REST tails; the backtest/refresh scripts |
+| research | yields above 50%, and for 2 min after any 429, -1003 or 418 on that host; tier 2 also has its own 600 weight per 15m cap (#72) | the scanner (scan_shorts, scan_job, tier 2 deep scores); guardian MONITOR/RESEARCH lanes (metrics, research/labelling, market_map, sweeps, supply, laggard, calendar, social, refresh); `shortbot.lab`; histdata REST tails; the backtest/refresh scripts |
 
 **Yield means wait, not drop:** check every ~2 s for up to the job's timeout, then raise a `budget_wait` error that the lane records. It must never consume a protective call's turn.
 
@@ -145,7 +145,7 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
   - `lifecycle_data.py` calls fapi over raw httpx, so it is not guarded.
 
 ## Build (who)
-1. **Stream collector + local candle store** (`market/streams.py`): tickers, mark/premium/funding, klines for the liquid universe, a reconnect at 24h, SQLite. It is a guardian process like `LiquidationRecorder`, so binance-bot-99 wires it.
+1. **Stream collector + local candle store** (`market/streams.py`): tickers, mark/premium/funding, klines for the liquid universe, a reconnect at 24h, SQLite. It is a guardian process like `LiquidationRecorder` (wired in #72).
 2. **Trigger rules** (`scan_triggers.py`, pure and tested), each logged with its own counts for later evaluation.
 3. **DataHub reads candles from the local store** when fresh, falling back to REST.
 4. **The guardian research lane** runs triggers at each 15m close plus on events, deep-scores the triggered coins and alerts through scan_job.
@@ -168,10 +168,26 @@ Replay of the move and volume rules (`scan_triggers.py`) on real 15m bars from `
 | volume z ≥ 2 | 4.7 | 4 | 8 | 13 | 25 |
 | any of the three | 5.9 | 6 | 10 | 16 | 26 |
 
-- Scaled to the ~183-coin universe: ~10 coins per window, ~18 at p90, ~28 at p99. A cap of 20 deep scores per window (~150 weight) is binding only in the busiest ~5% of windows; the excess queues by strength.
+- Scaled to the ~183-coin universe: ~10 coins per window, ~18 at p90, ~28 at p99. A cap of 20 deep scores per window (~600 weight at the measured ~29 per coin) is binding only in the busiest ~5% of windows; the excess queues by strength.
 - Fat tails make |z| ≥ 2 rarer than the Gaussian 4.6% (1.5% for 1h moves): σ is inflated by the outliers.
 - **Persistence:** 84% of 4h-move triggers and 60% of 1h-move triggers also fired the window before. `select(recent=...)` therefore skips a coin re-triggering with no new rule within RESCORE_S (1 h).
 - Funding/premium deciles, liquidation bursts and the lower-high rule aren't replayed yet (no stored 15m premium history); their counts get logged live from day one.
+
+## Tier-2 cost, measured (#72, 2026-10-02)
+The estimate above (6-8 weight per coin) assumed every kline came from streams. ccxt's own cost model (`calculate_rate_limiter_cost`, the guard's cost per call) over the calls one deep score makes gives **~29 weight per coin**:
+
+| input | call | weight |
+|---|---|---|
+| order book | depth 500 | 10 |
+| 1d candles (lifecycle, controller) | klines 200 | 2 |
+| 5m flow (tape) | klines 288 | 2 |
+| 5m mark (robust) | markPriceKlines 288 | 2 |
+| 4h candles, 1m and 1h flow (×2), 1m mark, premium | klines / markPriceKlines / premiumIndexKlines, < 100 bars | 1 each (~6; the 1m pair only after a sweep) |
+| OI history ×2, funding history ×2, taker ratio, 2 long/short ratios | futures/data, fundingRate | 1 each (~7) |
+| funding tables | premiumIndex + fundingInfo, once per batch | ~2 |
+| 1h candles | from the stream store (REST: 1) | 0 |
+
+The store serves only `ctx.candles` for 15m and 1h: its reader returns OHLCV, not the taker-buy volume the flow candles need, and 5m/1m, mark, premium, 4h and 1d aren't streamed. `TIER2_CAP` is therefore 600 (20 coins). The tiered scan measures the real spend per window (`scan_windows.tier2_weight`) and plans the next batch with its EWMA. Re-set the cap from those rows.
 
 ## Tier-2 order book: depth stays at limit 500 (measured 2026-10-02)
 The depth signal (`signals/depth.py`) sums the book within ±1% of mid. A 500-level book costs 10 weight; 100 levels cost 5. Of the ~29 weight a deep score costs (binance-bot-99's #72 measurement), 10 is the book.
@@ -179,3 +195,20 @@ The depth signal (`signals/depth.py`) sums the book within ±1% of mid. A 500-le
 - They also miss on 6 of 15 coins ranked 60-75, 2 of 15 ranked 150-165, and **4 of today's 15 biggest movers** (MOVR 21%, ZRO 33%, MAGMA 51%).
 - The movers are what tier 2 scores, so limit 100 would bias the depth feature research_report tests against squeezes.
 - A fetch-100-then-500 fallback would save about 2 weight per coin (~8%). Not worth the code at ~1.7% of the budget.
+
+## Wired (#72)
+- **Tier 0 in the guardian** (`stream_task.py`):
+  - **Isolation:** `StreamTask` is a supervised task like `LiquidationRecorder`, but the collector runs on its own thread and event loop. Its synchronous work (~1,400 kline msg/s parsed, a commit a second, a SQLite busy-wait of up to 15 s) can't stall the guardian's lanes. A crash is alerted and restarted; a dropped socket is the collector's own backoff.
+  - **Universe:** coin perps with 24h quote volume ≥ $5M, refreshed every 6 h. The collector restarts only when the set changed.
+  - **Backfill:** `ex.public.fetch_ohlcv`, tagged research, run on the guardian's loop (ccxt's client is bound to it).
+  - **Store:** `data/streams.db` beside the journal. Housekeeping prunes it daily (`KEEP_BARS`).
+- **DataHub** (`market/hub.py`):
+  - `ctx.candles` for 15m and 1h reads the store when it is fresh, else REST. Fresh means complete, gap-free bars **and** the coin's kline stream updated within `STREAM_MAX_AGE_S` of the caller's weight class: 90 s for research and tier 2, 15 s for desk and protective (pre-trade re-checks). A socket that went quiet leaves complete-looking bars with a stopped forming bar.
+  - The rows are identical in shape. `features.candle_source` = `{tf: "stream" | "rest" | "mixed"}` sits next to `features.scan`, and `features.data_deferred` lists inputs the weight guard held back.
+- **Readers are bounded by now** (the market clock, #29): no candle, latest or fresh row written after it is ever returned.
+- **Tiered scan** (`scan_tiered.py`; the guardian's `scan` lane, research class, every 15 s; its own lane because the research lane's studies can hold it for 30 min):
+  - **When it evaluates:** each 15m close (5 s grace) runs every rule; between closes only `fast_events` run, each (coin, rule) once per window. A BTC/ETH impulse re-checks everything.
+  - **Selection:** `select` caps at 20. Tier 2 scores what fits `tier2_room()` at the measured weight per coin; the rest queue for the next close, and so does a coin starved by the weight guard (`data_deferred`), which is never logged.
+  - **Logging:** tier-2 rows are research candidates with `features.scan = {"tier": 2, "wake", "rules", "strength", "carried"}`; the replay (#29) skips them. Every close is a `scan_windows` row (counts per rule, selected, scored, queued, skipped, tier-2 weight), the data for evaluating the triggers.
+  - **Alerts:** tier 3 alerts are `scan_job.pick_alerts`, deduplicated in kv (`scan_alert_seen:`), so a restart doesn't re-alert within 2 h.
+  - **Stale streams:** tier 1 pauses and a `streams_stale` alert goes out after 10 min. There is no REST fallback scan.

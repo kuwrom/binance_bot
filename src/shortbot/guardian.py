@@ -4,9 +4,10 @@
 - executes the pre-approved parts of each trade's plan (breakeven, trailing, targets/time stop if auto)
 - tracks MAE/MFE per trade, alerts on squeeze risk, funding flips, stop proximity, news
 - alerts on new listing/delisting announcements; records metrics and labels research candidates
+- streams the liquid universe (stream_task.py) and runs the tiered scan on it (scan_tiered.py, docs/SCANNING.md)
 
 Jobs run in lanes (guardian_loop.py) that run concurrently: protective (fills, stops, plans), watch (alerts on
-open shorts), monitor (account and market alerts) and research. Every position and every job is isolated and
+open shorts), monitor (account and market alerts), research, and scan (tiers 1-3 at each 15m close). Every position and every job is isolated and
 time-boxed, and a slow or hung job only ever delays its own lane, never the protective one.
 """
 
@@ -27,10 +28,13 @@ from .guardian_positions import PositionChecks
 from .guardian_watch import WatchChecks
 from .killswitch import HEARTBEAT_KEY
 from .margin import ADL_PERSIST_PASSES
+from .market import streams
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
 from .notify import Notifier
 from .redact import install_log_redaction
+from .scan_tiered import TieredScan
+from .stream_task import StreamTask
 from .symlock import GUARDIAN_WAIT_S
 
 log = logging.getLogger("shortbot.guardian")
@@ -60,6 +64,7 @@ MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600,
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600),
             "long_shadow": (900, 900)}
+SCAN = {"scan": (15, 300)}   # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
 TICK_S = 1.0
 
@@ -94,6 +99,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self._fund_ts: dict[str, float] = {}
         self._tasks: list[asyncio.Task] = []
         self.lanes: dict[str, Lane] = {}
+        self.streams_db = streams.path_for(self.app.settings.db_path)   # None for an in-memory journal (tests)
+        self.tiered = TieredScan(self.ex, self.j, self.n, self.streams_db, self.app.settings.db_path)
 
     def _lanes(self) -> dict[str, Lane]:
         fns = {"entries": self.check_entries, "positions": self.check_positions,
@@ -104,6 +111,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
                "ladder": self.ladder_shadow, "laggard": self.laggard_study, "long_shadow": self.long_shadow,
+               "scan": self.tiered_scan,
                "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops}
 
         def lane(name: str, table: dict, **kw) -> Lane:
@@ -111,7 +119,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         return {"protective": lane("protective", PROTECTIVE, escalate_after=ESCALATE_AFTER_FAILS,
                                    escalate_note=FAILING),
                 "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
-                "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH)}
+                "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH),
+                "scan": lane("scan", SCAN)}
 
     def _heartbeat(self, at: float) -> None:
         """Called by a positions pass that verified every held position (or a flat account), `at` = its position read.
@@ -141,10 +150,12 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
     async def run(self) -> None:
         await self._startup()
         self.lanes = self._lanes()
-        runs = {name: (lambda ln=ln, d=RESEARCH_START_DELAY_S if name == "research" else 0.0: ln.run(d))
+        runs = {name: (lambda ln=ln, d=RESEARCH_START_DELAY_S if name in ("research", "scan") else 0.0: ln.run(d))
                 for name, ln in self.lanes.items()}
         # continuous liquidation recording (websocket; the only source of Binance liquidation data)
         runs["liquidations"] = LiquidationRecorder(self.liq_store).run
+        if self.streams_db:   # tier 0: market streams into the local store, on its own thread (stream_task.py)
+            runs["streams"] = StreamTask(self.ex, self.streams_db).run
         self._tasks = [asyncio.create_task(supervised(name, fn, self.n), name=f"guardian:{name}")
                        for name, fn in runs.items()]
         try:

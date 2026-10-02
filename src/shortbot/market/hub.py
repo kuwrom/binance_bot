@@ -5,6 +5,9 @@ fail closed). Adding a new data source = adding one getter here; every signal ca
     hub = DataHub(ex)
     ctx = hub.context("SUI/USDT:USDT", ticker)      # cheap; nothing fetched yet
     c1h = await ctx.candles("1h", 60)                 # fetched once, cached on the context
+
+Candles for the streamed timeframes (15m, 1h) come from the guardian's stream store (market/streams.py, #72) when
+they are fresh for the caller, else REST; `ctx.sources` records which, per timeframe (features.candle_source).
 """
 
 from __future__ import annotations
@@ -14,10 +17,15 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .. import clock
+from .. import clock, weight
 from ..exchange import Exchanges, to_raw, to_symbol
+from . import streams
 
 _FUNDING_TTL = 60
+# How long a symbol's kline stream may have been quiet for its store candles to count, by the caller's weight class:
+# a scan tolerates 90 s; a pre-trade re-check (entry_checks, the open/propose prechecks, coin_snapshot: desk or
+# protective) wants 15 s, or it reads REST. Live, a liquid coin's stream updates every second.
+STREAM_MAX_AGE_S = {weight.PROTECTIVE: 15.0, weight.DESK: 15.0, weight.RESEARCH: 90.0, weight.TIER2: 90.0}
 
 
 class DataHub:
@@ -27,6 +35,7 @@ class DataHub:
         self._funding: tuple[float, dict, dict] | None = None
         self._funding_lock = asyncio.Lock()
         self.extensions: dict[str, Any] = {}   # optional feeds keyed by name
+        self.streams_db = streams.path_for(getattr(getattr(ex, "settings", None), "db_path", None))
         try:  # guardian-recorded feeds (liquidations, social snapshots) live in the shared journal DB
             from .liquidations import LiquidationStore
             from .social import SocialStore
@@ -58,6 +67,17 @@ class DataHub:
             self._funding = (time.time(), rates, intervals if isinstance(intervals, dict) else {})  # wall-clock: TTL
             return self._funding[1], self._funding[2]
 
+    async def stream_candles(self, symbol: str, tf: str, limit: int,
+                             max_age_s: float | None = None) -> list[list[float]] | None:
+        """The store's bars when fresh for the caller (max_age_s, default by weight class), else None (use REST)."""
+        if self.streams_db is None or tf not in streams.TFS:
+            return None
+        age = max_age_s if max_age_s is not None else STREAM_MAX_AGE_S.get(weight.current(), 15.0)
+        try:   # off the event loop: a busy store must not stall the guardian's lanes
+            return await asyncio.to_thread(streams.candles, symbol, tf, limit, self.streams_db, clock.now_ms(), age)
+        except Exception:  # noqa: BLE001 - an unreadable cache is a miss
+            return None
+
 
 class MarketContext:
     """Everything known about one symbol during one evaluation. Getters return None/[] on failure and add the
@@ -70,6 +90,8 @@ class MarketContext:
         self._locks: dict[tuple, asyncio.Lock] = {}
         self.missing: set[str] = set()
         self.features: dict[str, Any] = {}   # merged first-wave features, visible to guard signals
+        self.sources: dict[str, str] = {}    # candles per timeframe: "stream" | "rest" | "mixed" (research splits)
+        self.deferred: set[str] = set()      # inputs the weight guard held back (budget_wait): incomplete data
 
     @property
     def base(self) -> str:
@@ -82,9 +104,11 @@ class MarketContext:
                 try:
                     async with self.hub.sem:
                         self._memo[key] = await fetch()
-                except Exception:  # noqa: BLE001 - recorded; vetoes decide whether it matters
+                except Exception as e:  # noqa: BLE001 - recorded; vetoes decide whether it matters
                     self._memo[key] = empty
                     self.missing.add(name)
+                    if isinstance(e, weight.BudgetWait):
+                        self.deferred.add(name)
                 if not self._memo[key] and empty is not None:
                     self.missing.add(name)
             return self._memo[key]
@@ -102,9 +126,14 @@ class MarketContext:
         c = await self.candles("1h", 60)
         return float(c[-1][4]) if c else 0.0
 
-    async def candles(self, tf: str = "1h", limit: int = 60) -> list[list[float]]:
-        return await self._get(("candles", tf, limit), f"candles_{tf}",
-                               lambda: self.ex.public.fetch_ohlcv(self.symbol, tf, limit=limit), [])
+    async def candles(self, tf: str = "1h", limit: int = 60, max_age_s: float | None = None) -> list[list[float]]:
+        """[ts, o, h, l, c, v] bars, the forming one last: the stream store's when fresh (module doc), else REST."""
+        async def fetch():
+            rows = await self.hub.stream_candles(self.symbol, tf, limit, max_age_s)
+            src, prev = ("stream" if rows else "rest"), self.sources.get(tf)
+            self.sources[tf] = src if prev in (None, src) else "mixed"
+            return rows or await self.ex.public.fetch_ohlcv(self.symbol, tf, limit=limit)
+        return await self._get(("candles", tf, limit), f"candles_{tf}", fetch, [])
 
     async def order_book(self, limit: int = 500) -> dict:
         """Perp order book (Binance limits 5/10/20/50/100/500/1000; 500 covers +-1% on alts). Not a critical input."""

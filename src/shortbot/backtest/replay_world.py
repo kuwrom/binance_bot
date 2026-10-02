@@ -98,6 +98,8 @@ def logged_scans(snap: Path | str, since_ms: int, until_ms: int) -> list[dict[st
         row = dict(r)
         for k in ("setups", "vetoes", "signals", "features"):
             row[k] = json.loads(row[k]) if row.get(k) else ([] if k != "features" else {})
+        if (row["features"].get("scan") or {}).get("tier") == 2:
+            continue   # the guardian's tier-2 deep score (#72): picked by triggers, not a scan_shorts call
         s = scans.setdefault(row["ts_ms"], {"ts_ms": row["ts_ms"], "ts": row["ts"], "regime": row["regime"], "rows": []})
         s["rows"].append(row)
     db.close()
