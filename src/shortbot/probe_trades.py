@@ -41,7 +41,8 @@ async def second_close_stop(p: Probe) -> dict[str, Any]:
     held_listed = await p.algo_open("position: open conditional orders")
     obs = {"flat": {"first": outcome(oka, a), "second": outcome(okb, b), "closePosition_listed": _n_close(flat_listed)},
            "position": {"second": outcome(okc, c), "closePosition_listed": _n_close(held_listed)}}
-    return {"observed": obs, "matches_fake": _refused(okb, b, -4130) and _refused(okc, c, -4130),
+    match = _refused(oka, a, -4509) and _refused(okb, b, -4509) and _refused(okc, c, -4130)
+    return {"observed": obs, "matches_fake": match,
             "verdict": f"a second closePosition stop, flat: {say(okb, b)}; with a position: {say(okc, c)}"}
 
 
@@ -143,8 +144,9 @@ async def reduce_only_oversize(p: Probe) -> dict[str, Any]:
     left = float(pos["contracts"]) if pos else 0.0
     mkt = {**outcome(okm, m), "filled": m.get("filled") if okm else None, "position_after": left}
     capped = okm and left == 0
+    lim_capped = oka and lim.get("amount") is not None and abs(float(lim["amount"]) - size) <= 1e-9
     return {"observed": {"size": size, "asked": big, "limit": lim, "market": mkt},
-            "matches_fake": _refused(oka, a, -2022) and capped,
+            "matches_fake": bool(lim_capped and capped),
             "verdict": f"reduce-only LIMIT 2x: {say(oka, a)}" + (f" (rests for {lim.get('amount')})" if oka else "")
                        + "; reduce-only MARKET 2x: " + ("capped, closed the position" if capped else
                                                         f"{say(okm, m)}, position {left:g} left")}

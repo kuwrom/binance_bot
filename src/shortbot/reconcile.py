@@ -2,7 +2,10 @@
 
 - finalize(): close a journal trade using Binance income history (REALIZED_PNL + COMMISSION + FUNDING_FEE,
   INSURANCE_CLEAR = liquidation) and the actual exit fills. Given the trade's position rebuilt from trade history
-  (`episode`), its income is bounded by that position and closed_at is its exit fill.
+  (`episode`), its income is that position's (trade_income) and closed_at is its exit fill.
+- income rows are stamped to the whole second, 100-944 ms BEFORE their trade (demo, probe_result 395, #75): a read
+  from a fill's own ms misses that fill's rows. A trade's rows are matched by tradeId, the rest by time from its
+  opening second.
 - reconcile(): journal trades are matched to the exchange by their own trade history (episodes.py), not by symbol
   (#15). A trade is closed once that history shows its position flat, at its exit fill, even if the symbol has been
   shorted again since; without its exit fill it is never closed. Rows stuck in 'opening' are recovered or aborted.
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,19 +45,40 @@ def ms_to_iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
 
 
+def floor_s(ms: int) -> int:
+    """The whole second holding ms: what an income row of a trade at ms is stamped (probe_result 395)."""
+    return int(ms) // 1000 * 1000
+
+
+def _row_key(r: dict[str, Any]) -> tuple:
+    return tuple(sorted((k, str(v)) for k, v in r.items()))
+
+
 async def income_since(t, start_ms: int, symbol: str | None = None) -> list[dict[str, Any]]:
-    """Raw /fapi/v1/income rows since start_ms (paged by time)."""
+    """Raw /fapi/v1/income rows since start_ms, paged by time. Many rows share a second (module doc), so a full page
+    can end inside one: the next page starts AT that second and skips the rows of it already read."""
     out: list[dict[str, Any]] = []
-    cursor = start_ms
+    cursor, seen = start_ms, Counter()
     for _ in range(10):
         req: dict[str, Any] = {"startTime": cursor, "limit": 1000}
         if symbol:
             req["symbol"] = to_raw(symbol)
         rows = await t.fapiPrivateGetIncome(req)
-        out.extend(rows)
+        fresh = []
+        for r in rows:
+            k = _row_key(r)
+            if seen[k]:
+                seen[k] -= 1   # its second's rows the last page answered already
+            else:
+                fresh.append(r)
+        out.extend(fresh)
         if len(rows) < 1000:
             break
-        cursor = int(rows[-1]["time"]) + 1
+        if not fresh:
+            log.warning("income from %s: 1000+ rows in one second; the rest of it is not read", cursor)
+            break
+        cursor = int(rows[-1]["time"])
+        seen = Counter(_row_key(r) for r in out if int(r["time"]) == cursor)
     return out
 
 
@@ -79,18 +104,34 @@ async def exit_fills(t, symbol: str, since_ms: int, until_ms: int | None = None)
     return sum(float(x["price"]) * float(x["amount"]) for x in buys) / qty, qty
 
 
+async def trade_income(t, trade: dict[str, Any], episode: dict[str, Any] | None = None,
+                       until_ms: int | None = None) -> dict[str, Any]:
+    """The trade's income (summarize_income), read from the second it opened (module doc). With its episode, a row
+    carrying a tradeId counts when that trade is one of the position's fills (the fill before it or a re-entry, in the
+    same second or before until_ms, is another position's); rows without one (funding, insurance) count up to the
+    episode's until_ms. Without an episode, every row from that second to until_ms (open-ended without)."""
+    since = episode["opened_ms"] if episode else iso_to_ms(trade["opened_at"])
+    until = episode.get("until_ms") if episode else until_ms
+    ids = {str(x.get("id")) for x in [*episode["sells"], *(episode.get("buys") or [])]} if episode else None
+
+    def ours(r: dict[str, Any]) -> bool:
+        tid = str(r.get("tradeId") or "")
+        if ids is not None and tid:
+            return tid in ids
+        return until is None or int(r["time"]) <= until
+    return summarize_income([r for r in await income_since(t, floor_s(since), trade["symbol"]) if ours(r)])
+
+
 async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
                    until_ms: int | None = None, *, episode: dict[str, Any] | None = None) -> dict[str, Any]:
     """Close a journal trade with exchange-truth PnL. Safe to call when the position is already flat.
     until_ms: the trade's end when it is known, so income and fills of later activity on the symbol are not counted.
-    episode: the trade's position rebuilt from trade history (episodes.match / walk): income from its first entry fill
-    to its until_ms, its exit fills' price, and closed_at = its exit fill (not the time of this call)."""
+    episode: the trade's position rebuilt from trade history (episodes.match / walk): its own income (trade_income),
+    its exit fills' price, and closed_at = its exit fill (not the time of this call)."""
     t, j = trader.t, trader.j
-    since = episode["opened_ms"] if episode else iso_to_ms(trade["opened_at"])
-    until = episode.get("until_ms") if episode else until_ms
-    rows = await income_since(t, since, trade["symbol"])
-    inc = summarize_income([r for r in rows if until is None or int(r["time"]) <= until])
-    exit_px = episode["exit"] if episode else (await exit_fills(t, trade["symbol"], since, until))[0]
+    inc = await trade_income(t, trade, episode, until_ms)
+    exit_px = episode["exit"] if episode else (await exit_fills(t, trade["symbol"], iso_to_ms(trade["opened_at"]),
+                                                                until_ms))[0]
     if inc["liquidated"] and "liquidat" not in reason:
         reason = f"LIQUIDATED ({reason})"
     j.close_trade(trade["id"], exit_px, inc["net"], reason, lesson,

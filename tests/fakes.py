@@ -2,17 +2,18 @@
 (fake_errors.py), so the desk's failure paths run against real behaviour:
 - several symbols (`add_symbol`), each with its own price, position and resting orders
 - conditional orders live on the Algo service (change log 2025-11-06, live 2025-12-09): listed, fetched and
-  cancelled only with params trigger=True; ONE closePosition stop per symbol and side (-4130); -2021 for a stop
-  that would trigger at once
+  cancelled only with params trigger=True; ONE closePosition stop per symbol and side (-4130), none while flat
+  (-4509); -2021 for a stop that would trigger at once
 - moving a price (`fake.price = x`, `set_price(sym, x)`) fills resting limits and triggers stops on the way, with
   closePosition semantics (fake_engine.py); `advance(s)` expires GTD limits and forgets orders that died unfilled
   3 days ago (-2013); `fill_limit` / `trigger_stop` force one
-- rejections: reduce-only without a position (-2022), tick size (-4014), min notional (-4164), margin (-2019),
-  GTD under 10 min (-5040), a client id that an OPEN order already uses (-4116)
+- rejections: reduce-only without a position (-2022; one larger than the position is capped instead), tick size
+  (-4014), min notional (-4164), margin (-2019), GTD under 10 min (-5040), a client id an OPEN order uses (-4116)
 - fault injection: answers lost after the order ran (-1007 / 503), 503 before it ran, -1021 around cancels, any
   refusal before it ran (`refuse`: 429, -1111, -4141...)
 - `fake.prod` is the separate keyless prod client (`ex.public`): its prices can diverge from the demo book
-- fills and income (REALIZED_PNL / COMMISSION) so PnL reconciliation can be tested; userTrades in 7-day windows (fake_engine)
+- fills and income (REALIZED_PNL / COMMISSION, stamped to the second) for PnL reconciliation; userTrades in 7-day
+  windows (fake_engine); the income endpoint (fake_account.py)
 - positions, margin type, Multi-Assets mode, ADL quantile and Binance's own closes (fake_account.py)"""
 
 from __future__ import annotations
@@ -205,6 +206,8 @@ class FakeCcxt(Account, Engine):
         assert side == "buy", "short-only fake: buy stops only"
         close = bool(params.get("closePosition"))
         if close:
+            if self.sym[s]["qty"] <= 0:   # demo, first or second stop alike (probe_result 389; 388 too)
+                raise err.close_position_flat()
             if self.fail_stop:   # a definite refusal: ccxt never raises a bare, code-less ExchangeError for Binance
                 self.fail_stop -= 1
                 raise err.max_stop_orders()
@@ -226,8 +229,8 @@ class FakeCcxt(Account, Engine):
             raise err.tick_size()
         if reduce and (side != "buy" or b["qty"] <= 0):
             raise err.reduce_only_rejected()
-        if reduce:
-            self._ro_compete(s, amount, price)   # fake_reduce.py
+        if reduce:   # capped at the position (probe_result 393), then the FAQ's competition (fake_reduce.py)
+            amount = self._ro_compete(s, amount, price)
         if not reduce and amount * price < b["min"]:
             raise err.min_notional(b["min"])
         gtd = None
@@ -256,10 +259,7 @@ class FakeCcxt(Account, Engine):
         if reduce:
             if side != "buy" or b["qty"] <= 0:
                 raise err.reduce_only_rejected()
-            self._ro_compete(s, amount, None)   # fake_reduce.py
-            # inferred: a reduce-only market order bigger than the position closes just the position (binance.com
-            # FAQ "Summary of Failed Orders": reduce-only market orders >= the position size get priority)
-            amount = min(amount, b["qty"])
+            amount = self._ro_compete(s, amount, None)   # capped: it closes just the position (probe_result 393)
         elif amount * b["price"] < b["min"]:
             raise err.min_notional(b["min"])
         elif side == "sell":
@@ -277,8 +277,8 @@ class FakeCcxt(Account, Engine):
             raise err.clock_drift()
         if _trigger(params):   # DELETE /fapi/v1/algoOrder by algoId
             if i not in self.stops and i not in self.prearms:
-                # finished, cancelled or unknown to the Algo service. SECONDARY source: testnet probes 2026-09-24
-                # (github.com/bcup02/trade-alerts PR #65) saw -2011 on a repeat cancel
+                # finished, cancelled or unknown to the Algo service: demo answered -2011 for a CANCELED and an
+                # EXPIRED one, and on a repeat (probe_result 392, 2026-10-02)
                 raise err.unknown_order()
             self._retire(i, "CANCELED")
             resp = {"id": i, "status": None, "info": {"algoId": i, "code": "200", "msg": "success"}}
@@ -327,10 +327,6 @@ class FakeCcxt(Account, Engine):
                 if o["symbol"] == s and o["status"] == "open":
                     o["status"] = "canceled"
         return {"code": 200, "msg": "The operation of cancel all open order is done."}
-
-    async def fapiPrivateGetIncome(self, req):
-        return [i for i in self.income if i["time"] >= req.get("startTime", 0)
-                and req.get("symbol") in (None, i["symbol"]) and req.get("incomeType") in (None, i["incomeType"])]
 
     async def fapiPrivateGetOpenOrders(self, req=None):
         """Raw GET /fapi/v1/openOrders (Current-All-Open-Orders doc: all symbols without `symbol`, weight 40; regular

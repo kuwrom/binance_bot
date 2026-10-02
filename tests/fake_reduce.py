@@ -5,14 +5,17 @@ are (#65). Sources:
   the more aggressive price (a BUY: the higher one) with a quantity greater than the position's remaining quantity;
   its example: long 100, reduce-only SELL 50 @ 1000 then 60 @ 999 -> the first is canceled. "Market Reduce-only order
   with quantity equal to or greater than the open position and stop market Reduce-only order will have the highest
-  priority". A reduce-only order is rejected when "the order size exceeds the open position".
+  priority". It also says a reduce-only order is rejected when "the order size exceeds the open position": demo
+  doesn't (probe_result 393, 2026-10-02): a reduce-only LIMIT for 2x the position was accepted with origQty = the
+  position and rested, and a MARKET for 2x closed just the position. A newcomer is capped at the position first.
 - dev.binance.vision/t/802 (Binance staff, 2020-10-18), why a futures LIMIT order is EXPIRED: "The reduceOnly open
   order is expired due to current position has been closed"; "replaced by another reduceOnly open order with better
   price".
 Inferred (the docs don't say): a partial market close (below the position) outranks every limit (its price is the
-most aggressive); equal prices rank by time; a newcomer that doesn't fit is rejected with -2022; a reduce-only fill
-is capped at the position, and the rest expires once flat; an order left resting at flat (`ro_expire_on_flat` off,
-the open question the desk is safe against) never fills without a position. Untriggered conditional orders (Algo
+most aggressive); equal prices rank by time; a (capped) newcomer that doesn't fit beside higher-priority ones is
+rejected with -2022 (393 measured a lone order only); a reduce-only fill is capped at the position, and the rest
+expires once flat; an order left resting at flat (`ro_expire_on_flat` off, the open question the desk is safe
+against) never fills without a position. Untriggered conditional orders (Algo
 service) take no part: nothing documents that they do."""
 
 from __future__ import annotations
@@ -29,12 +32,14 @@ class ReduceOnly:
                 if o["symbol"] == s and o["status"] == "open" and o["reduce"] and o["side"] == "buy"]
         return sorted(rows, key=lambda r: (-r[1]["price"], int(r[0])))
 
-    def _ro_compete(self, s: str, qty: float, price: float | None) -> None:
-        """A new reduce-only BUY of `qty` (price None: a market order) against the resting ones: whatever no longer
-        fits the position, lowest priority first, expires; a newcomer that doesn't fit itself is rejected."""
+    def _ro_compete(self, s: str, qty: float, price: float | None) -> float:
+        """A new reduce-only BUY of `qty` (price None: a market order), capped at the position (393), against the
+        resting ones: whatever no longer fits, lowest priority first, expires; a newcomer that doesn't fit itself is
+        rejected. Returns the newcomer's (capped) quantity."""
         pos = self.sym[s]["qty"]
+        qty = min(qty, pos)
         if price is None and qty >= pos - 1e-12:
-            return   # a closing market order: highest priority, and the position's close expires the rest
+            return qty   # a closing market order: highest priority, and the position's close expires the rest
         newest = float("inf")   # at its own price the newcomer ranks after the older orders
         ranked = [(float("inf") if price is None else price, newest, None, qty)]
         ranked += [(o["price"], int(i), i, o["amount"] - o["filled"]) for i, o in self._ro_open(s)]
@@ -51,6 +56,7 @@ class ReduceOnly:
             raise err.reduce_only_rejected()
         for i in drop:
             self.limits[i]["status"] = "expired"
+        return qty
 
     def _ro_flat(self, s: str) -> None:
         """The position closed: its reduce-only limits expire."""

@@ -137,12 +137,12 @@ async def _window(t, symbol: str, a: int, b: int, calls: list[int], open_end: bo
     return head + (await _window(t, symbol, hi + 1, hi + 1, calls, True) if open_end else [])
 
 
-async def match(trader, trade: dict[str, Any]) -> dict[str, Any]:
+async def match(trader, trade: dict[str, Any], read_until: int | None = None) -> dict[str, Any]:
     """The trade's position from trade history. state: closed (flat: its exit fills exist; until_ms bounds it at the
     next activity on the symbol, else SETTLE_MS past its exit fill), open, no_entry (no entry fill found) or broken (it
-    buys back more than was sold)."""
+    buys back more than was sold). read_until: history is read up to there (default: now), for a trade long closed."""
     opened = int(datetime.fromisoformat(trade["opened_at"]).timestamp() * 1000)
-    trades = await history(trader.t, trade["symbol"], opened - SKEW_MS)
+    trades = await history(trader.t, trade["symbol"], opened - SKEW_MS, read_until)
     own = {str(e["order_id"]) for e in tranches.own_entries(trader.j, trade["id"]) if e.get("order_id")}
     mine = [i for i, x in enumerate(trades) if str(x.get("order")) in own]
     start = None

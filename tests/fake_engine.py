@@ -57,9 +57,11 @@ class Engine(ReduceOnly):
                   and a.get("ts", old) < old]:
             del self.algo[i]
         for s in [s for s, due in self.countdowns.items() if due and due <= self.now_ms()]:
-            self.countdowns[s] = None   # countdownCancelAll fired: once, regular orders only (inferred)
+            self.countdowns[s] = None   # countdownCancelAll fired: once, regular AND conditional orders (388)
             for o in self.limits.values():
                 o["status"] = "canceled" if o["symbol"] == s and o["status"] == "open" else o["status"]
+            for i in [i for i in [*self.stops, *self.prearms] if self._algo_sym(i) == s]:
+                self._retire(i, "CANCELED")
 
     # ------------------------------------------------------------ prices
     def set_price(self, s: str, p: float) -> None:
@@ -148,8 +150,9 @@ class Engine(ReduceOnly):
 
     def _fill(self, s: str, side: str, amount: float, order: str | None = None) -> None:
         """A trade at the current price, stamped by the exchange clock, as ccxt parses a userTrades row
-        (Account-Trade-List doc), with its income rows (Get-Income-History doc: symbol, incomeType, income, time and
-        the trade's tradeId; the same exchange time as the trade is the fake's assumption, demo probe #55 measures it)."""
+        (Account-Trade-List doc), with its income rows (Get-Income-History doc) as demo answered them (probe_result
+        395, 2026-10-02): the trade's tradeId (and in `info`), a tranId the closing trade's REALIZED_PNL and COMMISSION
+        share (REALIZED_PNL listed first), and `time` = the trade's time floored to the second (100-944 ms earlier)."""
         b = self.sym[s]
         px, ms, tid = b["price"], self.now_ms(), str(len(self.fills) + 1)
         fee, pnl = px * amount * FEE, (b["entry"] - px) * amount if side == "buy" else 0.0
@@ -158,19 +161,20 @@ class Engine(ReduceOnly):
                            "fee": {"cost": fee, "currency": "USDT"},
                            "info": {"orderId": order, "side": side.upper(), "realizedPnl": str(pnl),
                                     "commission": str(fee), "time": ms}})
-        self.income.append({"symbol": raw(s), "incomeType": "COMMISSION", "income": str(-fee), "asset": "USDT",
-                            "time": ms, "tradeId": tid})
+        row = {"symbol": raw(s), "asset": "USDT", "time": ms // 1000 * 1000, "info": tid,
+               "tranId": int(f"9010{int(side == 'buy')}{tid}"), "tradeId": tid}
+        if side == "buy":
+            self.income.append({**row, "incomeType": "REALIZED_PNL", "income": str(pnl)})
+        self.income.append({**row, "incomeType": "COMMISSION", "income": str(-fee)})
         if side == "sell":
             b["entry"] = (b["entry"] * b["qty"] + px * amount) / (b["qty"] + amount)
             b["qty"] += amount
             return
-        self.income.append({"symbol": raw(s), "incomeType": "REALIZED_PNL", "income": str(pnl), "asset": "USDT",
-                            "time": ms, "tradeId": tid})
         b["qty"] = round(max(0.0, b["qty"] - amount), 8)
         if not b["qty"]:
             self._ro_flat(s)
-            # a closePosition stop goes with the position. SECONDARY source: testnet probes 2026-09-24
-            # (github.com/bcup02/trade-alerts PR #65); a reduce-only stop stays and is rejected if it triggers
+            # a closePosition stop goes with the position: EXPIRED within 0.5 s on demo (probe_result 390); a
+            # reduce-only stop stays NEW (391, still resting 15.5 s later) and is rejected if it triggers
             for i in [i for i in self.stops if self._algo_sym(i) == s]:
                 self._retire(i, "EXPIRED")
 
@@ -200,8 +204,9 @@ class Engine(ReduceOnly):
     async def fapiPrivatePostCountdownCancelAll(self, req):
         """POST /fapi/v1/countdownCancelAll (Auto-Cancel-All-Open-Orders doc, weight 10): every open order of the symbol
         is cancelled once countdownTime ms pass without another call; 0 stops the timer; answers {symbol,
-        countdownTime}. Inferred: regular orders only (allOpenOrders and algoOpenOrders are separate endpoints since the
-        Algo migration); demo probe #55 measures whether conditional orders go too. Fires on `advance`."""
+        countdownTime}. Conditional orders go too: demo cancelled a reduce-only stop (algoStatus CANCELED, probe_result
+        388); a closePosition stop can't rest flat to be measured (-4509), so it goes as well (inferred). The desk
+        never arms it (tests/test_probe_folds.py). Fires on `advance`."""
         s, ms = self._by_raw(req["symbol"]), int(req["countdownTime"])
         self.countdowns[s] = self.now_ms() + ms if ms else None
         return {"symbol": req["symbol"], "countdownTime": str(ms)}

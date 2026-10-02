@@ -87,8 +87,8 @@ def switch_algo():   # -4120 STOP_ORDER_SWITCH_ALGO (not in ccxt's maps -> Excha
 
 
 def one_close_position_stop():
-    # -4130 (not in ccxt's maps -> ExchangeError). No longer on the error-code page; SECONDARY source: testnet probes
-    # 2026-09-24 (github.com/bcup02/trade-alerts PR #65) still see a second same-side closePosition stop refused
+    # -4130 (not in ccxt's maps -> ExchangeError). No longer on the error-code page; demo refused a second same-side
+    # closePosition stop with it while a position was open (probe_result 389, 2026-10-02; flat: -4509 first)
     return ccxt.ExchangeError(_body(-4130, "An open stop or take profit order with GTE and closePosition in the "
                                            "direction is existing."))
 
@@ -159,7 +159,7 @@ def unmapped(code: int = -4999, msg: str = "Not in ccxt's maps."):   # handle_er
 
 def close_position_flat():
     # -4509 (not in ccxt's maps -> ExchangeError): a closePosition STOP_MARKET placed while flat. Not on the error-code
-    # page; seen on demo by probe #6 (countdown_cancel_all, probe_result 2026-10-02, #55). The fake itself still places
-    # one while flat (a follow-up task aligns it)
+    # page; seen on demo for a first and a second stop alike (probe_result 388, 389; 2026-10-02, #55). fakes._new_stop
+    # raises it
     return ccxt.ExchangeError(_body(-4509, "Time in Force (TIF) GTE can only be used with open positions. Please "
                                            "ensure that positions are available."))

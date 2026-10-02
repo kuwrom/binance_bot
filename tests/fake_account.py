@@ -27,6 +27,17 @@ class Account:
         """POST /fapi/v1/listenKey (Start-User-Data-Stream doc): one key per account, extended when it exists."""
         return {"listenKey": "fakeListenKeyDoNotLog0123456789abcdef"}
 
+    async def fapiPrivateGetIncome(self, req=None):
+        """GET /fapi/v1/income (Get-Income-History doc): startTime and endTime inclusive, oldest first, `limit` 100 by
+        default and 1000 at most; tranId is unique within an incomeType. Rows are stamped to the whole second
+        (probe_result 395, fake_engine._fill), so a startTime at a fill's own ms misses that fill's rows."""
+        r = req or {}
+        a, b = r.get("startTime"), r.get("endTime")
+        rows = sorted((i for i in self.income if (a is None or i["time"] >= a) and (b is None or i["time"] <= b)
+                       and r.get("symbol") in (None, i["symbol"]) and r.get("incomeType") in (None, i["incomeType"])),
+                      key=lambda i: i["time"])
+        return [dict(i) for i in rows[:min(int(r.get("limit") or 100), 1000)]]
+
     def _position(self, s: str, b: dict) -> dict:
         iso = b.get("margin", "ISOLATED") == "ISOLATED"
         n, upnl = b["qty"] * b["price"], (b["entry"] - b["price"]) * b["qty"]
@@ -126,9 +137,9 @@ class Account:
         cid = "adl_autoclose" if kind == "ADL" else f"autoclose-{self.now_ms()}"
         i = self._record_market(s, "buy", b["qty"], True, cid)
         o = self.market_orders[i]
-        if kind == "LIQUIDATION":
+        if kind == "LIQUIDATION":   # stamped to the second like the trade rows (inferred: 395 measured those only)
             self.income.append({"symbol": raw(s), "incomeType": "INSURANCE_CLEAR", "income": "-0.5", "asset": "USDT",
-                                "time": o["ts"]})
+                                "time": o["ts"] // 1000 * 1000, "tranId": int(i), "tradeId": ""})
         self.force_orders.append((kind, {
             "orderId": int(i), "symbol": raw(s), "status": "FILLED", "clientOrderId": cid, "price": str(o["avg"]),
             "avgPrice": str(o["avg"]), "origQty": str(o["amount"]), "executedQty": str(o["amount"]),

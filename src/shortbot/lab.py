@@ -18,8 +18,10 @@ from __future__ import annotations
 import asyncio
 import statistics
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
+from . import fee_audit as _fee_audit
 from . import indicators as ind
 from . import research as _research
 from . import scanner as _scanner
@@ -98,6 +100,12 @@ def metrics(symbol: str, limit: int = 1000) -> list[dict]:
 
 def report(min_n: int = 5) -> dict:
     return _research.report(journal(), min_n)
+
+
+def fee_audit(limit: int = 500) -> dict:
+    """Closed trades' journalled fees / P&L against Binance income matched by tradeId (fee_audit.py, #75): before,
+    after and diff per trade, and the totals. Reads the account's trade history and income; writes nothing."""
+    return _with_ex(lambda ex: _fee_audit.audit(SimpleNamespace(t=ex.require_trade(), j=journal()), limit))
 
 
 def group_mean(rows: list[dict], key: Callable[[dict], Any], field: str = "short_ret_24h") -> dict[Any, dict]:

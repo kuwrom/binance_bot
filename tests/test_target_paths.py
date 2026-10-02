@@ -16,7 +16,7 @@ from shortbot.trading import Trader
 from tests.fakes import SYM, FakeEx, neutral_budget, ok_prechecks
 from tests.test_entry_amend import desk as entry_desk, one
 from tests.test_killswitch import prop
-from tests.test_target_orders import PLAN, desk, market_buys, resting
+from tests.test_target_orders import PLAN, desk, market_buys, placed_by_the_guardian, resting, target_creates
 
 
 def session(g, limits=None):
@@ -179,3 +179,24 @@ async def test_an_unreadable_book_never_blocks_a_close(tmp_path):
     assert "target_cancel_failed" in [a["kind"] for a in s.j.alerts(50)]
     await g.check_positions()                                     # the guardian sweeps them
     assert book(fake) == [] and targets.live(g.j) == []
+
+
+async def test_a_target_binance_capped_at_the_position_is_journalled_at_its_real_size(tmp_path, monkeypatch):
+    """The position shrinks (a partial ADL) between the desk's read and the target's send: Binance caps a reduce-only
+    order at the position instead of refusing it (probe_result 393), so the target rests smaller than asked."""
+    placed_by_the_guardian(monkeypatch)
+    g, fake, tid = await desk(tmp_path, {"targets": [{"price": 0.9, "fraction": 1.0}], "auto": {"targets": True}})
+    send = fake.create_order
+
+    async def adl_first(s, type_, side, amount, price=None, params=None):
+        if type_ == "limit" and side == "buy":
+            fake.sym[SYM]["qty"] = 60.0
+        return await send(s, type_, side, amount, price, params)
+    monkeypatch.setattr(fake, "create_order", adl_first)
+    await g.check_positions()
+    assert [o[2] for o in target_creates(fake)] == [100] and book(fake) == [(0.9, 60)]
+    (row,) = targets.rows(g.j)
+    assert (row["status"], row["qty"]) == ("resting", 60) and "capped" in row["history"]
+    assert "target_rejected" not in [a["kind"] for a in g.j.alerts(50)]
+    await g.check_positions()                                     # the book is the plan's: nothing re-sent
+    assert len(target_creates(fake)) == 1

@@ -115,7 +115,7 @@ async def countdown_cancel_all(p: Probe) -> dict[str, Any]:
             obs[f"{k}_status"] = algo_status(q) if okq else say(okq, q)
     algos = [v for k, v in obs.items() if k in ("closePosition_stop", "reduce_only_stop") and v is not None]
     match = None if obs["limit"] is None or not algos else obs["limit"] == "cancelled" and all(
-        v == "still rests" for v in algos)
+        v == "cancelled" for v in algos)
     return {"observed": obs, "matches_fake": match,
             "verdict": f"the countdown cancelled the limit: {obs['limit']}; closePosition stop: "
                        f"{obs['closePosition_stop']}; reduce-only stop: {obs['reduce_only_stop']}"}
@@ -133,8 +133,8 @@ def _since_ms(p: Probe) -> int:
 
 
 async def income_timestamps(p: Probe) -> dict[str, Any]:
-    """10: do COMMISSION / REALIZED_PNL income rows carry their trade's own time (matched by tradeId)? Read only: the
-    trades are the earlier probes' (or any on the symbol in the window)."""
+    """10: what time do COMMISSION / REALIZED_PNL income rows carry against their trade's (matched by tradeId)? Read
+    only: the trades are the earlier probes' (or any on the symbol in the window)."""
     since = _since_ms(p)
     trades = await p.need("userTrades since the probes", p.t.fetch_my_trades, p.sym, since)
     inc = await p.need("income since the probes", p.t.fapiPrivateGetIncome,
@@ -152,5 +152,6 @@ async def income_timestamps(p: Probe) -> dict[str, Any]:
     obs = {"since_ms": since, "trades": len(trades), "income_rows": len(rows), "pairs": pairs,
            "unmatched": [kit.raw(r) for r in unmatched[:10]]}
     spread = f"delta ms min {min(deltas)} max {max(deltas)}" if deltas else "no deltas"
-    return {"observed": obs, "matches_fake": bool(pairs) and not unmatched and all(d == 0 for d in deltas),
+    floored = all(-1000 < x["delta_ms"] <= 0 and x["income_time"] % 1000 == 0 for x in pairs)
+    return {"observed": obs, "matches_fake": bool(pairs) and not unmatched and floored,
             "verdict": f"{len(pairs)} of {len(rows)} income rows matched their trade by tradeId: {spread}"}

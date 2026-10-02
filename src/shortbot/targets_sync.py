@@ -95,8 +95,13 @@ async def _found(tr, symbol: str, row: dict) -> dict | None:
 
 
 async def _landed(tr, row: dict, o: dict, why: str | None = None) -> None:
-    """Journal what the exchange says about the row's order: on the book (fills so far), or final."""
-    st = o.get("status")
+    """Journal what the exchange says about the row's order: on the book (fills so far), or final. Binance caps a
+    reduce-only order larger than the position at it instead of refusing it (demo, probe_result 393): a target sent
+    as the position shrank lands smaller, and its row takes the size it has."""
+    st, amount = o.get("status"), float(o.get("amount") or 0)
+    if row["status"] in ("placing", "unknown") and 0 < amount < float(row["qty"]) - 1e-12:
+        targets.move(tr.j, row, row["status"], f"capped at the position by Binance: {amount:g} of {row['qty']:g}",
+                     qty=amount)
     if st == "open":
         if row["status"] != "resting":
             targets.move(tr.j, row, "resting", "on the book", order_id=str(o["id"]))

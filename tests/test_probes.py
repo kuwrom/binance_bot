@@ -95,7 +95,8 @@ async def test_income_timestamps_reads_the_probe_trades_and_finds_the_trade_time
     r = await probes.run(tr, "income-timestamps", "XRPUSDT")
     assert r["ok"] and r["matches_fake"] is True and len(fake.orders) == n   # read only
     pairs = r["observed"]["pairs"]
-    assert {p["type"] for p in pairs} == {"COMMISSION", "REALIZED_PNL"} and all(p["delta_ms"] == 0 for p in pairs)
+    assert {p["type"] for p in pairs} == {"COMMISSION", "REALIZED_PNL"}
+    assert all(-1000 < p["delta_ms"] <= 0 and p["income_time"] % 1000 == 0 for p in pairs)   # probe_result 395
 
 
 async def test_income_timestamps_without_trades_says_so(clock):
@@ -176,10 +177,11 @@ async def test_a_trip_mid_probe_stops_it_before_its_next_opening_order(clock, mo
     send = fake.create_order
 
     async def create_order(s, type_, side, amount, price=None, params=None):
-        o = await send(s, type_, side, amount, price, params)
-        if type_ == "STOP_MARKET":   # another process trips the kill switch after the first flat stop
-            tr.j.set(ks.KV_KEY, json.dumps({"state": ks.REDUCING, "by": "test", "reason": "mid-probe", "at": None}))
-        return o
+        try:
+            return await send(s, type_, side, amount, price, params)
+        finally:
+            if type_ == "STOP_MARKET":   # another process trips the kill switch after the first flat stop (-4509)
+                tr.j.set(ks.KV_KEY, json.dumps({"state": ks.REDUCING, "by": "test", "reason": "mid-probe", "at": None}))
     monkeypatch.setattr(fake, "create_order", create_order)
     r = await probes.run(tr, "second-close-stop", "XRPUSDT")
     assert r["ok"] is False and "REDUCING" in r["error"] and r["clean"] and clean(fake)

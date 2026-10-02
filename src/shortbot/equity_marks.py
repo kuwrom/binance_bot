@@ -69,8 +69,9 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
     that stored it) the equity view (A = equity - mark - transfers) is cross-checked against the income view
     (B = trading income since the mark + change in unrealized). They agree unless an income row lags the balance:
     a withdrawal not yet reported would read as a loss in A, a deposit as a gain. A disagreement younger than
-    PENDING_MS uses B (pending); one that persists uses min(A, B) (conservative for the caps). Never raises: any
-    failure returns the old definitions with degraded=True (the kill switch calls this inside guardian hooks)."""
+    PENDING_MS uses B (pending); one that persists uses min(A, B) (conservative for the caps). Income rows in the
+    mark's own second count on whichever side of it B agrees with A. Never raises: any failure returns the old
+    definitions with degraded=True (the kill switch calls this inside guardian hooks)."""
     try:
         now = now or datetime.now(timezone.utc)
         now_ms = int(now.timestamp() * 1000)
@@ -82,7 +83,11 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
             pnl = equity - float(m["equity"]) - transfers(transfer_rows, ts)
             out["pending"][kind] = False
             if unrealized is not None and m.get("unrealized") is not None:
-                b = trading_income(transfer_rows, ts) + (unrealized - float(m["unrealized"]))
+                du = unrealized - float(m["unrealized"])
+                # income rows are stamped to the second (probe_result 395): one in the mark's own second may be from
+                # before the mark (the guardian closes, then marks) or after it. B counts them on the side that agrees
+                b = min((trading_income(transfer_rows, t0) + du for t0 in (ts, ts // 1000 * 1000)),
+                        key=lambda x: abs(pnl - x))
                 pk = journal.mode_key(f"eq_pending:{kind}")
                 if abs(pnl - b) > max(1.0, 0.001 * abs(equity)):
                     first = int(journal.get(pk) or 0) or now_ms

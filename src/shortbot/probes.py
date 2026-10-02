@@ -42,7 +42,6 @@ ACTIVE_KEY = "probe_active:"   # kv: a probe position on <symbol> until <expiry 
 ACTIVE_TTL_S, REFRESH_S = 60.0, 20.0
 GAP_S = 3.0                    # between probes under --all
 CLEANUP_S = 90.0
-SECONDARY = "secondary source: testnet probes, github.com/bcup02/trade-alerts PR #65"
 
 
 @dataclass(frozen=True)
@@ -55,24 +54,27 @@ class Case:
 
 
 CASES: dict[str, Case] = {
-    "second-close-stop": Case("1", True, pt.second_close_stop, "a second closePosition STOP_MARKET on the same symbol "
-                              f"and side is refused with -4130, flat or not (fakes._new_stop; {SECONDARY})"),
+    "second-close-stop": Case("1", True, pt.second_close_stop, "a closePosition STOP_MARKET while flat is refused "
+                              "-4509, the first or a second; with a position a second one -4130 (fakes._new_stop; "
+                              "demo 2026-10-02)"),
     "close-stop-at-flat": Case("2", True, pt.close_stop_at_flat, "a closePosition stop leaves with its position: "
-                               f"algoStatus EXPIRED at flat (fake_engine._fill; {SECONDARY})"),
+                               "algoStatus EXPIRED at flat (fake_engine._fill; demo 2026-10-02)"),
     "cancel-finished": Case("3", True, pt.cancel_finished, "cancelling a conditional order that is no longer open "
-                            f"(FINISHED, EXPIRED, CANCELED) answers -2011 OrderNotFound (fakes.cancel_order; {SECONDARY})"),
-    "reduce-only-oversize": Case("4", True, pt.reduce_only_oversize, "a reduce-only LIMIT larger than the position is "
-                                 "rejected -2022 (fake_reduce, Failed-Orders FAQ); a reduce-only MARKET order is capped "
-                                 "at the position (fakes._new_market, inferred)"),
-    "countdown-cancel-all": Case("6", False, pc.countdown_cancel_all, "countdownCancelAll cancels regular orders only; "
-                                 "conditional (algo) orders stay (fake_engine, inferred)", 60.0),
+                            "(FINISHED, EXPIRED, CANCELED) answers -2011 OrderNotFound (fakes.cancel_order; demo "
+                            "2026-10-02)"),
+    "reduce-only-oversize": Case("4", True, pt.reduce_only_oversize, "a reduce-only LIMIT or MARKET order larger than "
+                                 "the position is capped at it, the LIMIT rests (fake_reduce._ro_compete; demo "
+                                 "2026-10-02)"),
+    "countdown-cancel-all": Case("6", False, pc.countdown_cancel_all, "countdownCancelAll cancels regular AND "
+                                 "conditional orders (fake_engine.advance; demo 2026-10-02)", 60.0),
     "user-stream": Case("7", False, ps.user_stream, "none: the fake has no user-data stream (this informs #72)", 60.0),
     "trigger-listing-cid": Case("8", False, pc.trigger_listing_cid, "the trigger listing carries our clientOrderId and "
                                 "a lookup by clientAlgoId finds it (fakes._algo_view; shape seen on demo 2026-09-27)", 60.0),
     "fetch-by-cid": Case("9", False, pc.fetch_by_cid, "fetch_order by clientOrderId finds a resting and a cancelled "
                          "limit; an unknown id answers -2013 (fakes.fetch_order)", 60.0),
     "income-timestamps": Case("10", False, pc.income_timestamps, "COMMISSION and REALIZED_PNL income rows carry their "
-                              "trade's tradeId and exact time (fake_engine._fill)", 60.0),
+                              "trade's tradeId and its time floored to the second (fake_engine._fill; demo "
+                              "2026-10-02)", 60.0),
     "algo-unknown-cid": Case("11", False, pc.algo_unknown_cid, "Query-Algo-Order for an unknown clientAlgoId answers "
                              "-2013 OrderNotFound (fakes.fetch_order; undocumented, clientid.lookup relies on it)", 60.0),
     "reduce-only-stop-at-flat": Case("12b", True, pt.reduce_only_stop_at_flat, "a reduce-only STOP_MARKET (pre-arm "

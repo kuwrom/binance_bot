@@ -69,7 +69,7 @@ async def test_the_open_orders_sweep_leaves_probe_orders_alone():
 
 
 # ------------------------------------------------------------ the fake endpoints the probes measure
-async def test_fake_countdown_cancels_regular_orders_once_and_zero_stops_it():
+async def test_fake_countdown_cancels_once_and_zero_stops_it():
     fake = FakeCcxt()
     lim = await fake.create_order(SYM, "limit", "sell", 50, 1.2, {"timeInForce": "GTC"})
     st = await fake.create_order(SYM, "STOP_MARKET", "buy", 10, None, {"triggerPrice": 1.3, "reduceOnly": True})
@@ -78,7 +78,7 @@ async def test_fake_countdown_cancels_regular_orders_once_and_zero_stops_it():
     fake.advance(1)
     assert fake.limits[lim["id"]]["status"] == "open"
     fake.advance(3)
-    assert fake.limits[lim["id"]]["status"] == "canceled" and st["id"] in fake.prearms   # inferred: algo stays
+    assert fake.limits[lim["id"]]["status"] == "canceled" and st["id"] not in fake.prearms   # algo too (388)
     lim2 = await fake.create_order(SYM, "limit", "sell", 50, 1.2, {"timeInForce": "GTC"})
     await fake.fapiPrivatePostCountdownCancelAll({"symbol": "PUMPUSDT", "countdownTime": 3000})
     await fake.fapiPrivatePostCountdownCancelAll({"symbol": "PUMPUSDT", "countdownTime": 0})
@@ -96,6 +96,6 @@ async def test_fake_raw_algo_query_and_income_trade_ids():
         await fake.fapiPrivateGetAlgoOrder({"clientAlgoId": "never-sent"})
     await fake.create_order(SYM, "market", "sell", 100)
     (inc,) = await fake.fapiPrivateGetIncome({"symbol": "PUMPUSDT"})
-    assert inc["tradeId"] == fake.fills[-1]["id"] and inc["time"] == fake.fills[-1]["timestamp"]
+    assert inc["tradeId"] == fake.fills[-1]["id"] and inc["time"] == fake.fills[-1]["timestamp"] // 1000 * 1000
     mark = await fake.fapiPublicGetPremiumIndex({"symbol": "PUMPUSDT"})
     assert float(mark["markPrice"]) == fake.price
