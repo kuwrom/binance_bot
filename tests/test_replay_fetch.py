@@ -65,3 +65,10 @@ def test_movers_are_the_extremes_at_each_moment(tmp_path):
     with clock.at(F.T):
         mv = RF.movers(s, [F.T], depth=1, margin=0, universe="demo")
     assert mv == ["AAAUSDT", "BBBUSDT", "BTCUSDT", "ETHUSDT"]
+
+
+def test_days_stop_before_today():
+    import time
+    now = int(time.time() * 1000)
+    d = RF.days(now - 3 * F.DAY, now + 5 * F.DAY)
+    assert len(d) == 3 and all(isinstance(x, str) for x in d)

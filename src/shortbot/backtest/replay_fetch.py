@@ -45,7 +45,7 @@ KEYS = {"perp": "{um}/daily/klines/{raw}/1m/{raw}-1m-{day}.zip",
 
 
 def days(a_ms: int, b_ms: int) -> list[str]:
-    today = time.time() // 86400 * 86400 * 1000  # wall-clock: archive days are published after they end
+    today = int(time.time() // 86400 * 86400 * 1000)  # wall-clock: archive days are published after they end
     return [V.day_str(d) for d in range(a_ms // DAY * DAY, min(b_ms, today), DAY)]
 
 
