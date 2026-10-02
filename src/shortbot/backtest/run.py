@@ -4,6 +4,7 @@
     .venv/bin/python -m shortbot.backtest.run --days60        # 60-day history (shortbot.histdata.load60)
     .venv/bin/python -m shortbot.backtest.run --days60 --round1   # + round-1 variants (strategies_v2)
     .venv/bin/python -m shortbot.backtest.run --days60 --long     # the long sleeve only (strategies_long, research)
+    .venv/bin/python -m shortbot.backtest.run --days60 --flow     # positioning cards (strategies_flow, research)
     .venv/bin/python -m shortbot.backtest.run --days60 --round2   # + round-2 variants (strategies_v3, report_v3)
     .venv/bin/python -m shortbot.backtest.run --days60 --round3   # + round-3 veto tests (strategies_v4, report_v4)
     ... --round3 --round4      # + round-4 corrections table (report_v5); defaults --placebo=matched --dsr=clustered

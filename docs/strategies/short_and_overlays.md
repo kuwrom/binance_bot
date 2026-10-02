@@ -77,10 +77,10 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: over-levered longs pay funding and sit on liquidation clusters; a shock forces sales that feed on themselves (10 Oct: 87% of $19.3bn liquidated were longs, $7bn in < 1h)
 - rules: *(proposed)* funding > 0.05%/8h for >= 3 prints AND OI +20% in 7d AND price stalls (4h lower high); enter on a break of the 4h swing low; stop above the swing high; target the prior volume node; time stop 3 days; bank 50% on the first > 2 ATR move (ADL risk)
 - data needed: funding, OI hist, long/short ratios, taker ratio: Binance public (archive via data.binance.vision metrics)
-- evidence: 10-Oct structure (https://insights4vc.substack.com/p/inside-the-19b-flash-crash); BIS WP 1087 (carry_crash_regime); no trade-level stats
-- grade: Anecdote
+- evidence: 10-Oct structure (https://insights4vc.substack.com/p/inside-the-19b-flash-crash). own 60-day backtest 2026-07-27 to 09-29 (`run --days60 --flow`, docs/BACKTEST.md "Positioning cards"): last 3 prints >= 0.05%/8h, OI +20% / +40% over 7 days, 4h lower high, break of the 4-bar low: 87 / 63 trades, -0.20 / -0.24R, paired -0.04 / -0.28 (t -0.2 / -1.8), stress -0.24 / -0.27. Fails. With the regime studies (high funding is trend-on, a coin's own funding has no edge), crowded longs in this form are not a short signal
+- grade: Practitioner-data
 - risks: crowded longs stay crowded for weeks; squeezes on low float; the winning short gets ADL'd in the very cascade it predicted
-- fit: High — the core shortbot thesis; overlaps funding_hi, so register as a variant, not a new setup
+- fit: Low — tested and failed (above); keep only as context in plans
 
 ### forced_flow_crowding_sizing — Calendar forced flows are crowded: size them down
 - direction: both
@@ -134,10 +134,12 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: who is adding risk. OI up + price down + funding positive = longs averaging down (long trap, short continuation); OI up + price down + funding negative = late shorts piling in (squeeze fuel, long on reclaim)
 - rules: *(proposed)* 8h windows; long trap needs >= 2 positive 8h funding prints before shorting; squeeze fuel -> long only after a reclaim of local resistance; flat funding = no trade
 - data needed: openInterestHist (30d), funding, klines: Binance public
-- evidence: framework only (https://coinunited.io/en/research/crypto/crypto-open-interest-divergence-signals-guide-2026); BTC OI +12% in a month with negative funding preceded a squeeze attempt, Feb-2026 (CoinDesk)
-- grade: Anecdote
+- evidence: framework only (https://coinunited.io/en/research/crypto/crypto-open-interest-divergence-signals-guide-2026); BTC OI +12% in a month with negative funding preceded a squeeze attempt, Feb-2026 (CoinDesk). own 60-day backtest 2026-07-27 to 09-29 (`run --days60 --flow`, docs/BACKTEST.md "Positioning cards"):
+  - long trap short (OI +5% over 24h, price -3%, last 2 prints > 0): 244 trades, -0.01R absolute, but +0.10R over the matched same-hour placebo (t 1.7, both halves +0.10 / +0.11). That is a relative edge, like pump_fade's; with OI +10%: +0.08 (t 1.3).
+  - squeeze fuel long (OI +10%, price -3%, last 2 prints < 0, then a 12h-high reclaim): 49 trades, +0.34R, stress +0.31, DSR 0.98, PF 2.56, +0.85% funding received per trade. But it is only +0.13R over its placebo (t 0.3): "promising", small n. The OI +5% variant: 86 trades, +0.30R, +0.09 vs placebo.
+- grade: Practitioner-data
 - risks: unvalidated (OI history: REST 30d, full archive via data.binance.vision metrics)
-- fit: Med — inputs are in the DataHub; test as a tape.py feature, not a setup
+- fit: Med — the long-trap short has a relative edge only (it needs a hedge or a falling regime), and the squeeze-fuel long is the best long so far but n=49. Shadow-log both and retest on new data
 
 ### ls_ratio_taker_contrarian — Retail long/short ratio and taker-flow contrarian filter
 - direction: both
@@ -145,10 +147,13 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: the global account ratio counts retail heads; the top-trader position ratio tracks large accounts; retail heavily short while top traders are long and taker buys dominate tends to squeeze up (mirror for shorts)
 - rules: *(proposed)* 1h; long when globalLongShortAccountRatio < 0.8 (or 7d z < -2), topLongShortPositionRatio rising and takerlongshortRatio > 1.1 for 3 bars above the 1h VWAP; mirror as a short confirmation; exit when the ratio normalises
 - data needed: /futures/data/globalLongShortAccountRatio, topLongShortPositionRatio, takerlongshortRatio: Binance public (REST keeps 30 days; full history in data.binance.vision daily `metrics`, parsed by histdata_vision.py)
-- evidence: no published backtest; used descriptively by CoinGlass and CoinDesk
-- grade: Anecdote
+- evidence: no published backtest; used descriptively by CoinGlass and CoinDesk. own 60-day backtest 2026-07-27 to 09-29 (`run --days60 --flow`, docs/BACKTEST.md "Positioning cards"):
+  - short side (retail account ratio z >= 2, top traders cutting, takers selling): 53 trades, -0.19R, -0.06 vs placebo. Fails.
+  - long side (z <= -2 / -3): 1,246 / 273 trades, +0.00 / +0.03R, paired -0.02 / +0.01. No edge.
+  - Consistent with round 0's feature split: who is long (whales vs retail) did not matter at 1h.
+- grade: Practitioner-data
 - risks: noisy and venue-specific; account ratio is not notional
-- fit: Med — free hourly data with archived history; backtestable now
+- fit: Low — tested, no edge on either side in the 60-day window
 
 ### cross_exchange_premium_sentiment — Korea premium as a froth gauge
 - direction: short

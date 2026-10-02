@@ -175,6 +175,24 @@ Pooled long trades: +0.01R. Same-coin placebo: +0.02R. Same-hour placebo: +0.00R
 - Shadow-log the long side of premium_discount, the only variant worth it.
 - Retest all four on a new window before any long is considered.
 
+## Positioning cards (research, 2026-10-02, task #16)
+`run --days60 --flow` runs five pre-registered strategies from the library (`strategies_flow.py`: 10 param sets, effective N 7). They use the hourly OI, long/short ratios and taker ratio from data.binance.vision metrics.
+
+| strategy (picked on IS) | n | avg R | stress R | vs same-hour placebo, paired (t_day; IS/OOS) | DSR | verdict |
+|---|---|---|---|---|---|---|
+| long_trap_short (OI +5%, price −3%, funding > 0) | 244 | −0.01 | −0.06 | **+0.10 (1.7; 0.10/0.11)** | 0.08 | fails (relative edge) |
+| crowded_unwind_short (OI +40%/7d) | 63 | −0.24 | −0.27 | −0.28 (−1.8) | 0.00 | fails |
+| ls_contrarian_short (retail ratio z ≥ 2) | 53 | −0.19 | −0.27 | −0.06 (−0.9) | 0.02 | fails |
+| squeeze_fuel_long (OI +10%, price −3%, funding < 0, reclaim) | 49 | +0.34 | +0.31 | +0.13 (0.3) | 0.98 | promising |
+| ls_contrarian_long (retail ratio z ≤ −3) | 273 | +0.03 | −0.06 | +0.01 (−0.6) | 0.21 | promising (no real edge) |
+
+Pooled: −0.01R. Same-coin placebo: −0.06R. Same-hour placebo: −0.01R. Random shorts: −0.23R.
+
+**Read:**
+- The positioning triggers add little beyond direction.
+- The long trap is the only short with a consistent relative edge: it beats shorting a matched coin that hour in both halves. It is still not an absolute one.
+- The squeeze-fuel long is the best long found so far: positive in both halves and under stress, collecting +0.85% funding per trade. But with only 49 trades and a weak edge over its placebo it is a shadow-log candidate, not a setup.
+
 ## Caveats
 - One 2-month window is essentially one regime (an alt-up drift), and hourly bars hide intrabar squeezes: stops almost never gap on 1h. The stress run is the honest cost bound.
 - **Walk-forward:** the IS/OOS split has no fitting beyond picking 1 of ≤ 4 param sets, so OOS is a regime check. Rerun the same ledger on a new window before trusting any cell.

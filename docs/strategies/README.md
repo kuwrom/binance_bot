@@ -44,7 +44,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | 7 | ctrend_technical_aggregate, carry_momo_breakout_blend | long / both | strongest long ranking signals |
 | 8 | hack_exploit_short | short | NY Fed: -27% 24h CAR |
 | 9 | premium_index_reversion, funding_interval_switch | both | same code path as premium_hi / squeeze_exhaustion |
-| 10 | ls_ratio_taker_contrarian, oi_price_funding_regime | both | testable now: history from data.binance.vision metrics (`histdata_vision.py`) |
+| 10 | oi_price_funding_regime | both | **tested**: long-trap short has a relative edge (+0.10R vs placebo, t 1.7); squeeze-fuel long +0.34R (n 49): shadow-log both. ls_ratio_taker_contrarian and crowded_long_unwind_short failed |
 
 ## New evidence for existing setups
 - **listing_fade / exchange_listing_pump:** 2025 listings held from day-1 close to 11-Mar-2026 lost about 70% (Binance n=92 -71.7%, Upbit n=59 -69.5%, Bithumb n=144 -69.1%). H2-2025 cohorts decayed less (https://www.odaily.news/en/post/5209720). Listing-day abnormal return was +5.7% across 327 listings, +17.5% on Binance (BRL 2019). The cause is that MM inventory hedges, discount buyers and unlocks all sit on the sell side (supply_overhang_short).
@@ -67,8 +67,8 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | funding_settlement_drift | both | microstructure | Single-source | Med | short_and_overlays.md |
 | liquidation_magnet | both | microstructure | Anecdote | Low | short_and_overlays.md |
 | liquidation_wick_harvest | both | microstructure | Practitioner-data | High | short_and_overlays.md |
-| ls_ratio_taker_contrarian | both | microstructure | Anecdote | Med | short_and_overlays.md |
-| oi_price_funding_regime | both | microstructure | Anecdote | Med | short_and_overlays.md |
+| ls_ratio_taker_contrarian | both | microstructure | Practitioner-data | Low | short_and_overlays.md |
+| oi_price_funding_regime | both | microstructure | Practitioner-data | Med | short_and_overlays.md |
 | orderbook_imbalance_l2 | both | microstructure | Working-paper | Low | short_and_overlays.md |
 | reversal_15m_flow_execution | both | microstructure | Working-paper | Med | short_and_overlays.md |
 | cme_gap_fill | both | other | Anecdote | Low | short_and_overlays.md |
@@ -123,5 +123,5 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | lowfloat_highfdv_decay_short | short | event/supply | Practitioner-data | High | short_and_overlays.md |
 | supply_overhang_short | short | event/supply | Practitioner-data | High | short_and_overlays.md |
 | upbit_warning_short | short | event/supply | Anecdote | Med | short_and_overlays.md |
-| crowded_long_unwind_short | short | microstructure | Anecdote | High | short_and_overlays.md |
+| crowded_long_unwind_short | short | microstructure | Practitioner-data | Low | short_and_overlays.md |
 | cross_exchange_premium_sentiment | short | stat-arb | Peer-reviewed | Med | short_and_overlays.md |
