@@ -1,5 +1,7 @@
 # Round 3 (2026-09-29): are the live vetoes right?
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 The forensics catalog (`docs/SCRIPTS.md`, "Contradictions with the current registry") claimed that several live vetoes look backwards in this 60-day window. Round 3 tests each one as a **partition of a base book**:
 - **blocked:** the base signals the veto fires on. This is what inverting the veto would trade.
 - **allowed:** the base book with the veto on. This is what the desk trades.

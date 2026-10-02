@@ -325,3 +325,21 @@ def test_rotation_failure_still_lists_the_new_copy(tmp_path, monkeypatch):
                                                "PermissionError: read-only folder"]
     assert (tmp_path / "backups" / name).exists() and [k for k, _ in alerts] == ["backup_failed"]
     assert json.loads(Journal(db).get("backup_last_ok"))["name"] == name
+
+
+def test_default_backup_includes_the_trial_register_when_it_exists(tmp_path, monkeypatch, capsys):
+    from shortbot import trial_register as TR
+    _desk(tmp_path)
+    monkeypatch.delenv(TR.ENV, raising=False)
+    monkeypatch.setattr(sys, "argv", ["shortbot", "backup"])
+    with pytest.raises(SystemExit) as e:
+        cli.main()                                   # no register yet: the journal only, not an error
+    assert e.value.code == 0 and [c["name"][:9] for c in json.loads(capsys.readouterr().out)["copies"]] == ["shortbot-"]
+    TR.record("backtest", [{"name": "a", "params": {"trial": "a"}, "n": 3}],
+              db_path=tmp_path / "data" / "research" / "trials.db")
+    monkeypatch.setenv("SHORTBOT_BACKUP_DIR", str(tmp_path / "backups2"))     # the same second: a fresh dir
+    with pytest.raises(SystemExit) as e:
+        cli.main()
+    copies = json.loads(capsys.readouterr().out)["copies"]
+    assert e.value.code == 0 and sorted(c["name"].split("-")[0] for c in copies) == ["shortbot", "trials"]
+    assert next(c for c in copies if c["name"].startswith("trials"))["rows"] == {"trials": 1}

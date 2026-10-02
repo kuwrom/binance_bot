@@ -1,5 +1,7 @@
 # Multi-year regime studies (research 2026-10-02)
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 This file has three daily studies plus the remaining card tests (§4) on six years of Binance perps, delisted coins included. The hourly backtest in [BACKTEST.md](BACKTEST.md) covers only 60 days, which is one regime. Each study was fixed in code before its first run, and every cell is logged as a registry trial.
 
 **Data:** `histdaily.py` → `data/daily.db`:

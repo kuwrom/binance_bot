@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sqlite3
 import statistics
 import sys
 from datetime import UTC, datetime
@@ -222,17 +221,17 @@ def run(db_path: str = "data/daily.db") -> dict[str, Any]:
             "ctrend_weeks": len(ct), "blend_days": len(bl)}
 
 
-def record(res: dict[str, Any], db_path: str = "data/shortbot.db") -> int:
-    from .. import registry as R
-    db, n = sqlite3.connect(db_path, timeout=30), 0
+def record(res: dict[str, Any], prov: dict | None = None, out: Any = None) -> int:
+    """Every reported leg is a trial in the trial register (#31; the old journal ledger's shape, source xs_daily)."""
+    from .. import trial_register as TR
+    rows = []
     for pid, block, legs in (("lib.ctrend_technical_aggregate", "ctrend", ("long_net", "short_net", "ls_net")),
                              ("lib.carry_momo_breakout_blend", "blend", ("long", "short", "ls_net"))):
         for leg in legs:
             s = res[block][leg]
-            R.add_trial(db, pid, {"leg": leg}, "xs_daily", {"n": s.get("n"), "mean": s.get("mean"), "t": s.get("t")})
-            n += 1
-    db.close()
-    return n
+            rows.append({"name": f"{block}|{leg}", "family": pid, "params": {"leg": leg}, "n": s.get("n"),
+                         "mean": s.get("mean"), "t": s.get("t"), "t_kind": "iid_daily", "metric": "daily_ret"})
+    return TR.record("xs_factors", rows, prov, out)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -240,18 +239,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--db", type=Path, help="default: <data dir>/daily.db")
     ap.add_argument("--out", type=Path, help="JSON file (default: <data dir>/research/<date>-<sha7>/xs_factors/)")
     ap.add_argument("--no-save", action="store_true", help="print only")
-    ap.add_argument("--record", action="store_true", help="add every reported leg to the registry trial ledger")
+    ap.add_argument("--record", action="store_true", help="no-op: every run records its legs (trial register, #31)")
     given = list(sys.argv[1:] if argv is None else argv)
     a = ap.parse_args(given)
     db = a.db or P.data_dir() / "daily.db"
     fp = P.fingerprint(db)
     res = run(str(db))
+    prov = out = None
     if not a.no_save:
         argv_ = P.ensure_arg([x for x in given if x != "--record"], "--db", db)
         prov = P.stamp(P.config("shortbot.backtest.xs_factors", argv_), {"daily_db": fp})
-        print("saved to", P.write_json("xs_factors", prov, res, a.out))
-    if a.record:
-        res["recorded_trials"] = record(res, str(P.desk_db()))
+        print("saved to", out := P.write_json("xs_factors", prov, res, a.out))
+    res["recorded_trials"] = record(res, prov, out)
     print(json.dumps(res, indent=1))
 
 

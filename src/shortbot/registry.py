@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
-import statistics
 import time
 from datetime import datetime, timezone
 from typing import Any
 
+from . import cluster_se as C
 from . import registry_forward as F
+from . import research_stats as rs
 
 STATUSES = ("draft", "shadow", "live", "probation", "retired")
 LEVELS = ("regime", "lifecycle", "tape", "controller", "script", "setup", "detector", "strategy", "filter", "veto")
@@ -122,12 +122,20 @@ def add_episodes(db, pid: str, rows: list[dict[str, Any]], version: int | None =
 
 
 def add_trial(db, pid: str, params: dict[str, Any], source: str, stats: dict[str, Any]) -> None:
-    ver = (latest(db, pid) or {}).get("version") or 1
-    db.execute("INSERT OR REPLACE INTO pattern_trials (pattern_id, version, params, source, n, n_coins, mean, t,"
-               " oos_n, oos_mean, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-               (pid, ver, json.dumps(params, sort_keys=True), source, stats.get("n"), stats.get("n_coins"),
-                stats.get("mean"), stats.get("t"), stats.get("oos_n"), stats.get("oos_mean"), _now()))
-    db.commit()
+    """A trial of pattern `pid` into the one trial register (#31, trial_register.py). The journal's pattern_trials
+    is legacy: migrated into the register once, never written again (`db` is kept for the callers' signature)."""
+    from . import trial_register as TR
+    TR.record(TR.LEGACY_STUDY.get(source, source), [
+        {"name": params.get("trial") or pid, "family": pid, "params": params, "n": stats.get("n"),
+         "coins": stats.get("n_coins"), "mean": stats.get("mean"), "t": stats.get("t"), "t_kind": stats.get("t_kind")}])
+
+
+def trial_count(db, pid: str) -> int:
+    """Trials of a pattern: the register's count, or the legacy table's when the register lacks them (an
+    unmigrated or absent register, e.g. on the AWS guardian). Never raises on a missing register."""
+    from . import trial_register as TR
+    legacy = db.execute("SELECT COUNT(*) FROM pattern_trials WHERE pattern_id=?", (pid,)).fetchone()[0]
+    return max(TR.count(pid), legacy)
 
 
 def link_learning(db, pid: str, learning_id: int) -> None:
@@ -137,34 +145,23 @@ def link_learning(db, pid: str, learning_id: int) -> None:
 
 
 # ------------------------------------------------------------------ evidence
-def _clustered_t(xs: list[tuple], key: int) -> float | None:
-    by: dict[Any, list[float]] = {}
-    for e in xs:
-        by.setdefault(e[key] // DAY_MS if key == 4 else e[key], []).append(e[1])
-    cm = [statistics.fmean(v) for v in by.values()]
-    if len(cm) < 2:
-        return None
-    se = statistics.stdev(cm) / math.sqrt(len(cm))
-    return round(statistics.fmean(cm) / se, 2) if se else None
-
-
 def _stats(eps: list[tuple]) -> dict[str, Any] | None:
-    """eps: (symbol, outcome, win, mae, ts_ms). Descriptive: raw outcomes, coin-clustered mean/CI; t_day clusters by
-    calendar day too (scan outcomes of one sell-off week are one market move, not 30 independent coins)."""
+    """eps: (symbol, outcome, win, mae, ts_ms). Descriptive: the pooled mean of raw outcomes with its coin-clustered
+    CI and t, and its day-clustered t (scan outcomes of one sell-off week are one market move, not 30 independent
+    coins). CV3 floored at iid, t(G-1) (research_stats). #31: before, mean and t were over equal-weighted coin / day
+    means, not the pooled mean."""
     xs = [e for e in eps if e[1] is not None]
     if not xs:
         return None
-    by: dict[str, list[float]] = {}
-    for e in xs:
-        by.setdefault(e[0], []).append(e[1])
-    cm = [statistics.fmean(v) for v in by.values()]
-    m = statistics.fmean(cm)
-    se = statistics.stdev(cm) / math.sqrt(len(cm)) if len(cm) > 1 else None
+    vals = [e[1] for e in xs]
+    c = rs.clustered_mean(vals, [e[0] for e in xs])
+    m, se = c["mean"], c["se"]
+    t_day, _ = C.one_way_t(vals, [e[4] // DAY_MS for e in xs])
     wins = [e[2] for e in xs if e[2] is not None]
     maes = sorted(e[3] for e in xs if e[3] is not None)
-    return {"n": len(xs), "n_coins": len(by), "n_days": len({e[4] // DAY_MS for e in xs}), "mean": round(m, 3),
-            "ci95": [round(m - 1.96 * se, 3), round(m + 1.96 * se, 3)] if se else None,
-            "t": round(m / se, 2) if se else None, "t_day": _clustered_t(xs, 4),
+    return {"n": len(xs), "n_coins": c["days"], "n_days": len({e[4] // DAY_MS for e in xs}), "mean": round(m, 3),
+            "ci95": [round(c["ci95"][0], 3), round(c["ci95"][1], 3)] if c["ci95"] and se else None,
+            "t": round(m / se, 2) if se else None, "t_day": None if t_day is None else round(t_day, 2),
             "win_pct": round(sum(wins) / len(wins) * 100, 1) if wins else None,
             "mae_p90": round(maes[int(len(maes) * 0.9)], 2) if maes else None}
 
@@ -179,7 +176,7 @@ def card(db, pid: str, now_ms: int | None = None) -> dict[str, Any] | None:
     rows = db.execute("SELECT symbol, outcome, win, mae_pct, oos, ts_ms, source FROM pattern_episodes WHERE"
                       " pattern_id=? AND version=?", (pid, p["version"])).fetchall()
     base = [(r[0], r[1], r[2], r[3], r[5] or 0) for r in rows]
-    trials = db.execute("SELECT COUNT(*) FROM pattern_trials WHERE pattern_id=?", (pid,)).fetchone()[0]
+    trials = trial_count(db, pid)
     sources = dict(db.execute("SELECT source, COUNT(*) FROM pattern_episodes WHERE pattern_id=? AND version=? GROUP BY"
                               " source", (pid, p["version"])).fetchall())
     learn = [r[0] for r in db.execute("SELECT learning_id FROM pattern_learnings WHERE pattern_id=?", (pid,))]

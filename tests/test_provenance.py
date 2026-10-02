@@ -142,7 +142,8 @@ def test_backtest_results_carry_sha_fingerprint_config_and_rerun_reproduces(tmp_
     assert cfg["args"]["placebo"] == "matched" and (cfg["costs"]["taker_bps"], cfg["stress"]["taker_bps"]) == (5.0, 7.5)
     assert len(cfg["ledger"]) == res["n_trials"] == 36
     assert (prov["window"]["t0_ms"], prov["window"]["t1_ms"]) == (T0, T0 + 159 * H)
-    assert prov["window"]["coins"] == 6 and cfg["pin"] == ["--t0", str(T0), "--t1", str(T0 + 159 * H)]
+    assert prov["window"]["coins"] == 6 and cfg["pin"] == ["--t0", str(T0), "--t1", str(T0 + 159 * H),
+                                                          "--trials-asof", "0"]   # the trial register it read (#31)
     traded = [n for n, t in res["trials"].items() if t.get("all", {}).get("n")]
     assert traded and all(n in prov["seeds"]["per_trial"] for n in traded)
     md = (a / "report.md").read_text()
@@ -171,7 +172,8 @@ def test_no_save_prints_only_and_the_default_dir_is_under_research(tmp_path, mon
     hist = tmp_path / "data" / "hist.db"
     _write_hist(hist, _synthetic())
     run.main(["--days60", "--db", str(hist), "--no-save"])
-    assert not (tmp_path / "data" / "research").exists() and "Provenance" not in capsys.readouterr().out
+    research = tmp_path / "data" / "research"           # no run dir; a --no-save run still records its trials (#31)
+    assert [q.name for q in research.iterdir()] == ["trials.db"] and "Provenance" not in capsys.readouterr().out
     run.main(["--days60", "--db", str(hist), "--round1"])
     out = list((tmp_path / "data" / "research").glob("*/bt60_r1/results.json"))
     assert len(out) == 1 and json.loads(out[0].read_text())["provenance"]["config"]["args"]["round1"] is True

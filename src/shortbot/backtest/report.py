@@ -4,11 +4,13 @@ splits (pooled strategy trades vs the placebo and the random baseline in the sam
 
 Verdict (per strategy, on the IS-selected param set):
   SURVIVES      OOS avg R > 0, IS avg R > 0, beats BOTH placebos (same coin / same hour), stays > 0 under the
-                cost stress, day-clustered t >= 2 and DSR >= 0.95
+                cost stress, two-way (day x coin) clustered t of the avg R >= 2 (#31; was the day t) and DSR >= 0.95
+                (N = every independent trial in the trial register when it is given, T = effective trades)
   promising     OOS and IS > 0 and beats both placebos, but not significant after the multiple-testing haircut
   fails         anything else;  insufficient: fewer than 10 trades (or < 5 out of sample)
   "(relative edge only)": absolute R fails, but the trade beats its same-hour placebo in both halves with a
-                day-clustered t >= 3 (better than shorting anything else that hour; not money for a short-only book)"""
+                two-way clustered t >= 3 (better than shorting anything else that hour; not money for a short-only
+                book)"""
 
 from __future__ import annotations
 
@@ -112,12 +114,12 @@ def verdict(sel: dict[str, Any]) -> str:
         return "insufficient"
     ok = (o["avg_r"] > 0 and i["avg_r"] > 0 and (sel.get("edge_vs_placebo") or 0) > 0
           and (sel.get("edge_vs_time") or 0) > 0)
-    if ok and (a.get("t_day") or 0) >= 2 and (sel.get("dsr") or 0) >= 0.95 and (sel.get("stress_r") or 0) > 0:
+    if ok and (a.get("t_2way") or 0) >= 2 and (sel.get("dsr") or 0) >= 0.95 and (sel.get("stress_r") or 0) > 0:
         return "SURVIVES"
     if ok:
         return "promising"
     pe = sel.get("paired_time") or {}
-    if (pe.get("is") or 0) > 0 and (pe.get("oos") or 0) > 0 and (pe.get("t_day") or 0) >= 3:
+    if (pe.get("is") or 0) > 0 and (pe.get("oos") or 0) > 0 and (pe.get("t_2way") or 0) >= 3:
         return "fails (relative edge only)"
     return "fails"
 
@@ -126,8 +128,10 @@ def _edge(tr: list[dict], ctl: list[dict]) -> float | None:
     return round(statistics.fmean(t["r"] for t in tr) - statistics.fmean(t["r"] for t in ctl), 3) if tr and ctl else None
 
 
-def build(res: dict[str, Any], m: Market, stress: dict[str, Any] | None = None, dsr_mode: str = "legacy"
-          ) -> dict[str, Any]:
+def build(res: dict[str, Any], m: Market, stress: dict[str, Any] | None = None, dsr_mode: str = "legacy",
+          register: bool = False, register_asof: int | None = None) -> dict[str, Any]:
+    """register: read the trial register (every other study's recorded trials), so the DSR's N spans the whole
+    search; register_asof pins it to the rows a recorded run saw (results.json register.max_id)."""
     mid = (m.t0 + WARMUP * H + m.t1) // 2
     q_len = (m.t1 - m.t0 - WARMUP * H) / 4
 
@@ -184,9 +188,14 @@ def build(res: dict[str, Any], m: Market, stress: dict[str, Any] | None = None, 
             per_strategy_splits[st] = splits({"strategy": tr, "placebo": (res["placebo"].get(s["trial"]) or {})
                                               .get("trades") or [], "time_placebo": (res["placebo_time"].get(
                                                   s["trial"]) or {}).get("trades") or []}, edges, min_n=5)
+    reg = {}
+    if register:      # N over the whole search: this run's trials and split cells + every other recorded study (#31)
+        from .register_rows import register_deflate
+        reg = register_deflate(res, rows, selected, edges, dsr_mode, register_asof)
     return {"window": res["window"], "mid": mid, "n_trials": n_trials, "var_sr": round(var_sr, 4),
             "dsr_mode": dsr_mode, "n_eff": defl["n_eff"], "var_sr_legacy": defl["var_sr_legacy"],
             "families": defl.get("families"), "placebo_mode": res.get("placebo_mode", "legacy"),
+            "n_eff_register": reg.get("n_eff_register"), "register": reg.get("register"),
             "trials": rows, "selected": selected,
             "pooled": {"strategy": summarize(pooled), "placebo": summarize(placebo), "time_placebo": summarize(ptime),
                        "random": summarize(rnd)},
@@ -213,11 +222,12 @@ def markdown(rep: dict[str, Any]) -> str:
          f"{w['has_delist']})", "",
          f"Trials in the ledger: **{rep['n_trials']}** (effective N {rep.get('n_eff')}; var of trial Sharpe "
          f"{rep['var_sr']}, legacy {rep.get('var_sr_legacy')}; DSR mode {rep.get('dsr_mode', 'legacy')}, placebo "
-         f"{rep.get('placebo_mode', 'legacy')}). "
+         f"{rep.get('placebo_mode', 'legacy')}; trial register: N_eff {rep.get('n_eff_register')} over "
+         f"{(rep.get('register') or {}).get('specs')} other recorded trials, the DSR verdicts' N). "
          "OOS = entries after the window midpoint. R after fees, slippage and funding.", "",
          "## Per strategy (param set picked on the first half, judged on the second)", "",
          "| strategy | picked | sets | n | coins | IS avg R | OOS n | OOS avg R | OOS win% | all avg R | gross R | "
-         "PF | maxDD R | squeeze% | vs coin plc | vs time plc (paired t_day; IS/OOS) | stress R | t_day | DSR | R by quarter (time plc) | verdict |",
+         "PF | maxDD R | squeeze% | vs coin plc | vs time plc (paired t_day; IS/OOS) | stress R | t_day / t_2way | DSR | R by quarter (time plc) | verdict |",
          "|" + "---|" * 21]
     for st, s in rep["selected"].items():
         a, i, o = s["all"], s["is"], s["oos"]
@@ -226,7 +236,7 @@ def markdown(rep: dict[str, Any]) -> str:
                  f"{o.get('n', 0)} | {_f(o.get('avg_r'))} | {_f(o.get('win_pct'), 0)} | {_f(a.get('avg_r'))} | "
                  f"{_f(a.get('avg_r_gross'))} | {_f(a.get('pf'))} | {_f(a.get('max_dd_r'))} | "
                  f"{_f(a.get('squeeze_pct'), 0)} | {_f(s.get('edge_vs_placebo'))} | {_pe(s.get('paired_time'))} | "
-                 f"{_f(s.get('stress_r'))} | {_f(a.get('t_day'))} | "
+                 f"{_f(s.get('stress_r'))} | {_f(a.get('t_day'))} / {_f(a.get('t_2way'))} | "
                  f"{_f(s.get('dsr'))} | {' '.join(_f(x) for x in s['quarters'])} "
                  f"({' '.join(_f(x) for x in s['quarters_time_placebo'])}) | {s['verdict']} |")
     L += ["", "## Every trial (the ledger)", "",

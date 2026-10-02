@@ -324,14 +324,18 @@ def main(argv: list[str] | None = None) -> None:
     a = ap.parse_args(given)
     db = a.db or P.data_dir() / "lifecycle.db"
     fp = P.fingerprint(db)
-    md = report(load(db))
+    coins = load(db)
+    md = report(coins)
+    prov = out = None
     if not a.no_save:
         prov = P.stamp(P.config("shortbot.lifecycle_report", P.ensure_arg(given, "--db", db)),
                        {"lifecycle_db": fp})
         md += "\n\n" + P.footer(prov) + "\n"
         out = P.save(a.out or P.run_dir("lifecycle", prov["git"]), prov, {"lifecycle.md": md})
         md += f"\nsaved to {out}"
-    print(md)
+    from . import trial_register as TR
+    from .backtest.register_rows import lifecycle_rows
+    print(md + f"\ntrial register: {TR.record('lifecycle', lifecycle_rows(coins), prov, out)} rows")
 
 
 if __name__ == "__main__":

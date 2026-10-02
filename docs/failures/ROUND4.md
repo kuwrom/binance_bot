@@ -1,5 +1,7 @@
 # Round 4 (2026-09-29): corrections to rounds 0–3
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 A read-only code review found five problems in the backtest. None of them is a new idea or a new trial. They are fixes to the **controls**: the placebo and the multiple-testing haircut. The ledger is unchanged (N = 123 trials), and no strategy rule changed. Rounds 0–3 were then rerun once with the fixes.
 
 Code:

@@ -1,5 +1,7 @@
 # Proposals with their evidence (2026-10-02)
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 These are designs, not code. P1a and P2 now carry research-derived answers, not open questions. Evidence lives in [INDUSTRY.md](INDUSTRY.md) §5 and the library cards.
 
 ## P1. Exit and venue hygiene for open shorts (task #14)

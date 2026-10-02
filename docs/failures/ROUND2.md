@@ -1,5 +1,7 @@
 # Round 2 (2026-09-29)
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 Three questions from the human-approved list: (1) which **entry type** in breakdowns, (2) whether **auto breakeven / trailing** add value on our fades, (3) **re-entry** after a stop-out and a **funding budget** for discount shorts. They are comparisons on identical signals, not new filters, so the IS step below is a description, not a search.
 
 ### 1. Diagnosis (in-sample only: signals ≥ 30h before the 2026-08-29 19:30 UTC midpoint, entries before it)

@@ -27,6 +27,27 @@ READS = frozenset({"regime", "scan", "snapshot", "news", "account", "positions",
                    "unlocks", "calibration", "signals", "budget", "governor", "reassess", "book-plan", "log", "audit"})
 
 
+
+async def _study(app, args) -> dict:
+    """`shortbot study NAME`; every study's trials go into the trial register (#31). sweeps is descriptive (fake-out
+    size quantiles for stop placement), not a test."""
+    from . import trial_register as TR
+    from .backtest import register_rows as RR
+    if args.name == "ladder":
+        from .shadow_eval import evaluate as ev_ladder
+        res, rows = ev_ladder(app.journal), RR.ladder_rows
+    elif args.name == "patterns":
+        from . import patterns as pt, patterns_data as ptd
+        fetched = await ptd.fetch_all(app.ex, app.journal, days=10) if args.fetch else None
+        res, rows = {"fetch": fetched, **pt.report(pt.run(ptd.load(app.journal)))}, RR.patterns_rows
+    elif args.name == "laggard":
+        from .laggard import report as lag_report
+        res, rows = lag_report(app.journal), RR.laggard_rows
+    else:
+        from .sweeps import report as sweep_report
+        return sweep_report(app.journal)
+    return {**res, "trial_register_rows": TR.record(args.name, rows(res))}
+
 async def _run(args: argparse.Namespace) -> object:
     app = get_app()
     try:
@@ -71,18 +92,7 @@ async def _run(args: argparse.Namespace) -> object:
                     return await sweeps.run_study(app.ex, app.journal, args.days, args.top)
                 return sweeps.report(app.journal)
             case "study":
-                if args.name == "ladder":
-                    from .shadow_eval import evaluate as ev_ladder
-                    return ev_ladder(app.journal)
-                if args.name == "patterns":
-                    from . import patterns as pt, patterns_data as ptd
-                    fetched = await ptd.fetch_all(app.ex, app.journal, days=10) if args.fetch else None
-                    return {"fetch": fetched, **pt.report(pt.run(ptd.load(app.journal)))}
-                if args.name == "laggard":
-                    from .laggard import report as lag_report
-                    return lag_report(app.journal)
-                from .sweeps import report as sweep_report
-                return sweep_report(app.journal)
+                return await _study(app, args)
             case "ladder":
                 from .ladder import build_ladder
                 if args.enable or args.apply or args.dry_run:

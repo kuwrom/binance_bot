@@ -192,6 +192,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--round4", action="store_true", help="add the round-4 corrections section (report_v5)")
     ap.add_argument("--compare", type=Path, help="--round4: an earlier results.json to diff every verdict against")
     ap.add_argument("--long", action="store_true", help="ledger = the long sleeve (strategies_long; research)")
+    ap.add_argument("--trials-asof", type=int, help="read the trial register as of this row id (pins a rerun's N)")
     ap.add_argument("--flow", action="store_true", help="ledger = the positioning cards (strategies_flow; research)")
     given = list(sys.argv[1:] if argv is None else argv)
     a = ap.parse_args(given)
@@ -220,7 +221,8 @@ def main(argv: list[str] | None = None) -> None:
         from .strategies_flow import trials_flow
         led = trials_flow()
     res = run_all(m, ledger=led, placebo=a.placebo)
-    rep = build(res, m, stress=run_all(m, STRESS, controls=False, ledger=led), dsr_mode=a.dsr)
+    rep = build(res, m, stress=run_all(m, STRESS, controls=False, ledger=led), dsr_mode=a.dsr, register=True,
+                register_asof=a.trials_asof)
     md = markdown(rep)
     if a.round2:
         from .report_v3 import round2_markdown
@@ -231,15 +233,18 @@ def main(argv: list[str] | None = None) -> None:
     if a.round4:
         from .report_v5 import round4_markdown
         md = round4_markdown(rep, res, m, a.compare) + "\n\n" + md
+    from .register_rows import record_backtest      # every trial and split cell into the trial register (#31)
     if a.no_save:
         print(md)
+        print(f"trial register: {record_backtest(rep, res)} rows")
         return
     given = P.ensure_arg(given, "--db", path)
     inputs = {"hist_db" if a.days60 else "journal_study_coins": fp}
     if a.compare:
         inputs["compare"] = P.file_digest(a.compare)
     ledger = led if led is not None else trials()
-    cfg = P.config("shortbot.backtest.run", given, pin=["--t0", str(m.t0), "--t1", str(m.t1)],
+    cfg = P.config("shortbot.backtest.run", given, pin=["--t0", str(m.t0), "--t1", str(m.t1), "--trials-asof",
+                                                        str(rep["register"]["max_id"])],
                    args={k: v for k, v in vars(a).items() if k not in ("out", "no_save")},
                    ledger=[{"name": t.name, "strategy": t.strategy, "params": t.params, "grid_idx": t.grid_idx,
                             "notes": t.notes} for t in ledger],
@@ -254,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
         "report.md": md, "results.json": json.dumps({**rep, "provenance": prov}, indent=1, default=str),
         "trades.json": json.dumps(trades, default=str)})
     print(md)
-    print(f"saved to {out}")
+    print(f"saved to {out}; trial register: {record_backtest(rep, res, prov, out)} rows")
 
 
 def label(a: argparse.Namespace) -> str:

@@ -312,6 +312,14 @@ def run(dbs: Sequence[Path], cfg: BackupConfig, rotate_logs: Sequence[Path] = ()
     return out
 
 
+def default_dbs() -> list[Path]:
+    """The journal, plus the trial register (data/research/trials.db, #31) once a study has created it: it holds
+    every trial behind the Deflated Sharpe's N and is not rebuildable. Same copy, verify and rotation."""
+    from .trial_register import path as trials_path
+    reg = trials_path(desk_db().parent)
+    return [desk_db(), *([reg] if reg.exists() else [])]
+
+
 # ------------------------------------------------------------ CLI (`shortbot backup` and `python -m shortbot.backup`)
 def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("action", nargs="?", choices=("run", "restore"), default="run")
@@ -340,7 +348,7 @@ def run_cli(args: argparse.Namespace) -> int:
         cfg = replace(env, dir=args.dir or env.dir, offbox="" if args.no_offbox else env.offbox,
                       keep_daily=env.keep_daily if args.keep_daily is None else args.keep_daily,
                       keep_weekly=env.keep_weekly if args.keep_weekly is None else args.keep_weekly)
-        out = run(args.db or [desk_db()], cfg, args.rotate_log)
+        out = run(args.db or default_dbs(), cfg, args.rotate_log)
     print(json.dumps(out, indent=2, default=str))
     return 0 if out["ok"] else 1
 

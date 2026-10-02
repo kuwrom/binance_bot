@@ -1,5 +1,7 @@
 # Round 1 (2026-09-29)
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 ### 1. Diagnosis (in-sample only)
 **Sample:** the IS trades of round 0's picked param sets, re-simulated on the current `data/hist.db`: pump_fade (1 ATR, 12h) n 1097, post_pump_decay (2 ATR, 12h) n 1422, bounce_fade (−15%, 24h) n 123, and level_fade (round, market, 24h) n 4459. In total there are 7,101 trades, and the losers add up to −2,800R.
 

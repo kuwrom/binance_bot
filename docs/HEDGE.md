@@ -1,5 +1,7 @@
 # Hedge overlay: shorts + a long BTC / ETH / sector hedge (research 2026-09-30)
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 Question from the desk: *"if we hedge our shorts with a BTC long, how would it turn out?"* with the caveat that
 the desk does not short at random and actively evaluates, so the mechanical backtest is only an approximation.
 

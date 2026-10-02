@@ -184,6 +184,7 @@ def main(argv: list[str] | None = None) -> None:
     inputs = {"hist_db": P.fingerprint(a.hist), "hist5m_db": P.fingerprint(a.db)}
     st = study(m, a.db)
     md = markdown(st)
+    prov = out = None
     if not a.no_save:
         given = P.ensure_arg(P.ensure_arg([x for x in given if x != "--fetch"], "--db", a.db), "--hist", a.hist)
         prov = P.stamp(P.config("shortbot.backtest.trail5m", given), inputs,
@@ -192,7 +193,9 @@ def main(argv: list[str] | None = None) -> None:
         out = P.save(a.out or P.run_dir("trail5m", prov["git"]), prov, {
             "trail5m.md": md, "trail5m.json": json.dumps({**st, "provenance": prov}, indent=1, default=str)})
         md += f"\nsaved to {out}"
-    print(md)
+    from .register_rows import trail5m_rows
+    from .. import trial_register as TR
+    print(md + f"\ntrial register: {TR.record('trail5m', trail5m_rows(st), prov, out)} rows")
 
 if __name__ == "__main__":
     main()

@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .. import cluster_se as C
 from .. import provenance as P
 from .carry_regime import DAY, STABLES, daily_funding
 
@@ -45,14 +46,17 @@ def _t(xs: list[float]) -> float | None:
     return round(statistics.fmean(xs) / (statistics.stdev(xs) / math.sqrt(len(xs))), 2)
 
 
-def _clustered(pairs: list[tuple[Any, float]]) -> dict[str, Any]:
-    """Mean and t over cluster means (coins moving in the same hour are one event)."""
-    by: dict[Any, list[float]] = {}
-    for k, x in pairs:
-        by.setdefault(k, []).append(x)
-    means = [statistics.fmean(v) for v in by.values()]
-    return {"n": len(pairs), "clusters": len(means), "mean": round(statistics.fmean(x for _, x in pairs), 5)
-            if pairs else None, "t_clustered": _t(means)}
+def _ct(xs: list[float], keys: list[Any]) -> float | None:
+    t, g = C.one_way_t(xs, keys)
+    return round(t, 2) if t is not None and g >= 3 else None
+
+
+def _clustered(pairs: list[tuple[int, float]]) -> dict[str, Any]:
+    """Pooled mean of (hour ts, x) pairs with ITS t clustered by hour (coins moving in the same hour are one event)
+    and by UTC day (#31: CV3 on the pooled mean; before #31 the t was over equal-weighted hour means)."""
+    xs, keys = [x for _, x in pairs], [k for k, _ in pairs]
+    return {"n": len(pairs), "clusters": len(set(keys)), "mean": round(statistics.fmean(xs), 5) if pairs else None,
+            "t_clustered": _ct(xs, keys), "t_day": _ct(xs, [k // DAY for k in keys])}
 
 
 def _summ(xs: list[float], base: list[float] | None = None) -> dict[str, Any]:
@@ -218,11 +222,9 @@ def run_hourly() -> dict[str, Any]:
             post.append((rows[k]["ts"], -sgn * (rows[k + 1]["c"] / rows[k]["o"] - 1)))   # the 2 hours after
     hours = {}
     for h, xs in sorted(by_hour.items()):
-        per_day: dict[str, list[float]] = {}
-        for day, r in xs:
-            per_day.setdefault(day, []).append(r)
-        dm = [statistics.fmean(v) for v in per_day.values()]
-        hours[h] = {"mean_bp": round(statistics.fmean(r for _, r in xs) * 1e4, 2), "t_day": _t(dm)}
+        hours[h] = {"n": len(xs), "days": len({d for d, _ in xs}),
+                    "mean_bp": round(statistics.fmean(r for _, r in xs) * 1e4, 2),
+                    "t_day": _ct([r for _, r in xs], [d for d, _ in xs])}
     halves = {}
     for half, cond in (("first", lambda ts: ts < mid), ("second", lambda ts: ts >= mid)):
         hm = {}
@@ -270,10 +272,14 @@ def main(argv: list[str] | None = None) -> None:
     else:
         db = a.db or P.data_dir() / "daily.db"
         res, fp = run_daily(db), {"daily_db": P.fingerprint(db)}
+    prov = out = None
     if not a.no_save:
-        print("saved to", P.write_json("card_tests_hourly" if a.hourly else "card_tests_daily",
-                                       P.stamp(P.config("shortbot.backtest.card_tests", given), fp), res, None))
+        prov = P.stamp(P.config("shortbot.backtest.card_tests", given), fp)
+        print("saved to", out := P.write_json("card_tests_hourly" if a.hourly else "card_tests_daily", prov, res, None))
     print(json.dumps(res, indent=1, default=str))
+    from .register_rows import card_rows
+    from .. import trial_register as TR
+    print(f"trial register: {TR.record('card_tests', card_rows(res), prov, out)} rows")
 
 
 if __name__ == "__main__":

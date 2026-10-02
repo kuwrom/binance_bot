@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import statistics
 import sys
 from dataclasses import replace
@@ -35,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import provenance as P
+from ..cluster_se import one_way_t
 from .sim import COSTS, Plan, simulate
 from .stats import day_of
 
@@ -60,14 +60,10 @@ def variants(plan: Plan, entry: float) -> dict[str, Plan]:
 
 
 def _t_day(diffs: list[tuple[str, float]]) -> float | None:
-    by: dict[str, list[float]] = {}
-    for day, x in diffs:
-        by.setdefault(day, []).append(x)
-    means = [statistics.fmean(v) for v in by.values()]
-    if len(means) < 3:
-        return None
-    sd = statistics.stdev(means)
-    return round(statistics.fmean(means) / (sd / math.sqrt(len(means))), 2) if sd else None
+    """t of the mean uplift, clustered by entry day (#31: CV3 on the pooled mean, cluster_se; before #31 a t over
+    equal-weighted day means). None below 3 days."""
+    t, g = one_way_t([x for _, x in diffs], [d for d, _ in diffs])
+    return round(t, 2) if t is not None and g >= 3 else None
 
 
 def evaluate(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -165,10 +161,15 @@ def main(argv: list[str] | None = None) -> None:
         res, fp = run_daily(db), {"daily_db": P.fingerprint(db)}
     else:
         res, fp = run_hourly(), {}
+    prov = out = None
     if not a.no_save:
         prov = P.stamp(P.config("shortbot.backtest.rungs", given), fp)
-        print("saved to", P.write_json("rungs_daily" if a.daily else "rungs", prov, res, None))
+        print("saved to", out := P.write_json("rungs_daily" if a.daily else "rungs", prov, res, None))
     print(json.dumps(res, indent=1))
+    from .register_rows import rungs_rows
+    from .. import trial_register as TR
+    study = "rungs_daily" if a.daily else "rungs"
+    print(f"trial register: {TR.record(study, rungs_rows(res, study), prov, out)} rows")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ walk-forward and a multiple-testing haircut. Read-only: it never touches the exc
 | `features.py` | per-entry features (no look-ahead; tested by truncating the data at the entry) |
 | `strategies.py`, `strategies_more.py` | pre-registered strategies + grids, placebos, random baseline |
 | `stats.py`, `report.py`, `run.py` | cluster t, drawdown, Deflated Sharpe, walk-forward, splits, markdown |
+| `../cluster_se.py`, `register_rows.py`, `../trial_register.py` | #31: the t of the pooled mean (day, coin, two-way); what each study records in the trial register; the register itself |
 | `failures.py`, `strategies_v2.py` | loss classifier + round-1 fixes (`--round1`); results and the improvement loop in `docs/FAILURES.md` |
 | `strategies_v3.py`, `report_v3.py` | round 2 (`--round2`): breakdown entry types (limit / sell-stop / market), exit management, re-entry, funding budget |
 | `strategies_v4.py`, `report_v4.py` | round 3 (`--round3`): live vetoes as blocked vs allowed partitions, premium buckets, OI flush / squeeze events |
@@ -70,11 +71,27 @@ Every run writes `report.md`, `results.json`, `trades.json` and `provenance.json
   - Each strategy's param set is picked on the first half of the window by IS avg R, then judged on the second half.
   - R by quarter shows whether the result lives in one stretch of time.
   - Since nothing else is fitted, OOS mostly measures regime stability.
-- **Clustering and multiple testing:**
-  - The t-stat is day-clustered (and coin-clustered), because trades on the same day are one market bet.
-  - Deflated Sharpe (Bailey & López de Prado 2014) uses per-trade SR and the trades' skew and kurtosis. Since round 4, N is the effective number of independent trials (families of trials whose daily R correlates > 0.7) and V[SR] is taken across families with n ≥ 100, so clones and tiny partitions do not distort the hurdle. The raw-N DSR is reported next to it.
+- **Clustering and multiple testing** (#31; tables written before it say "pre-#31 estimator"):
+  - Every t is the t of the reported pooled mean (avg R), clustered because trades on one day are one market bet and trades on one coin share the coin (`cluster_se.py`):
+    - `t_day`, `t_coin`: CV3 jackknife variance floored at the iid one, t(G − 1), as in `research_stats` and the registry's forward test (Cameron & Miller 2015 §VI).
+    - `t_2way` (day × coin): Cameron, Gelbach & Miller (2011, NBER t0327 §2.2 eq. 2.15) V = V_day + V_coin − V_day∩coin, each with the factor G/(G − 1) of its own cluster count (their Stata-style choice, p.8), df min(G, H) − 1 (§3.1). CGM p.9: if V is negative, use the larger one-way variance. Here that floor always applies, so `t_2way` is never above either one-way t.
+    - `n_eff` = s² / V_2way: the iid sample with the same precision (Kish).
+    - Before #31 the t was over equal-weighted cluster means: a different number than the avg R next to it. On the round-4 picks: pump_fade+discount 3.19 → 2.14 (avg R +0.12), laggard −2.14 → −1.24 (n_eff 71 of 1,089 trades).
+  - Deflated Sharpe (Bailey & López de Prado 2014, eq. 2) uses per-trade SR and the trades' skew and kurtosis.
+    - **T** is the book's `n_eff`, not its trade count. PSR assumes IID or stationary-ergodic observations (Bailey & López de Prado 2012 §1–2), and same-day trades are neither.
+    - **N** is the effective number of independent trials (their App. A.3: N, not the M trials run). Since round 4: families of trials whose daily R correlates > 0.7, and V[SR] across families with n ≥ 100, so clones and tiny partitions do not distort the hurdle.
+    - Since #31 the families span the whole search: this run's trials and the feature-split cells it shows, plus every other trial in the **trial register** (below). A register trial without a daily series counts as its own family (conservative).
+    - Reported: `dsr_legacy`, `dsr_rawN`, `dsr_effN` (this run only) and `dsr_register`, which the verdicts use.
+- **Trial register** (`trial_register.py`, `data/research/trials.db`): one append-only table of every trial any study ran.
+  - Writers: backtest trials and split cells, hedge variants, trail5m exits, rungs, card tests, carry / funding / xs studies, lifecycle grid, `study patterns|laggard|ladder`, `registry seed`.
+  - Reruns of a spec (study, family, params) append rows but count once. Placebo / random groups are recorded as controls and never counted.
+  - `--no-save` runs record too: a look at the data is a trial.
+  - The journal's `pattern_trials` and the ladder's `trial_ledger` are legacy. Copy them in once with `python -m shortbot.trial_register migrate` (reads the journal only). After that `summary` shows the counts.
+  - A run reads the register as of a row id (`results.json` → `register.max_id`), and `rerun` pins it (`--trials-asof`).
+  - The guardian and the MCP never need the file: a missing register reads as empty. `shortbot backup` copies it with the journal once it exists.
+  - A test (`tests/test_register_studies.py`) fails when a new `backtest/*.py` entry point does not record its trials.
 - **Verdict:**
-  - **SURVIVES** needs all of: OOS > 0, IS > 0, beats both placebos, stress R > 0, t_day ≥ 2 and DSR ≥ 0.95.
+  - **SURVIVES** needs all of: OOS > 0, IS > 0, beats both placebos, stress R > 0, t_2way ≥ 2 and DSR ≥ 0.95 (register-wide N). Before #31: t_day ≥ 2 and the run's own N.
   - **promising** means OOS > 0, IS > 0 and beats both placebos, but the result is not significant.
 
 **Not testable here** (said plainly):
@@ -86,6 +103,8 @@ Every run writes `report.md`, `results.json`, `trades.json` and `provenance.json
 - **Listing fade:** limited to listings inside the window, which gives a short hold.
 
 ## Results: 60 days, 2026-07-27 → 09-29
+
+The t's and DSRs in this and the following result tables are from the **pre-#31 estimator** (see "Clustering and multiple testing").
 
 **Data:** 528 USDT coin perps from `data/hist.db` (520 trading, 8 settling), all with ≥ 96 hourly bars in the window; 369 have spot klines. 8 were delisted *inside* the window (ACX, HFT, VANRY, VIC on 08-07; ICX, SCRT, STORJ on 08-26; STG on 09-24) and are kept up to their delivery. The first build had 649 perps / 130 "delisted", of which 122 were zombie perps settled before the window (flat zero-volume archive bars); `histdata.trim_dead` now drops them.
 

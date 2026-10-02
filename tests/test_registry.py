@@ -1,4 +1,5 @@
 import sqlite3
+import statistics
 
 import pytest
 
@@ -65,9 +66,15 @@ def test_card_stats_cluster_by_coin_and_by_day():
     assert c["oos"]["t_day"] is None and c["oos"]["n_days"] == 1
     _, c = _card(_eps(lambda i: NOW - (i % 3) * DAY))                   # 35 coins over 3 days
     assert c["oos"]["n_days"] == 3 and c["oos"]["t_day"] > 9
-    # 12 days x coins scoring 5/6/7: every day's mean is 6, so no day-to-day variance and no t_day
+    # 12 days x coins scoring 5/6/7: every day's mean is 6, so no day-to-day variance: the day-clustered variance is
+    # floored at the iid one (design effect >= 1; #31), so t_day is the iid t, not missing
     _, c = _card(_eps(lambda i: NOW - (i % 12) * DAY, n=36, out=lambda i: 5.0 + i // 12))
-    assert c["oos"]["n_days"] == 12 and c["oos"]["t_day"] is None and c["oos"]["ci95"][0] > 0
+    sd = statistics.stdev([5.0 + i // 12 for i in range(36)])
+    assert c["oos"]["n_days"] == 12 and c["oos"]["t_day"] == round(6.0 / (sd / 6), 2) and c["oos"]["ci95"][0] > 0
+    # the t belongs to the pooled mean: one coin with 30 losing rows and 10 coins winning once
+    _, c = _card([{"symbol": "BIG", "ts_ms": NOW - k * DAY, "source": "t", "oos": True, "outcome": -1.0}
+                  for k in range(30)] + _eps(lambda i: NOW - i * DAY, n=10, out=lambda i: 1.0 + i % 2))
+    assert c["oos"]["mean"] < 0 and c["oos"]["t"] < 0
     assert c["verdict"] == "keep shadow: no forward feed (not promotable)"
 
 

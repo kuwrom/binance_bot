@@ -1,5 +1,7 @@
 # Failure analysis and the improvement loop
 
+> **Statistics note (#31, 2026-10-02):** the clustered t-statistics and Deflated Sharpe ratios quoted here come from the **pre-#31 estimator**: a t over equal-weighted day (or coin / hour) means, not the t of the pooled mean reported beside it, and a DSR with T = the trade count and N = one run's trials. They are kept as recorded. A rerun reports the t of the pooled mean (day, coin and two-way) and a DSR on the effective sample with N from the trial register: docs/BACKTEST.md "Clustering and multiple testing".
+
 Each round has four steps. **Diagnose** only on in-sample trades, meaning entries before the window midpoint (2026-08-29 19:30 UTC). **Pre-register** at most 5 fixes, with thresholds written down here *before* any out-of-sample (OOS) run. **Run** every variant once. **Judge** each one with the same bar as `docs/BACKTEST.md`. Every variant is added to the trial ledger, so the Deflated Sharpe counts every idea ever tried.
 
 Code:

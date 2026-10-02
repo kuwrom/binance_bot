@@ -214,6 +214,7 @@ def main(argv: list[str] | None = None) -> None:
     js["live"] = live
     md += ["## Live trades (data/shortbot.db, read-only)", "", live_md(live), ""]
     text = "\n".join(md)
+    prov = out = None
     if not a.no_save:
         given = P.ensure_arg(P.ensure_arg(given, "--hist", a.hist), "--live", a.live)
         prov = P.stamp(P.config("shortbot.backtest.hedge_report", given), inputs,
@@ -222,7 +223,9 @@ def main(argv: list[str] | None = None) -> None:
         out = P.save(a.out or P.run_dir("hedge", prov["git"]), prov, {
             "hedge.md": text, "hedge.json": json.dumps({**js, "provenance": prov}, indent=1, default=str)})
         text += f"\nsaved to {out}"
-    print(text)
+    from .register_rows import hedge_rows
+    from .. import trial_register as TR
+    print(text + f"\ntrial register: {TR.record('hedge', hedge_rows(js), prov, out)} rows")
 
 
 if __name__ == "__main__":

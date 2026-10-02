@@ -114,7 +114,8 @@ def family(db) -> dict[str, Any]:
     backtest's deflated Sharpe already accounts for them at selection."""
     m = db.execute("SELECT COUNT(*) FROM patterns p JOIN pattern_plans q ON q.pattern_id=p.id AND q.version=p.version"
                    " WHERE p.status<>'draft' AND json_extract(q.plan, '$.decidable')").fetchone()[0]
-    trials = db.execute("SELECT COUNT(*) FROM pattern_trials").fetchone()[0]
+    from . import trial_register as TR       # exploratory trials: the register (#31), else the legacy table
+    trials = max(TR.count(), db.execute("SELECT COUNT(*) FROM pattern_trials").fetchone()[0])
     return {"M": max(m, 1), "alpha": ALPHA, "alpha_per_test": ALPHA / max(m, 1), "trials_logged": trials}
 
 

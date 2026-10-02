@@ -126,8 +126,8 @@ def seed_backtest(db, results_path: str | Path, trades_path: str | Path) -> dict
              detector="backtest", metric="trade_r", source="docs/BACKTEST.md")
         a, o = t.get("all") or {}, t.get("oos") or {}
         R.add_trial(db, f"strategy.{strat}", {"trial": tname, **(t.get("params") or {})}, "bt60",
-                    {"n": a.get("n"), "n_coins": a.get("coins"), "mean": a.get("avg_r"), "t": t.get("t_vs_placebo"),
-                     "oos_n": o.get("n"), "oos_mean": o.get("avg_r")})
+                    {"n": a.get("n"), "n_coins": a.get("coins"), "mean": a.get("avg_r"), "t": a.get("t_2way"),
+                     "t_kind": "2way", "oos_n": o.get("n"), "oos_mean": o.get("avg_r")})
         if strat in STRAT_LEARN:
             R.link_learning(db, f"strategy.{strat}", STRAT_LEARN[strat])
     chosen = {v["trial"] for v in (res.get("selected") or {}).values() if isinstance(v, dict) and v.get("trial")}

@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import sqlite3
 import statistics
 import sys
 from pathlib import Path
@@ -167,15 +166,15 @@ def run(db_path: str = "data/daily.db") -> dict[str, Any]:
     return {"trades": len(trades), "rows": evaluate(trades)}
 
 
-def record(res: dict[str, Any], db_path: str = "data/shortbot.db") -> int:
-    from .. import registry as R
-    db = sqlite3.connect(db_path, timeout=30)
-    for r in res["rows"]:
-        pid = "lib.high_funding_trend_confirm" if r["cls"] == "major" else "lib.high_funding_squeeze_veto"
-        R.add_trial(db, pid, {k: r[k] for k in ("thr_pct_8h", "entry", "cls", "h")}, "funding_events_daily",
-                    {"n": r["n"], "n_coins": r["coins"], "mean": r["mean_edge"], "t": r["t_edge"]})
-    db.close()
-    return len(res["rows"])
+def record(res: dict[str, Any], prov: dict | None = None, out: Any = None) -> int:
+    """Every row is a trial in the trial register (#31; the old journal ledger's shape, source funding_events_daily)."""
+    from .. import trial_register as TR
+    rows = [{"name": f"{r['thr_pct_8h']}|{r['entry']}|{r['cls']}|{r['h']}d",
+             "family": "lib.high_funding_trend_confirm" if r["cls"] == "major" else "lib.high_funding_squeeze_veto",
+             "params": {k: r[k] for k in ("thr_pct_8h", "entry", "cls", "h")}, "n": r["n"], "coins": r["coins"],
+             "mean": r["mean_edge"], "t": r["t_edge"], "t_kind": "day_means", "metric": "edge_vs_control"}
+            for r in res["rows"]]
+    return TR.record("funding_events", rows, prov, out)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -183,18 +182,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--db", type=Path, help="default: <data dir>/daily.db")
     ap.add_argument("--out", type=Path, help="JSON file (default: <data dir>/research/<date>-<sha7>/funding_events/)")
     ap.add_argument("--no-save", action="store_true", help="print only")
-    ap.add_argument("--record", action="store_true", help="add every row to the registry trial ledger")
+    ap.add_argument("--record", action="store_true", help="no-op: every run records its rows (trial register, #31)")
     given = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(given)
     db = args.db or P.data_dir() / "daily.db"
     fp = P.fingerprint(db)
     res = run(str(db))
+    prov = out = None
     if not args.no_save:
         argv_ = P.ensure_arg([x for x in given if x != "--record"], "--db", db)
         prov = P.stamp(P.config("shortbot.backtest.funding_events", argv_), {"daily_db": fp})
-        print("saved to", P.write_json("funding_events", prov, res, args.out))
-    if args.record:
-        res["recorded_trials"] = record(res, str(P.desk_db()))
+        print("saved to", out := P.write_json("funding_events", prov, res, args.out))
+    res["recorded_trials"] = record(res, prov, out)
     print(f"trades {res['trades']}")
     for r in res["rows"]:
         print(f"{r['thr_pct_8h']:.2f}% {r['entry']:9} {r['cls']:10} {r['h']}d n={r['n']:5} coins={r['coins']:4} "

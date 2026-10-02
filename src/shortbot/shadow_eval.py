@@ -64,7 +64,8 @@ def evaluate(journal) -> dict[str, Any]:
     ld = [per_trade[t]["real"] - per_trade[t]["hold"] for t in live_ids]
     live = {"n_trades": len(ld), "mean_delta_R_live_vs_ghost": round(statistics.fmean(ld), 3) if ld else None,
             "trades": live_ids}
-    ledger = journal.db.execute("SELECT COUNT(*) FROM trial_ledger").fetchone()[0]
+    from . import trial_register as TR       # the register (#31) counts every ladder variant ever evaluated
+    ledger = max(TR.count("ladder"), journal.db.execute("SELECT COUNT(*) FROM trial_ledger").fetchone()[0])
     return {"per_trade_R": per_trade, "vs_hold": summary, "ladder_live_v1": live, "trials_in_ledger": ledger,
             "rule": "adopt only with ~200 paired trades, shrunk delta > cost, deflated Sharpe vs hold > 0.95 counting "
                     "all ledger trials, AND placebo not beating base"}

@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -205,15 +204,13 @@ def run(db_path: str = "data/daily.db") -> dict[str, Any]:
             "rows": evaluate(pct, carry, outs)}
 
 
-def record(res: dict[str, Any], db_path: str = "data/shortbot.db") -> int:
-    """Every cell is a trial of lib.carry_crash_regime (multiple-testing ledger)."""
-    from .. import registry as R
-    db = sqlite3.connect(db_path, timeout=30)
-    for r in res["rows"]:
-        R.add_trial(db, "lib.carry_crash_regime", {"regime": r["regime"], "outcome": r["outcome"]},
-                    "carry_regime_daily", {"n": r["regime_days"], "mean": r["diff"], "t": r["t_nw"]})
-    db.close()
-    return len(res["rows"])
+def record(res: dict[str, Any], prov: dict | None = None, out: Any = None) -> int:
+    """Every cell is a trial of lib.carry_crash_regime in the trial register (#31; the old ledger's shape)."""
+    from .. import trial_register as TR
+    rows = [{"name": f"{r['regime']}|{r['outcome']}", "family": "lib.carry_crash_regime",
+             "params": {"regime": r["regime"], "outcome": r["outcome"]}, "n": r["regime_days"], "mean": r["diff"],
+             "t": r["t_nw"], "t_kind": "newey_west", "metric": "regime_minus_rest"} for r in res["rows"]]
+    return TR.record("carry_regime", rows, prov, out)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -221,18 +218,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--db", type=Path, help="default: <data dir>/daily.db")
     ap.add_argument("--out", type=Path, help="JSON file (default: <data dir>/research/<date>-<sha7>/carry_regime/)")
     ap.add_argument("--no-save", action="store_true", help="print only")
-    ap.add_argument("--record", action="store_true", help="add every cell to the registry trial ledger")
+    ap.add_argument("--record", action="store_true", help="no-op: every run records its cells (trial register, #31)")
     given = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(given)
     db = args.db or P.data_dir() / "daily.db"
     fp = P.fingerprint(db)
     res = run(str(db))
+    prov = out = None
     if not args.no_save:
         argv_ = P.ensure_arg([x for x in given if x != "--record"], "--db", db)
         prov = P.stamp(P.config("shortbot.backtest.carry_regime", argv_), {"daily_db": fp})
-        print("saved to", P.write_json("carry_regime", prov, res, args.out))
-    if args.record:
-        res["recorded_trials"] = record(res, str(P.desk_db()))
+        print("saved to", out := P.write_json("carry_regime", prov, res, args.out))
+    res["recorded_trials"] = record(res, prov, out)
     print(json.dumps({k: v for k, v in res.items() if k != "rows"}, indent=1))
     for r in res["rows"]:
         print(f"{r['regime']:16} {r['outcome']:14} n={r['n_days']:5} reg={r['regime_days']:4} "
