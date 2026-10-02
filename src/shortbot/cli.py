@@ -1,12 +1,15 @@
 """Terminal access: `shortbot scan`, `shortbot snapshot QNT`, `shortbot positions`, `shortbot brief`...
 Arguments live in cli_args.py, `brief` (what the SessionStart hook prints) in cli_brief.py; dispatch is here.
-Audit (#24): each command runs as actor cli:<cmd>; one not in READS leaves a `call` decision row (audit.py)."""
+Audit (#24): each command runs as actor cli:<cmd>; one not in READS leaves a `call` decision row (audit.py).
+Every state-changing MCP tool has a CLI form (stale_guard.CLI): a stale MCP server's refusal names it (#68)."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import json
+import logging
 import sys
 
 from . import allocator, audit, audit_view, backup, killswitch_ops, news, research, scanner, setups
@@ -145,6 +148,21 @@ async def _run(args: argparse.Namespace) -> object:
                 return await killswitch_ops.run_cli(app, args)
             case "move-stop":
                 return await app.trader.move_stop(args.symbol, args.price, args.reason)
+            # MCP tools with logic of their own: the tool's body runs here (one copy of the code)
+            case "update-plan":
+                return await tool_body("mcp_trade", "update_plan")(args.symbol, json.loads(args.changes), args.reason)
+            case "set-params":
+                return await tool_body("mcp_research", "set_risk_params")(dict(args.changes), args.reason,
+                                                                          args.experiment)
+            case "reset-params":
+                return await tool_body("mcp_research", "reset_risk_params")(args.reason)
+            case "update-learning":
+                return await tool_body("mcp_research", "update_learning")(
+                    args.learning_id, status=args.status, evidence=args.evidence, confidence=args.confidence,
+                    provenance=args.provenance, kind=args.kind, n=args.n, days=args.days, sample=args.sample,
+                    review_by=args.review_by)
+            case "start-session":
+                return await tool_body("mcp_research", "start_session")(args.notes)
             case "reassess":
                 return await PositionOps(app.trader).reassess(args.symbol)
             case "widen-stop":
@@ -196,6 +214,20 @@ async def _run(args: argparse.Namespace) -> object:
                 return audit_view.report(app.journal, args.since, args.actor, args.action, args.limit)
     finally:
         await close_app()
+
+
+def tool_body(module: str, name: str):
+    """The function under an MCP tool's wrapper, for a command whose tool holds logic of its own: one copy of the code
+    (a fix to the tool reaches the CLI), run as cli:<cmd>. Importing the MCP modules builds the MCPServer, whose
+    constructor runs logging.basicConfig (stderr, INFO); the CLI keeps its own root logger (#66), so it is restored."""
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    try:
+        mod = importlib.import_module(f"{__package__}.{module}")
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(level)
+    return getattr(mod, name).__wrapped__
 
 
 async def _audited(args: argparse.Namespace) -> object:

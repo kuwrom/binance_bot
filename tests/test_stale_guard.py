@@ -63,7 +63,10 @@ async def test_a_write_is_refused_on_stale_code_and_nothing_is_sent(tmp_path, mo
     assert res["ok"] is False and res["stale_code"] is True
     old = procs.code_version()[:12]
     assert res["error"] == (f"stale code: this MCP server started on {old}, the code on disk is {NEW[:12]}; ask the "
-                            "human to reconnect shortbot via /mcp. Nothing was sent.")
+                            "human to reconnect shortbot via /mcp, or run the same action through the CLI (a fresh "
+                            "process on the code on disk): `.venv/bin/shortbot open SYMBOL --stop STOP_PRICE --setup "
+                            "SETUP --thesis THESIS [--plan JSON] [--notional USDT] [--leverage N] [--conviction C] "
+                            "[--veto-override REASON] [--budget-override REASON]`. Nothing was sent.")
     res = await mcp_trade.move_stop("QNT", 1.1, "trail")
     assert res["stale_code"] is True
     rows = _call_rows(j)

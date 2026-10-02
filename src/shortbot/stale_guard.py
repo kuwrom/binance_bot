@@ -5,8 +5,9 @@ the order path included, so mcp_server.tool() asks `verdict()` before every call
 
 - the code this process imported (procs.code_version) vs the code in its own package dir now, hashed by
   procs.disk_codes as the #58 audit does: a worktree server compares with its worktree, a dir that is gone is stale;
-- on stale code a write is refused before anything runs (`refuse`: ok false, stale_code true; its call row says
-  refused). Reads and EXEMPT run with a `stale_code` warning (`annotate`); a crash while stale says so (`failed`);
+- on stale code a write is refused before anything runs (`refuse`: ok false, stale_code true, its CLI form to run
+  instead; its call row says refused). Reads and EXEMPT run with a `stale_code` warning (`annotate`); a crash while
+  stale says so (`failed`);
 - hashing takes ~7 ms (168 files, 1.4 MB), so it runs in a thread and is cached TTL_S. A failed hash is not cached and
   fails closed for writes (code_check_failed), open for reads.
 The CLI (a fresh process per call) and the guardian (restarted after merges) don't come through here."""
@@ -32,8 +33,35 @@ TTL_S = 5.0
 # Run on stale code too: a halt only removes risk; log_decision is the agent's reasoning record (append-only).
 EXEMPT = frozenset({"halt_trading", "log_decision"})
 RECONNECT = "ask the human to reconnect shortbot via /mcp"
-FALLBACK = {"flatten_all": " In an emergency the CLI runs the code on disk: `shortbot flatten --reason ...`, or "
-                           "`shortbot kill-switch HALTED --reason ...`."}
+SHORTBOT = ".venv/bin/shortbot"
+# The CLI form of every state-changing tool: the agent's own way out of a stale server (each CLI call is a fresh
+# process on the code on disk, through the same functions, checks and audit row). test_cli_fallback.py keeps it whole.
+CLI = {
+    "open_short": "open SYMBOL --stop STOP_PRICE --setup SETUP --thesis THESIS [--plan JSON] [--notional USDT] "
+                  "[--leverage N] [--conviction C] [--veto-override REASON] [--budget-override REASON]",
+    "close_position": "close SYMBOL --reason REASON [--lesson LESSON] [--fraction F] [--expect-contracts N] "
+                      "[--of-original]",
+    "move_stop": "move-stop SYMBOL NEW_STOP --reason REASON",
+    "update_plan": "update-plan SYMBOL --changes JSON --reason REASON",
+    "widen_stop": "widen-stop SYMBOL NEW_STOP --reason REASON",
+    "add_to_winner": "add SYMBOL --notional USDT --stop NEW_STOP --reason REASON",
+    "propose_entries": "propose PROPOSALS_JSON [--ttl-hours H] [--warmup-override REASON]",
+    "cancel_entry_group": "cancel-group GROUP_ID --reason REASON",
+    "amend_entry": "amend ENTRY_ID NEW_LIMIT --reason REASON",
+    "add_unlock": "unlock-add BASE --date DATE --recipient RECIPIENT --source SOURCE [--pct PCT] [--notes NOTES]",
+    "set_risk_params": "set-params KEY=VALUE [KEY=VALUE ...] --experiment TAG --reason REASON",
+    "reset_risk_params": "reset-params --reason REASON",
+    "log_decision": "log ACTION REASONING [--symbol SYMBOL]",
+    "add_learning": "learn STATEMENT --evidence EVIDENCE --provenance SOURCE [--provenance SOURCE ...] --kind KIND "
+                    "[--setup SETUP] [--status STATUS] [--confidence C] [--n N] [--days D] [--sample SAMPLE] "
+                    "[--review-by DATE]",
+    "update_learning": "update-learning LEARNING_ID [--status STATUS] [--evidence EVIDENCE] [--confidence C] "
+                       "[--provenance SOURCE ...] [--kind KIND] [--n N] [--days D] [--sample SAMPLE] [--review-by DATE]",
+    "start_session": "start-session [--notes NOTES]",
+    "warmup_start": "warmup start [SYMBOL ...]",
+    "halt_trading": "kill-switch HALTED --reason REASON",
+    "flatten_all": "flatten --reason REASON [--lesson LESSON]",
+}
 _clock = time.monotonic
 _cache: tuple[float, str | None] | None = None
 
@@ -88,13 +116,14 @@ def why(v: Verdict) -> str:
 
 
 async def refuse(name: str, v: Verdict) -> dict[str, Any]:
-    """What a write gets instead of running, on stale or unverifiable code."""
-    tail = f" Nothing was sent.{FALLBACK.get(name, '')}"
+    """What a write gets instead of running, on stale or unverifiable code: the way out, the CLI form included."""
+    out = RECONNECT + (f", or run the same action through the CLI (a fresh process on the code on disk): "
+                       f"`{SHORTBOT} {CLI[name]}`" if name in CLI else "") + ". Nothing was sent."
     if v.error:
         return {"ok": False, "code_check_failed": True,
                 "error": f"could not compare this MCP server's code with the code on disk ({v.error}), so {name} was "
-                         f"refused to be safe; retry, and if it keeps failing {RECONNECT}.{tail}"}
-    return {"ok": False, "stale_code": True, "error": f"stale code: {why(v)}; {RECONNECT}.{tail}"}
+                         f"refused to be safe; retry, and if it keeps failing {out}"}
+    return {"ok": False, "stale_code": True, "error": f"stale code: {why(v)}; {out}"}
 
 
 def annotate(res: Any, v: Verdict) -> Any:

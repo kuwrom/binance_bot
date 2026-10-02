@@ -161,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("symbol")
     m.add_argument("price", type=float)
     m.add_argument("--reason", required=True)
+    _tool_forms(sub)
     backup.add_args(sub.add_parser("backup", help="verified journal backup (no exchange) | restore FILE --to NEW_PATH"))
     au = sub.add_parser("audit", help="who did what: decisions and tool/CLI calls with actor, Claude session, code")
     au.add_argument("--since", help="24h, 7d, 30m or an ISO time (UTC)")
@@ -169,3 +170,42 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--limit", type=int, default=50)
     sub.add_parser("hook-session", help="SessionStart hook: record the Claude session's model (reads hook JSON on stdin)")
     return p
+
+
+def _pair(s: str) -> tuple[str, float]:
+    k, _, v = s.partition("=")
+    try:
+        if k.strip():
+            return k.strip(), float(v)
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(f"{s!r}: expected KEY=VALUE with a number, e.g. max_leverage=3")
+
+
+def _tool_forms(sub) -> None:
+    """MCP tools whose CLI form runs the tool's own body (cli.tool_body): a stale MCP server's way out (#68)."""
+    up = sub.add_parser("update-plan", help="change an open trade's plan (the update_plan MCP tool)")
+    up.add_argument("symbol")
+    up.add_argument("--changes", required=True, help='JSON plan fields, e.g. {"time_stop_hours": 30}')
+    up.add_argument("--reason", required=True)
+    sp = sub.add_parser("set-params", help="research: change risk limits within the human-set bounds "
+                                           "(set_risk_params); `params` shows them")
+    sp.add_argument("changes", nargs="+", type=_pair, metavar="KEY=VALUE")
+    sp.add_argument("--experiment", required=True, help="tag that owns the params it sets")
+    sp.add_argument("--reason", required=True)
+    sub.add_parser("reset-params", help="drop every research override: back to the .env baseline").add_argument(
+        "--reason", required=True)
+    ul = sub.add_parser("update-learning", help="update a learning: evidence and provenance are appended, the rest "
+                                                "replaced (update_learning)")
+    ul.add_argument("learning_id", type=int)
+    ul.add_argument("--status", choices=("hypothesis", "supported", "rejected", "adopted"))
+    ul.add_argument("--evidence")
+    ul.add_argument("--confidence", choices=("low", "medium", "high"))
+    ul.add_argument("--provenance", action="append", help="repeatable")
+    ul.add_argument("--kind", choices=LEARNING_KINDS)
+    ul.add_argument("--n", type=float)
+    ul.add_argument("--days", type=int)
+    ul.add_argument("--sample")
+    ul.add_argument("--review-by")
+    sub.add_parser("start-session", help="start a trading session; acknowledges the alerts the brief listed "
+                                         "(start_session)").add_argument("--notes", default="")
