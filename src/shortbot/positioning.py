@@ -294,7 +294,7 @@ class PositionOps:
         initial = float((trade.get("plan") or {}).get("full_size") or trade.get("amount") or qty)
         lev = int(float(pos.get("leverage") or trade.get("leverage") or 0))
         req = AddRequest(symbol, add_qty, mark, stop_after, qty, float(pos["entryPrice"]), lev, initial, r1,
-                         adds_done(tr.j, trade))
+                         adds_done(tr.j, trade), await tr.ex.maint_margin(symbol, (qty + add_qty) * mark))
         try:
             check_add(req, await tr.account_state(), lim)
         except RiskViolation as e:

@@ -278,4 +278,5 @@ async def governor_status(trader, regime: str, limits: RiskLimits | None = None)
     rs = [r["r_multiple"] for r in trader.j.closed_results() if r["r_multiple"] is not None]
     return {**(inp.gov or {}), "regime": regime, "cell": inp.cell, "equity": inp.equity,
             "peak_equity": inp.peak_equity, "streak_test": streak_test(rs),
-            "moonshot_quarter_pnl": round(inp.moon_quarter_pnl, 2)}
+            "moonshot_quarter_pnl": round(inp.moon_quarter_pnl, 2),
+            "open_risk_usd": round(sum(inp.open_risks.values()), 2)}   # what compute_budget takes off the daily room

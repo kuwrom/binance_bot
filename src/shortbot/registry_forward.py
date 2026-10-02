@@ -216,3 +216,11 @@ def report(db, pid: str | None = None) -> dict[str, Any]:
                            "vs the same scan's unflagged coins after costs (adj). Each version is decided once, on "
                            "its first target_n observations spanning min_days days, at alpha / M. interim = "
                            "progress, not a test."}
+
+
+def summary(db) -> dict[str, Any]:
+    """report() for research_report: every non-draft node's forward status; each plan is left to its card."""
+    from .registry import ensure
+    ensure(db)
+    r = report(db)
+    return {**r, "nodes": [{k: v for k, v in n.items() if k != "plan"} for n in r["nodes"]]}

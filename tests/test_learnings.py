@@ -84,6 +84,29 @@ async def test_add_learning_tool_requires_a_kind_and_stores_the_sample(monkeypat
     assert seen["audit"]["kind"] == "statistical" and seen["audit"]["inferred"] == []
 
 
+async def test_cli_learn_takes_the_same_fields(monkeypatch):
+    from shortbot import cli
+    from shortbot.cli_args import build_parser
+    j = Journal(":memory:")
+    monkeypatch.setattr(cli, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
+
+    async def no_close():
+        return None
+    monkeypatch.setattr(cli, "close_app", no_close)
+    learn = ["learn", "pumps fade in Asia", "--evidence", "research_report by_session"]
+    args = build_parser().parse_args(learn + ["--kind", "statistical", "--n", "41", "--days", "12", "--sample",
+                                              "research_report:2026-10-02", "--review-by", "2026-10-20"])
+    assert (await cli._run(args))["ok"]
+    row = j.learnings()[0]
+    assert tuple(row[k] for k in FIELDS) == ("statistical", 41, 12, "research_report:2026-10-02", "2026-10-20")
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(learn + ["--kind", "vibes"])
+    with pytest.raises(ValueError, match="review_by"):
+        await cli._run(build_parser().parse_args(learn + ["--review-by", "next week"]))
+    await cli._run(build_parser().parse_args(["learn", "no kind given", "--evidence", "e"]))   # optional: flagged
+    assert [r["kind"] for r in j.learnings() if r["statement"] == "no kind given"] == [None]
+
+
 @pytest.mark.parametrize("bad", [{"kind": "vibes"}, {"n": -1}, {"n": "many"}, {"days": 1.5}, {"days": -2},
                                  {"review_by": "next week"}, {"sample": "x" * 300}])
 def test_bad_fields_are_refused(bad):

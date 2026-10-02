@@ -35,6 +35,7 @@ class AddRequest:
     initial_size: float    # contracts of the planned full entry (plan.full_size): the base of max_add_frac
     r1: float              # the trade's pinned 1R, USDT
     adds_done: int         # adds already made on this trade (journal)
+    maint: tuple[float, float] | None = None   # the bracket of the position after the add: Exchanges.maint_margin
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,14 @@ def est_liquidation_distance_pct(leverage: int, maint: tuple[float, float] | Non
     mmr, cum = maint or (FALLBACK_MAINT_MARGIN_PCT / 100, 0.0)
     n = notional if notional > 0 else 1.0
     return (liquidation_price(-1, n, 1.0, n / leverage, mmr, cum if notional > 0 else 0.0) - 1) * 100
+
+
+def max_leverage_for_stop(dist_pct: float, buffer_pct: float, cap: int, maint: tuple[float, float] | None = None,
+                          notional: float = 0.0) -> int:
+    """Highest leverage in [1, cap] whose estimated liquidation stays buffer_pct beyond a stop dist_pct away: the
+    liquidation rule check_open_short applies. 0 when not even 1x does."""
+    return next((lev for lev in range(int(cap), 0, -1)
+                 if dist_pct <= est_liquidation_distance_pct(lev, maint, notional) - buffer_pct), 0)
 
 
 def max_notional_for_risk(equity: float, entry: float, stop: float, limits: RiskLimits) -> float:
@@ -195,7 +204,8 @@ def check_add(req: AddRequest, acct: AccountState, limits: RiskLimits) -> None:
         reasons.append("leverage unknown: the liquidation distance can't be checked")
     elif req.leverage > limits.max_leverage:
         reasons.append(f"leverage {req.leverage} outside [1, {limits.max_leverage}]")
-    elif from_avg > (liq := est_liquidation_distance_pct(req.leverage)) - limits.liq_buffer_pct:
+    elif from_avg > (liq := est_liquidation_distance_pct(req.leverage, req.maint, after * avg)) - \
+            limits.liq_buffer_pct:
         reasons.append(f"at {req.leverage}x liquidation is ~{liq:.1f}% above the new average {avg:.6g}, but the stop "
                        f"is {from_avg:.1f}% above it (need {limits.liq_buffer_pct:g}% buffer): tighten the stop")
     profit_r = (req.entry - req.mark) * req.qty / req.r1 if req.r1 > 0 else 0.0

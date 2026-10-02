@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 
 from . import allocator, backup, killswitch_ops
+from .journal_research import LEARNING_KINDS
 from .tilts import TIERS
 
 
@@ -78,6 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
     le.add_argument("--confidence", default="low", choices=("low", "medium", "high"))
     le.add_argument("--provenance", action="append", default=None,
                     help="where the evidence came from (repeatable): trade:12, research_report, coin_news:QNT")
+    le.add_argument("--kind", choices=LEARNING_KINDS,
+                    help="engineering (a fix, backed by a test) | statistical (a claim about outcomes) | process")
+    le.add_argument("--n", type=float, help="independent observations (episodes, trades, events), never scan rows")
+    le.add_argument("--days", type=int, help="distinct days the observations span")
+    le.add_argument("--sample", help="where the sample lives: research_report:2026-10-02, registry:lib.x, data/...")
+    le.add_argument("--review-by", help="YYYY-MM-DD the brief resurfaces it (default: 14 days for a hypothesis, 30 "
+                    "for a supported statistical learning)")
     sub.add_parser("map", help="market map: regime, breadth, sectors vs BTC, rotation, vetoes").add_argument(
         "--fresh", action="store_true", help="rebuild now instead of using the guardian's cached map")
     sw = sub.add_parser("sweeps", help="level-sweep study: how far price pokes past round numbers / 24h highs")

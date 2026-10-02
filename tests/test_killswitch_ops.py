@@ -40,6 +40,21 @@ async def test_halted_withdraws_unfilled_entries_but_a_part_filled_one_keeps_its
     assert t.j.get_trade(ev[0]["trade_id"])["status"] == "open"
 
 
+async def test_halted_rejects_a_send_that_never_reached_the_book_and_waits_on_a_young_one():
+    from tests.test_entry_intents import age
+    t, fake = trader()
+    d = EntryDesk(t, regime_fn=favorable)
+    fake.ack_lost_unsent = 2                                  # two sends whose answers were lost; neither ran
+    old, young = [x["entry_id"] for x in (await d.propose_group([prop(1.04), prop(1.06, stop=1.12)]))["unknown"]]
+    age(d, old)                                               # GRACE_S since its send: it never reached the book
+    r = await ops.halt(t, HALTED, "agent (MCP)", "news shock")
+    assert r["resting"] == {"cancelled": [old], "left_for_fill_poll": [young]}
+    rows = {e["id"]: e for e in d._rows("1=1")}
+    assert rows[old]["status"] == "rejected" and "never placed" in rows[old]["reason"]   # not 'cancelled' (#66)
+    assert rows[old]["reason"].startswith("kill switch HALTED: news shock")
+    assert rows[young]["status"] == "unknown"                 # may still be in flight: the next sweep retries
+
+
 async def test_reducing_leaves_resting_entries_alone():
     t, fake, d, ids, oids = await desk_with_two_entries()
     r = await ops.halt(t, REDUCING, "guardian", "daily loss")

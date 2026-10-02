@@ -29,6 +29,7 @@ from . import killswitch as ks
 from . import killswitch_rearm as rearm
 from .config import Settings
 from .journal import Journal
+from .redact import install_log_redaction
 
 
 def _tty():
@@ -147,6 +148,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    install_log_redaction()
     args = parser().parse_args()
     audit.set_process("admin")
     with audit.acting(f"admin:{args.cmd}"):   # the human's kill-switch rows say so (#24)

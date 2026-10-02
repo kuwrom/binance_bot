@@ -13,6 +13,7 @@ from . import news
 from .exchange import Exchanges, to_symbol
 from .market import DataHub
 from .market.regime import market_regime  # noqa: F401  (re-exported: callers import it from here)
+from .risk import FALLBACK_MAINT_MARGIN_PCT, max_leverage_for_stop
 from .setups import detect_all
 from .tape import classify
 from .signals import Evaluation, evaluate
@@ -103,6 +104,7 @@ async def coin_snapshot(ex: Exchanges, symbol: str) -> dict:
         dist = (price - last) / last * 100 if last else None
         ok = dist is not None and lim.min_stop_distance_pct <= dist <= lim.max_stop_distance_pct
         return {"price": r(price), "distance_pct": r(dist, 2), "method": method, "allowed": ok,
+                "max_leverage": max_leverage_for_stop(dist, lim.liq_buffer_pct, lim.max_leverage) if ok else None,
                 "note": None if ok else f"outside {lim.min_stop_distance_pct}-{lim.max_stop_distance_pct}% limit"}
 
     return {
@@ -128,8 +130,10 @@ async def coin_snapshot(ex: Exchanges, symbol: str) -> dict:
             "wide": stop_option(max(ind.swing_high(c1h, 12) if c1h else last, last) + 1.5 * atr1h,
                                 "12h swing high + 1.5x ATR(1h)"),
             **_sweep_proof(ex, last, max(c[2] for c in c1h[-24:]) if c1h else None, atr1h, stop_option),
-            "hint": f"Wider stop => smaller size (auto-sized to the risk budget). Max leverage for a stop is "
-                    f"~100/(stop% + {lim.liq_buffer_pct + 1})."},
+            "hint": f"Wider stop => smaller size (auto-sized to the risk budget). max_leverage: the highest leverage "
+                    f"whose estimated liquidation (at the conservative {FALLBACK_MAINT_MARGIN_PCT:g}% maintenance "
+                    f"rate) stays {lim.liq_buffer_pct:g}% beyond that stop; open_short re-checks at the symbol's own "
+                    "leverage bracket."},
         "news": news.for_agent(nws),
         **({"signal_errors": ev.errors} if ev.errors else {}),
     }

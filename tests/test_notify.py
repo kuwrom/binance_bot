@@ -109,3 +109,22 @@ async def test_session_trader_journals_every_alert_and_sends_only_urgent_ones(mo
         await tr.alert("NAKED_POSITION", "no stop", SYM, True)
     assert [a["kind"] for a in tr.j.alerts()] == ["NAKED_POSITION"] * 2 + ["action_fill"] * 2
     assert len(sent) == 2 and all("NAKED_POSITION" in s["text"] for s in sent)
+
+
+async def test_guardian_trader_journals_every_alert_and_cools_only_the_telegram_repeat(monkeypatch):
+    sent = telegram(monkeypatch, ok)
+    now = clock(monkeypatch)
+    j = Journal(":memory:")
+    n = Notifier(TG, j)
+    await n.as_trader_alert("action_fill", "leg 1 filled", SYM, False)
+    await n.as_trader_alert("action_fill", "leg 2 filled", SYM, False)       # a split entry's second leg, 1 s later
+    assert [a["message"] for a in j.alerts()] == ["leg 2 filled", "leg 1 filled"]   # both legs are the audit trail
+    assert len(sent) == 1
+    now[0] += 601
+    await n.as_trader_alert("action_fill", f"leg 3 {SIGNED}", SYM, False)
+    assert len(sent) == 2 and len(j.alerts()) == 3
+    await n.as_trader_alert("action_fill", f"leg 4 {SIGNED}", SYM, False)    # cooling: journalled, redacted
+    assert "9f2c0ab1e4d7" not in j.alerts()[0]["message"] and len(sent) == 2
+    for _ in range(2):
+        await n.as_trader_alert("NAKED_POSITION", "no stop", SYM, True)       # urgent: never cooled
+    assert len(sent) == 4

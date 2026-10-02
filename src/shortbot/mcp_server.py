@@ -23,6 +23,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from . import app as _app_mod
 from . import audit, procs
 from .app import close_app
+from .redact import install_log_redaction
 
 INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Start with the `trading-session` skill.
 Flow: journal+learnings -> market_regime -> positions (manage first, per each trade's plan) -> scan_shorts ->
@@ -90,6 +91,7 @@ from . import mcp_book, mcp_desk, mcp_kill  # noqa: E402,F401  (registers book p
 
 def main() -> None:
     audit.set_process("mcp")
+    install_log_redaction()   # after MCPServer's logging config (at import): a signed ccxt URL in a traceback (#66)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     mcp.run()
 

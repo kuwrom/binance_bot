@@ -117,7 +117,8 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
     monkeypatch.setattr(cli, "close_app", no_close)
     await cli._audited(_ns("log", action="skip", reasoning="too thin", symbol="ABC"))
     await cli._audited(_ns("learn", statement="s", evidence="e", setup=None, status="hypothesis",
-                           confidence="low", provenance=None))
+                           confidence="low", provenance=None, kind=None, n=None, days=None, sample=None,
+                           review_by=None))
     # the guardian, started from that session's Bash, so it inherited CLAUDE_CODE_SESSION_ID
     audit.set_process("guardian", claude=False)
     jg = Journal(db)

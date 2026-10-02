@@ -20,6 +20,7 @@ log = logging.getLogger("shortbot.notify")
 logging.getLogger("httpx").setLevel(logging.WARNING)   # it logs each request URL at INFO: ours carry the bot token
 TELEGRAM_TIMEOUT_S = 5.0   # one send never holds its lane longer than this
 TELEGRAM_RETRY_S = 900     # a failed send is retried after this, not after its full cooldown
+TRADER_REPEAT_S = 600      # the guardian Trader's non-urgent repeats (same kind and symbol) go to the journal only
 
 
 class Notifier:
@@ -72,8 +73,13 @@ class Notifier:
             r.raise_for_status()
 
     async def as_trader_alert(self, kind: str, message: str, symbol: str | None, urgent: bool) -> None:
-        """Adapter for Trader(alert=...)."""
-        await self.send(kind, message, symbol, cooldown_s=0 if urgent else 600, urgent=urgent)
+        """Adapter for the guardian's Trader(alert=...): every alert is a row (two action_fill rows for a split entry's
+        legs are both the audit trail, #66); a cooldown only spares Telegram a non-urgent repeat of the same kind and
+        symbol within TRADER_REPEAT_S."""
+        if not urgent and self._cooling(f"{kind}:{symbol}", TRADER_REPEAT_S):
+            self.j.log_alert(kind, message, symbol)   # redacts
+            return
+        await self.send(kind, message, symbol, cooldown_s=0 if urgent else TRADER_REPEAT_S, urgent=urgent)
 
     async def as_session_alert(self, kind: str, message: str, symbol: str | None, urgent: bool) -> None:
         """Adapter for the MCP/CLI Trader: every alert is a row (action_propose, action_fill... are the audit trail,

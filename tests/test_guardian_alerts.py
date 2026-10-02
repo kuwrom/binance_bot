@@ -211,3 +211,23 @@ async def test_a_closed_short_leaves_the_watch_streak():
     g.app.trader._raw_positions = none
     await g.watch_positions()
     assert not g.watch_streak.fails
+
+
+async def test_a_dead_news_feed_is_alerted_once_per_cooldown_never_as_a_watch_failure(monkeypatch):
+    from shortbot import news
+    from shortbot.guardian_watch import WatchChecks
+    g = guardian_with(FakeCcxt())
+    g._news = WatchChecks._news.__get__(g)                     # guardian_with silences it
+
+    async def news_for(base, max_items=15):                    # the announcements feed is down, RSS still answers
+        return {"coin": base, "binance_announcements": [], "errors": ["binance_announcements"],
+                "headlines": [{"title": f"{base} exploit", "url": f"https://news.example/{base}"}]}
+    monkeypatch.setattr(news, "news_for", news_for)
+    await open_trade(g)
+    for _ in range(2):
+        await g.watch_positions()
+        await g._news("ALT/USDT:USDT")
+    down = rows(g, "news_feed_down")
+    assert len(down) == 1 and down[0]["symbol"] is None and "binance_announcements" in down[0]["message"]
+    assert len(rows(g, "news_on_position")) == 2                # what arrived still alerts, once per item
+    assert not g.watch_streak.fails and not rows(g, "position_watch_error")   # squeeze/funding checks are fine

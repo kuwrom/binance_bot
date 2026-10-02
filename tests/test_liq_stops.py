@@ -126,3 +126,25 @@ async def test_lowering_an_entry_checks_liquidation_at_the_symbols_bracket():
         assert r["ok"] is ok, r
         if not ok:
             assert "liquidat" in " ".join(r["rejected_by_risk"])
+
+
+async def test_adding_to_a_winner_checks_liquidation_at_the_symbols_bracket():
+    from shortbot.positioning import PositionOps
+    # 10x, 10 more at 0.90 with the stop at 1.0305 (4% above the new average): inside (liquidation - 2%) at the 2.5%
+    # fallback rate (~5.3%), past it at a 5% bracket (~2.8%)
+    for maint, ok in ((None, True), ((0.05, 0.0), False)):
+        t, fake, _, asked = trader(TEN_X)
+        r = await t.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100, leverage=10)
+        assert r["ok"], r
+        fake.price = 0.9
+
+        async def bracket(symbol, notional, m=maint):
+            asked.append((symbol, round(notional, 2)))
+            return m
+        t.ex.maint_margin = bracket
+        asked.clear()
+        r = await PositionOps(t).add_to_winner(SYM, 9, 1.0305, "press it")
+        assert r["ok"] is ok, r
+        assert asked == [(SYM, 99.0)]                   # the position after the add: 110 x 0.90
+        if not ok:
+            assert "liquidation" in r["error"]

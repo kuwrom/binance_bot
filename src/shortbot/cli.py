@@ -16,6 +16,7 @@ from .cli_brief import brief
 from .exchange import to_symbol
 from .entries import EntryDesk
 from .positioning import PositionOps
+from .redact import install_log_redaction
 
 # Commands that leave no `call` row: they change nothing (or journal their own row, like `log`). Any other is logged.
 READS = frozenset({"regime", "scan", "snapshot", "news", "account", "positions", "params", "setups", "research",
@@ -55,7 +56,8 @@ async def _run(args: argparse.Namespace) -> object:
             case "learn":
                 return {"ok": True, "learning_id": app.journal.add_learning(
                     args.statement, args.evidence, args.setup, args.status, args.confidence,
-                    args.provenance or ["cli"])}
+                    args.provenance or ["cli"], kind=args.kind, n=args.n, days=args.days, sample=args.sample,
+                    review_by=args.review_by)}
             case "map":
                 from .market.market_map import build_map, cached, render
                 m = (None if args.fresh else cached(app.journal, 900)) or await build_map(app.ex, app.journal)
@@ -206,6 +208,7 @@ async def _audited(args: argparse.Namespace) -> object:
 
 
 def main() -> None:
+    install_log_redaction()   # no handlers here: records go through logging.lastResort (#66)
     args = build_parser().parse_args()
     if args.cmd == "backup":
         raise SystemExit(backup.run_cli(args))

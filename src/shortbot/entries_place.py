@@ -17,7 +17,7 @@ from typing import Any
 
 from . import clientid, killswitch, warmup
 from .audit import refusals
-from .entry_gates import market_pause
+from .entry_gates import market_pause, stamps
 from .entry_intents import HINTS, ON_BOOK, SendUnknown
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
@@ -211,18 +211,20 @@ class EntryPlacement:
             await tr._prepare(sym, lev)   # leverage + isolated margin: only on a flat symbol, after the risk check
             # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
             cid = clientid.new("entry", gid)
+            sized = stamps(budget.get("multipliers"))   # the multipliers it was sized under: entry_gates resize (#66)
             eid = self.j._insert(
                 "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price,"
                 " amount, leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price,"
                 " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon, mode, experiment, limits,"
-                " overrides) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                f" overrides, {', '.join(sized)}) VALUES ({','.join('?' * (28 + len(sized)))})",
                 (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
                  json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
                  p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"),
                  budget.get("cell"), p.get("tranche"), p.get("leg"), cid,
                  1 if p.get("tranche") else 0,    # a split leg is withdrawn if unsure
                  # what it was sized under: the guardian that journals the fill has no research params (#32)
-                 self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__), json.dumps(overrides) if overrides else None))
+                 self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__), json.dumps(overrides) if overrides else None,
+                 *sized.values()))
             try:
                 order = await tr.t.create_order(sym, "limit", "sell", amount, px, {
                     "timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})

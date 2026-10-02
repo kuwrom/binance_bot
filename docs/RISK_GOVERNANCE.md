@@ -51,7 +51,11 @@
 - A resting limit is a trade that hasn't happened yet. While the governor halts new entries, or a market pause is on (BTC/ETH +0.8% in 15 min, a breadth squeeze), the guardian withdraws them every 5 s pass. Reasons read `governor halt: ...` and `market pause: ...`. An entry placed with a `veto_override` over that same pause stays; nothing overrides the governor.
 - The governor verdict comes from the guardian's 5-min check, under the effective limits (the research override if active, as for the kill-switch trips), so placing and withdrawing never disagree. A verdict older than 15 min, or a market map older than 15 min, cancels nothing.
 - TTL is at most 24 h. Lowering a resting limit re-runs the budget and hard-cap checks. A split leg is never lowered.
-- Follow-up: governor halving (drawdown tier, loss streak) does not resize entries already resting.
+- **Resize (#66):** each entry is stamped with the `m_gov` and `m_ladder` it was sized under (a lowering amend re-stamps it). The guardian withdraws a resting entry when:
+  - the governor's `m_gov` is now below its stamp (a drawdown tier or a loss streak halved size);
+  - its risk (a split entry's legs together) exceeds today's loss-cap room minus open risk, as `compute_budget` caps a new trade;
+  - its setup's ladder is SHADOW, or HALF while the stamp is above 0.5.
+- A NULL stamp (placed by an older server) skips the multiplier comparison, never the room. An UNKNOWN ladder never withdraws: it already sizes new entries down, and a transient read failure must not churn the book. Only a verdict or ladder read taken after the entry was placed judges it. Reasons read `governor resized: ...` and `setup ladder: ...`; re-propose at the current budget.
 
 ## Kill switch (research 2026-10-01; `killswitch.py`)
 - **Evidence:** FIA 2024 *Automated Trading Risk Controls*: a kill switch blocks new orders, cancels working orders and may allow risk-reducing ones. MiFID II RTS 6 wants the off switch tested. NautilusTrader's trading states are ACTIVE / REDUCING / HALTED.

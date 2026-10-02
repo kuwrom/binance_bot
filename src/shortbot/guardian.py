@@ -27,6 +27,7 @@ from .guardian_watch import WatchChecks
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
 from .notify import Notifier
+from .redact import install_log_redaction
 from .symlock import GUARDIAN_WAIT_S
 
 log = logging.getLogger("shortbot.guardian")
@@ -139,6 +140,7 @@ async def _main() -> None:
 def main() -> None:
     audit.set_process("guardian", claude=False)   # started from a Claude Bash, it still acts on its own (#24)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    install_log_redaction()   # a traceback of a signed ccxt call carries its URL (#66)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(_main())
 

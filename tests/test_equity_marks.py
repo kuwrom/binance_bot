@@ -61,16 +61,6 @@ def test_never_raises():
     assert r == {"day_pnl": -7.0, "week_pnl": -9.0, "late": {}, "pending": {}, "degraded": True}
 
 
-async def test_gather_falls_back_when_income_is_unreachable():
-    class T:
-        async def fapiPrivateGetIncome(self, req):
-            raise RuntimeError("timeout")
-    j = Journal(":memory:")
-    j.set(em.KV_PEAK, "1200")
-    r = await em.gather(T(), j, 1000.0, -3.0, -4.0)
-    assert r["degraded"] and r["day_pnl"] == -3.0 and r["week_pnl"] == -4.0 and r["peak"] == 1200
-
-
 def test_overlapping_callers_count_each_transfer_once():
     j = Journal(":memory:")
     j.set(em.KV_PEAK, "1000")

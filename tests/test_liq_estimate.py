@@ -6,7 +6,7 @@ import pytest
 from shortbot.config import RiskLimits, Settings
 from shortbot.exchange import Exchanges
 from shortbot.risk import (FALLBACK_MAINT_MARGIN_PCT, AccountState, RiskViolation, ShortRequest, bracket_for,
-                           check_open_short, est_liquidation_distance_pct, liquidation_price)
+                           check_open_short, est_liquidation_distance_pct, liquidation_price, max_leverage_for_stop)
 from tests.fake_engine import BRACKETS
 from tests.fakes import SYM, FakeCcxt
 
@@ -54,6 +54,21 @@ def test_check_open_short_uses_the_request_bracket():
     with pytest.raises(RiskViolation, match="liquidat"):
         check_open_short(req, ACCT, LIM)
     check_open_short(ShortRequest(SYM, 500, 1.0, 1.06, 10, 1e9, maint=(0.01, 0.0)), ACCT, LIM)
+
+
+def test_max_leverage_for_a_stop_is_the_one_check_open_short_allows():
+    # coin_snapshot's per-stop hint (#66): the old "100/(stop% + buffer + 1)" assumed a 1% maintenance rate
+    assert max_leverage_for_stop(6, 2, 10) == 9                       # 10x: ~7.3% - 2 < 6 at the fallback rate
+    assert max_leverage_for_stop(6, 2, 10, (0.01, 0.0), 500) == 10    # ~8.9% at a 1% bracket
+    assert max_leverage_for_stop(6, 2, 3) == 3                        # never above the cap
+    assert max_leverage_for_stop(30, 2, 3) == 2                       # 3x liquidates ~30.1% away
+    assert max_leverage_for_stop(100, 2, 3) == 0                      # not even 1x
+    for dist, maint in ((6, None), (6, (0.01, 0.0)), (12.5, None), (20, None)):
+        lev = max_leverage_for_stop(dist, LIM.liq_buffer_pct, LIM.max_leverage, maint, 500)
+        check_open_short(ShortRequest(SYM, 500, 1.0, 1 + dist / 100, lev, 1e9, maint), ACCT, LIM)
+        if lev < LIM.max_leverage:
+            with pytest.raises(RiskViolation, match="liquidat"):
+                check_open_short(ShortRequest(SYM, 500, 1.0, 1 + dist / 100, lev + 1, 1e9, maint), ACCT, LIM)
 
 
 async def test_maint_margin_reads_the_symbol_bracket_once():

@@ -281,3 +281,21 @@ def test_forward_report_and_the_read_coin_card(monkeypatch):
     assert F.report(d, "veto.x")["nodes"][0]["forward"]["status"] == "no_feed"
     (card,) = R.node_cards(d, ["setup.pump_fade"])
     assert card["forward"] == {"status": "decided", "decision": "pass", "p": card["forward"]["p"], "mean": 1.0}
+
+
+async def test_research_report_carries_each_nodes_forward_status(monkeypatch):
+    from types import SimpleNamespace
+
+    from shortbot import mcp_research
+    fresh = Journal(":memory:")                                    # no registry tables yet
+    monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(journal=fresh))
+    out = (await mcp_research.research_report())["forward"]
+    assert out["nodes"] == [] and out["family"]["M"] == 1 and "how_to_read" in out
+    j = Journal(":memory:")
+    _at(monkeypatch, REG)
+    _node(j.db, plan={"target_n": 40})
+    _add(j.db, _days(0.5))
+    monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(journal=j))
+    (node,) = (await mcp_research.research_report())["forward"]["nodes"]
+    assert node["id"] == "setup.pump_fade" and node["forward"]["decision"] == "pass"
+    assert "plan" not in node                                      # the card has it (registry card)

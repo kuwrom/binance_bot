@@ -165,3 +165,12 @@ async def test_a_stop_inside_the_min_distance_is_refused_without_moving_the_stop
     assert (await t.move_stop(SYM, 0.902, "tight trail"))["ok"]
     r = await ops.add_to_winner(SYM, 9, 0.95, "a looser new_stop leaves the 0.902 stop resting")   # judged on 0.902
     assert not r["ok"] and "stop 0.902 is" in r["error"] and list(fake.stops.values()) == [0.902]
+
+
+def test_the_liquidation_check_reads_the_symbols_bracket():
+    # 3x, stop 29% above the new average 0.9909: past (liquidation - 2%) at the 2.5% fallback rate (liquidation ~30.1%),
+    # inside it at a 1% bracket (~32.0%)
+    req = replace(BASE, leverage=3, stop_price=round(1090 / 1100 * 1.29, 4))
+    got = reasons(req)
+    assert len(got) == 1 and "liquidation" in got[0], got
+    assert reasons(replace(req, maint=(0.01, 0.0))) == []

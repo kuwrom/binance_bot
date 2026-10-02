@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import killswitch as ks
-from .entries import EntryDesk, withdraw
+from .entries import EntryDesk
 from .killswitch import HALTED, REDUCING
 from .symlock import SymbolBusy
 
@@ -20,22 +20,17 @@ async def cancel_resting(desk, reason: str, keep=None) -> dict[str, list[int]]:
     reuses it for a governor halt or a market pause, keeping the rows `keep(row)` spares). Only an
     "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
     "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position.
-    The desk's own rows only, incl. sends of unknown outcome (placing/unknown: withdraw finds them by client id);
-    never an 'external' order, which may be the owner's (the guardian alerts those instead)."""
+    The desk's own rows only, incl. sends of unknown outcome (placing/unknown: found by client id, and 'rejected' once
+    GRACE_S passed without it reaching the book: desk._cancel_entry, re-read and compare-and-set inside the symbol
+    lock); never an 'external' order, which may be the owner's (the guardian alerts those instead)."""
     out: dict[str, list[int]] = {"cancelled": [], "left_for_fill_poll": []}
-    rows = [e for e in desk._rows("status IN ('pending','placing','unknown')") if not (keep and keep(e))]
-    if not rows:
-        return out
-    t = desk.tr.t
-    for e in rows:   # compare-and-set: a resolution the reconciler or the placing call made meanwhile wins
+    for e in [e for e in desk._rows("status IN ('pending','placing','unknown')") if not (keep and keep(e))]:
         try:
-            async with desk.tr.symbol_lock(e["symbol"], f"kill switch: withdraw entry #{e['id']}"):
-                done = await withdraw(t, e) == "unfilled" and desk._settle(e["id"], e["status"], status="cancelled",
-                                                                          reason=reason)
+            got = await desk._cancel_entry(e, "cancelled", reason)
         except SymbolBusy:   # a session is acting on the symbol: the guardian's HALTED sweep retries every pass
             out.setdefault("busy", []).append(e["id"])
             continue
-        out["cancelled" if done else "left_for_fill_poll"].append(e["id"])
+        out["cancelled" if got == "unfilled" else "left_for_fill_poll"].append(e["id"])
     return out
 
 

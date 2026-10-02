@@ -159,8 +159,11 @@ async def update_learning(learning_id: int, status: str | None = None, evidence:
 async def research_report(min_n: int = 5) -> dict[str, Any]:
     """What predicted drops? Labelled scan candidates grouped by tradable/vetoed, veto reason, setup, score bucket
     and feature tertiles: avg 24h short return, hit rate, squeeze rate. `learnings`: statistical learnings with their
-    n, days and sample, and what to re-check (review due, n < 30, pre-episode statistics). Custom: shortbot.lab."""
-    return research.report(get_app().journal, min_n)
+    n, days and sample, and what to re-check (review due, n < 30, pre-episode statistics). `forward`: each registry
+    node's pre-registered forward test (the only evidence that promotes; plans on its card). Custom: shortbot.lab."""
+    from .registry_forward import summary
+    j = get_app().journal
+    return {**research.report(j, min_n), "forward": summary(j.db)}
 
 
 @tool

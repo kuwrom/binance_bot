@@ -19,6 +19,7 @@ SQUEEZE_PRICE_1H_PCT = 5.0
 SQUEEZE_OI_1H_PCT = 5.0
 SQUEEZE_BARS = 13   # 5 m candles: one hour
 WATCH_ERROR_COOLDOWN_S = 1800
+NEWS_DOWN_COOLDOWN_S = 2 * 3600
 
 
 class WatchInputError(RuntimeError):
@@ -103,3 +104,6 @@ class WatchChecks:
             if (url or title) and self.j.get(key) is None:
                 self.j.set(key, str(time.time()))
                 await self.n.send("news_on_position", f"{title}\n{url}".strip(), sym, cooldown_s=0)
+        if res.get("errors"):   # no news from a dead feed is not "no news" (#66); one alert for every short
+            await send_safe(self.n, "news_feed_down", f"news sources failed: {', '.join(res['errors'])}. News on "
+                            "open shorts is NOT being watched from them", cooldown_s=NEWS_DOWN_COOLDOWN_S)

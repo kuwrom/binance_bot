@@ -140,22 +140,3 @@ def reset_peak(journal, equity: float, reason: str) -> dict[str, Any]:
     journal.log_decision("equity_peak_reset", f"{old} -> {equity}: {reason}", None,
                          snapshot={"old": old, "new": equity, "reason": reason})
     return {"ok": True, "old_peak": float(old) if old else None, "new_peak": equity}
-
-
-async def gather(t, journal, equity: float, old_day: float, old_week: float,
-                 unrealized: float | None = None) -> dict[str, Any]:
-    """One income read covering the week mark and the peak cursor; returns day/week P&L and the adjusted peak.
-    Income unreachable -> old definitions and the stored peak (never blocks the budget)."""
-    now = datetime.now(timezone.utc)
-    try:
-        starts = [period_starts(now)["week"][1], int(journal.get(journal.mode_key(KV_CURSOR)) or time.time() * 1000)]
-        rows = await reconcile.income_since(t, min(starts))
-        out = period_pnl(journal, equity, rows, old_day, old_week, now, unrealized)
-        out["peak"] = adjusted_peak(journal, equity, rows, int(now.timestamp() * 1000))
-        return out
-    except Exception:  # noqa: BLE001
-        try:
-            peak = max(float(journal.get(journal.mode_key(KV_PEAK)) or 0), equity)
-        except Exception:  # noqa: BLE001
-            peak = equity
-        return {"day_pnl": old_day, "week_pnl": old_week, "peak": peak, "late": {}, "pending": {}, "degraded": True}
