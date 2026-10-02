@@ -1,7 +1,6 @@
 """Guardian position jobs. Protective lane: fills (5 s), the stop/plan pass (60 s) and entry sends of unknown outcome
-(60 s), which touch only the trade client and the journal. Watch lane: alert-only checks on open shorts (squeeze,
-funding, news) that read public data and third-party feeds, so they never delay a stop check. Alert thresholds live
-here."""
+(60 s), which touch only the trade client and the journal. The watch lane (alert-only checks on open shorts) lives in
+guardian_watch.py. Alert thresholds live here."""
 
 from __future__ import annotations
 
@@ -11,9 +10,8 @@ import logging
 import time
 from datetime import datetime
 
-from . import indicators as ind
 from . import killswitch as ks
-from . import entry_intents, equity_marks, news, reconcile, stops
+from . import entry_intents, equity_marks, reconcile, stops
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
@@ -24,8 +22,6 @@ from .stops import is_clock_drift
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.guardian")
-SQUEEZE_PRICE_1H_PCT = 5.0
-SQUEEZE_OI_1H_PCT = 5.0
 STOP_NEAR_PCT = 1.0
 RESYNC_EVERY_S = 600
 FALLBACK_STOP_PCT = 10.0
@@ -60,10 +56,6 @@ class PositionChecks:
                               f"funding {res['funding']:.2f})", res["symbol"], cooldown_s=0, urgent=res["liquidated"])
         acct = await tr.account(live)
         track_day_peak(self.j, acct["day_pnl"])   # arms the give-back stop (governor.py)
-        lim = self.app.settings.limits
-        if acct["equity"] and acct["day_pnl"] / acct["equity"] * 100 <= -lim.daily_loss_limit_pct:
-            await self.n.send("daily_loss_limit", f"Day PnL {acct['day_pnl']} USDT. New shorts are blocked until "
-                              "00:00 UTC. Review open positions.", urgent=True, cooldown_s=6 * 3600)
         held = await tr.positions()
         for p in held:
             sym = p["symbol"]
@@ -81,8 +73,10 @@ class PositionChecks:
         self.pos_streak.forget(set(self.pos_streak.fails) - {p["symbol"] for p in held})   # closed meanwhile
         self.untracked_since = {s: t for s, t in self.untracked_since.items() if s in {p["symbol"] for p in held}}
         day_pnl, marks = await self._marks_day_pnl(acct)   # after the stops: it reads income
-        await guarded("kill_switch", ks.trip_on_daily_loss(self.j, self.app.settings, acct["equity"], day_pnl, marks),
-                      self.n)   # effective limit, sticky; a human clear holds it (killswitch_rearm.py)
+        # effective limit, sticky; a human clear holds it (killswitch_rearm.py); the reminder follows the trip exactly
+        hit = await guarded("kill_switch", ks.trip_on_daily_loss(self.j, self.app.settings, acct["equity"], day_pnl,
+                                                                 marks), self.n)
+        await self._daily_loss_alert(day_pnl, hit)
 
     async def _marks_day_pnl(self, acct: dict) -> tuple[float, dict]:
         """(day P&L from the equity marks, evidence) (equity_marks.py: a loss carried over midnight isn't today's).
@@ -96,6 +90,15 @@ class PositionChecks:
         except Exception:  # noqa: BLE001 (incl. TimeoutError) - conservative fallback
             per = {"day_pnl": old, "late": {}, "degraded": True}
         return per["day_pnl"], {"old_day_pnl": old, "late": per.get("late", {}), "degraded": per.get("degraded", False)}
+
+    async def _daily_loss_alert(self, day_pnl: float, tripped: dict | None) -> None:
+        """Reminder while the day's loss is past the limit. It fires exactly when ks.trip_on_daily_loss returned (it
+        returns None below the limit) on the day_pnl the trip got, so the two never disagree on basis or limit."""
+        if tripped:
+            st = ks.read(self.j)
+            await self.n.send("daily_loss_limit", f"Day P&L {day_pnl:+.2f} USDT is past the daily loss limit. Kill "
+                              f"switch {st['state']} ({st.get('reason')}): sticky, past midnight too, until a human "
+                              "clears it. Review open positions.", urgent=True, cooldown_s=6 * 3600)
 
     async def _position_failed(self, sym: str, e: Exception) -> None:
         """One symbol's failure stays out of the pass result, but a streak of them escalates (ONDO, -1021)."""
@@ -135,9 +138,6 @@ class PositionChecks:
             await self._restore_stop(sym)
             if p["UNPROTECTED"] or not close:
                 return
-        if p["journal_status"] == "NOT IN JOURNAL":
-            await self.n.send("untracked_position", "Position not opened via shortbot: stop is enforced but no "
-                              "plan/thesis. Journal it or close it.", sym, cooldown_s=86400)
         await self._untracked_trip(p)
         if p["stop_distance_pct"] is not None and p["stop_distance_pct"] < STOP_NEAR_PCT:
             await self.n.send("stop_near", f"Mark {p['mark']} is {p['stop_distance_pct']}% from stop "
@@ -160,7 +160,9 @@ class PositionChecks:
                 self.untracked_since.pop(sym, None)
                 return
             age = time.time() - self.untracked_since.setdefault(sym, time.time())
-            if age >= UNTRACKED_GRACE_S:
+            if age >= UNTRACKED_GRACE_S:   # alerted only now: an early alert would arm a 24 h cooldown on a false alarm
+                await send_safe(self.n, "untracked_position", "Position not opened via shortbot: stop is enforced but "
+                                "no plan/thesis. Journal it or close it.", sym, cooldown_s=86400)
                 await ks.trip(self.j, self.app.settings, REDUCING, "guardian", f"reconciliation: {sym} position "
                               f"({p['contracts']}) not in the journal for {age / 60:.0f} min",
                               {"symbol": sym, "contracts": p["contracts"]}, cause="reconciliation")
@@ -190,7 +192,8 @@ class PositionChecks:
                         await tr._market_close(sym, float(pos["contracts"]))
                 self.stop_fails.pop(sym, None)
                 await self.n.send("forced_close", f"Could not restore a stop {n}x ({e}); " + (
-                    "a stop is in place now (set elsewhere): NOT closed." if covered else "position CLOSED."), sym,
+                    "a stop is in place now (set elsewhere): NOT closed." if covered else "position CLOSED." if pos
+                    else "the position was already gone (closed elsewhere): nothing to close."), sym,
                                   urgent=True, cooldown_s=0)
             else:
                 await self.n.send("stop_restore_failed", f"attempt {n}/{MAX_STOP_RESTORE_FAILS}: {e}", sym,
@@ -221,8 +224,7 @@ class PositionChecks:
         hits, cur = list(trade.get("targets_hit") or []), p["contracts"]
         for a in acts:
             if a.kind == "alert":
-                await self.n.send(f"plan:{a.reason.split(':')[0][:30]}", a.reason, sym, cooldown_s=a.cooldown_s,
-                                  urgent=a.urgent)
+                await self.n.send(f"plan:{a.key or a.kind}", a.reason, sym, cooldown_s=a.cooldown_s, urgent=a.urgent)
             elif a.kind == "move_stop":
                 r = await tr.move_stop(sym, a.price, f"plan/{a.reason}")
                 if r.get("noop"):          # rounds to the stop already in place
@@ -330,46 +332,3 @@ class PositionChecks:
         """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts)."""
         if self.ex.trade:
             await entry_intents.reconcile(self.entries)
-
-    # ------------------------------------------------------------ watch (alert-only, 60 s, own lane)
-    async def watch_positions(self) -> None:
-        if not self.ex.trade:
-            return
-        for p in await self.app.trader._raw_positions():
-            if p.get("side") != "short":
-                continue
-            for check in (self._squeeze_and_funding, self._news):   # each on its own: a dead feed never hides a squeeze
-                try:
-                    await check(p["symbol"])
-                except Exception as e:  # noqa: BLE001
-                    log.exception("watch %s failed", p["symbol"])
-                    await self.n.send("position_watch_error", f"{type(e).__name__}: {e}", p["symbol"], cooldown_s=1800)
-
-    async def _squeeze_and_funding(self, sym: str) -> None:
-        pub = self.ex.public
-        c5, oi, fr, intervals = await asyncio.gather(
-            pub.fetch_ohlcv(sym, "5m", limit=13), self.ex.oi_history(sym, "5m", 13),
-            pub.fetch_funding_rate(sym), self.ex.funding_intervals(), return_exceptions=True)
-        if isinstance(c5, list) and len(c5) >= 13:
-            px = ind.pct_change(c5[0][4], c5[-1][4])
-            oi_chg = ind.pct_change(oi[0]["oi"], oi[-1]["oi"]) if isinstance(oi, list) and len(oi) > 1 else 0
-            if px >= SQUEEZE_PRICE_1H_PCT and oi_chg >= SQUEEZE_OI_1H_PCT:
-                await self.n.send("squeeze_risk", f"Price +{px:.1f}% and OI +{oi_chg:.1f}% in 1h. Re-evaluate now.",
-                                  sym, urgent=True, cooldown_s=1800)
-            elif px >= SQUEEZE_PRICE_1H_PCT * 1.5:
-                await self.n.send("price_spike", f"Price +{px:.1f}% in 1h against the short.", sym, urgent=True,
-                                  cooldown_s=1800)
-        if isinstance(fr, dict) and (fr.get("fundingRate") or 0) < 0:
-            await self.n.send("funding_negative", f"Funding {fr['fundingRate'] * 100:.4f}%: shorts now PAY and the "
-                              "trade is crowded. Playbook: consider cutting.", sym, cooldown_s=4 * 3600)
-        if isinstance(intervals, dict) and intervals.get(to_raw(sym), {}).get("interval_h") == 1:
-            await self.n.send("funding_hourly", "Funding switched to 1h settlement (cap hit): extreme regime.", sym,
-                              urgent=True, cooldown_s=4 * 3600)
-
-    async def _news(self, sym: str) -> None:
-        res = await news.news_for(sym.split("/")[0], max_items=5)
-        for item in res["binance_announcements"] + res["headlines"]:
-            url = item.get("url", "")
-            if url and self.j.get(f"news_seen:{url}") is None:
-                self.j.set(f"news_seen:{url}", str(time.time()))
-                await self.n.send("news_on_position", f"{item['title']}\n{url}", sym, cooldown_s=0)

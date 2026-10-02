@@ -21,6 +21,7 @@ from .entries import EntryDesk
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
 from .guardian_positions import PositionChecks
+from .guardian_watch import WatchChecks
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
 from .notify import Notifier
@@ -39,7 +40,7 @@ RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs
 TICK_S = 1.0
 
 
-class Guardian(PositionChecks, MarketJobs):
+class Guardian(PositionChecks, WatchChecks, MarketJobs):
     """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
     the kill-switch loss trips (daily loss, dd_stop) follow an active experiment's limits (killswitch.py)."""
 
@@ -52,6 +53,7 @@ class Guardian(PositionChecks, MarketJobs):
         self.j = self.app.journal
         self.stop_fails: dict[str, int] = {}
         self.pos_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed checks per symbol
+        self.watch_streak = Streak(ESCALATE_AFTER_FAILS)   # consecutive failed watch passes per symbol (#57)
         self.untracked_since: dict[str, float] = {}       # symbol -> first seen without a journal trade
         self.kill_seen: dict | None = None                # last kill-switch state seen (loosening tripwire)
         self._last_resync = 0.0

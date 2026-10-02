@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .journal_research import RESEARCH_SCHEMA, ResearchStore
+from .redact import redact
 from .sessions import session_bucket
 
 SCHEMA = """
@@ -264,7 +265,7 @@ class Journal(ResearchStore):
     # ------------------------------------------------------------ alerts / metrics
     def log_alert(self, kind: str, message: str, symbol: str | None = None) -> int:
         return self._insert("INSERT INTO alerts (ts, symbol, kind, message) VALUES (?,?,?,?)",
-                            (now_iso(), symbol, kind, message))
+                            (now_iso(), symbol, kind, redact(message)))   # no signed URL or token in a row
 
     def alerts(self, limit: int = 30, since: str | None = None) -> list[dict[str, Any]]:
         if since:

@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 from . import killswitch as ks
 from . import news, research
+from .exchange import to_raw
 from .guardian_loop import guarded
 from .market.regime import market_regime
 from .market.social import snapshot as social_snapshot
@@ -36,9 +38,21 @@ class MarketJobs:
                 self.j.set(key, str(time.time()))
                 fresh = datetime.fromisoformat(a["time"]) > datetime.now(timezone.utc) - timedelta(hours=24)
                 if not first_run and fresh:  # never alert on old items that merely re-appear in the list
-                    await self.n.send(f"binance_{a['catalog'].lower().replace(' ', '_')}", f"{a['title']}\n{a['url']}",
-                                      cooldown_s=0)
+                    await self._announce(a)
         self.j.set("ann_initialised", "1")
+
+    async def _announce(self, a: dict) -> None:
+        """A delisting naming a coin on our book (an open short, or an entry that is or may be resting) is urgent, per
+        symbol: the position must be out before settlement (delisting-short skill). Anything else is a heads-up."""
+        kind, text = f"binance_{a['catalog'].lower().replace(' ', '_')}", f"{a['title']}\n{a['url']}"
+        book = {t["symbol"] for t in self.j.open_trades()} | \
+            {e["symbol"] for e in self.entries.pending(all_orders=True)}
+        hits = sorted(s for s in book if _names(a["title"], s)) if a["catalog"] == "Delisting" else []
+        for sym in hits:
+            await self.n.send(kind, f"Delisting of a coin on our book: exit before settlement (delisting-short "
+                              f"playbook).\n{text}", sym, urgent=True, cooldown_s=0)
+        if not hits:
+            await self.n.send(kind, text, cooldown_s=0)
 
     async def check_governor(self) -> None:
         """Account breakers: tell the human the moment new entries are halted (open trades keep their stops)."""
@@ -115,7 +129,8 @@ class MarketJobs:
         from .registry_seed import feed_candidates
         fed = feed_candidates(self.j) if n else 0          # newly labelled scans -> registry node episodes
         for a in registry.decay_alarms(self.j.db):
-            await self.n.send("pattern_decay", f"{a['id']} ({a['status']}): {a['verdict']}", None, cooldown_s=86_400)
+            await self.n.send(f"pattern_decay:{a['id']}", f"{a['id']} ({a['status']}): {a['verdict']}", None,
+                              cooldown_s=86_400)
         if n or m or x:
             log.info("labelled %d research candidates, %d predictions, %d post-exit moves; %d registry episodes",
                      n, m, x, fed)
@@ -162,3 +177,9 @@ class MarketJobs:
         n = await detect(self.ex, self.j)
         if n:
             log.info("laggard study: %d new events", n)
+
+
+def _names(title: str, symbol: str) -> bool:
+    """Does an announcement title name this perp? Its coin (news.mentions) or its contract ('ALPACAUSDT')."""
+    return news.mentions(title, symbol.split("/")[0]) or bool(
+        re.search(rf"(?<![A-Z0-9]){re.escape(to_raw(symbol))}(?![A-Z0-9])", title))

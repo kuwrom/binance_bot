@@ -27,6 +27,7 @@ class Action:
     target_price: float | None = None  # target being executed (recorded in targets_hit)
     urgent: bool = False
     cooldown_s: float = 3600
+    key: str = ""                      # an alert's stable identity (its cooldown key): never PnL or age
 
 
 def excursions(trade: dict[str, Any], mark: float) -> dict[str, float]:
@@ -67,7 +68,7 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
         why = f"funding budget: paid {paid:.2f} USDT >= {FUNDING_BUDGET_R}R ({r1:.2f}) with no follow-through"
         if auto.get("funding_budget", True):
             return [Action("close", why, fraction=1.0, urgent=True)]
-        acts.append(Action("alert", why, urgent=True, cooldown_s=4 * 3600))
+        acts.append(Action("alert", why, urgent=True, cooldown_s=4 * 3600, key="funding budget"))
 
     # time stop
     tsh = plan.get("time_stop_hours")
@@ -75,7 +76,7 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
         if auto.get("time_stop"):
             return [Action("close", f"time stop: {age_h:.1f}h >= {tsh}h", fraction=1.0)]
         acts.append(Action("alert", f"time stop reached ({age_h:.1f}h >= {tsh}h), PnL {pnl:+.1f}%. Plan says "
-                           "exit if no follow-through.", urgent=True, cooldown_s=4 * 3600))
+                           "exit if no follow-through.", urgent=True, cooldown_s=4 * 3600, key="time stop"))
 
     # targets: fractions are of the ORIGINAL position and CUMULATIVE. At a target, close only what the plan wants
     # gone by then minus what is already gone (manual partials count), so a manual partial never double-counts and
@@ -98,7 +99,8 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
             cur -= cur * frac
         else:
             acts.append(Action("alert", f"target {t['price']} reached (PnL {pnl:+.1f}%): take "
-                               f"{t['fraction']:.0%} per plan?", target_price=t["price"], cooldown_s=4 * 3600))
+                               f"{t['fraction']:.0%} per plan?", target_price=t["price"], cooldown_s=4 * 3600,
+                               key=f"target {t['price']:g}"))
 
     # stop management: breakeven and trailing, tighten-only and must stay above mark
     new_stop, why = None, ""
@@ -122,5 +124,5 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
     if rv:
         acts.append(Action("alert", f"review due (every {rv}h): {trade.get('setup')} short, age {age_h:.1f}h, "
                            f"PnL {pnl:+.1f}%, MFE {ex['mfe_pct']:.1f}%, MAE {ex['mae_pct']:.1f}%",
-                           cooldown_s=rv * 3600))
+                           cooldown_s=rv * 3600, key="review due"))
     return acts
