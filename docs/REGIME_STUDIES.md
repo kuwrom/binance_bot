@@ -1,6 +1,6 @@
 # Multi-year regime studies (research 2026-10-02)
 
-This file has two daily studies on six years of Binance perps, delisted coins included. The hourly backtest in [BACKTEST.md](BACKTEST.md) covers only 60 days, which is one regime. Both studies were fixed in code before the first run, and every cell is logged as a registry trial.
+This file has three daily studies on six years of Binance perps, delisted coins included. The hourly backtest in [BACKTEST.md](BACKTEST.md) covers only 60 days, which is one regime. Each study was fixed in code before its first run, and every cell is logged as a registry trial.
 
 **Data:** `histdaily.py` → `data/daily.db`:
 - 1d klines and funding for **676 USDT coin perps**;
@@ -97,8 +97,40 @@ The 0.10% threshold gives the same picture: every |t| < 2.
 - The breakdown control had started on the event day instead of the entry day.
 - The verdict had taken its sign from the pooled mean but its t from day means. Heavy tails (coins 5x-ing) made those disagree.
 
+## 3. Cross-sectional factor books (task #19, `backtest/xs_factors.py`, `xs_features.py`)
+**Hypothesis** (cards `ctrend_technical_aggregate` and `carry_momo_breakout_blend`): technical rankings and the Robot Wealth blend earn a cross-sectional premium on Binance perps, mostly in the long leg.
+
+**CTREND:**
+- Weekly, top-100 perps by volume.
+- 21 daily indicators, rank-normalised, combined by ridge regression refit every week on the previous 52 completed weeks. This replaces the paper's elastic net, and every prediction is out of sample.
+- Quintile long-short, 15 bp per unit of turnover, funding included.
+- 291 weeks, 2021-03 to 2026-08.
+
+**Blend:**
+- Daily, top-30 perps.
+- 0.5 carry (−funding) + 0.2 10-day momentum + 0.3 breakout, as cross-sectional z-scores.
+- Dollar-neutral, gross 1, with a 0.02 no-trade buffer.
+- 2,355 days, 2020-03 to 2026-08.
+
+| book | leg | mean | t | Sharpe (ann.) | by year |
+|---|---|---|---|---|---|
+| CTREND | long-short gross / net (per week) | −0.07% / −0.27% | −0.36 / −1.44 | −0.15 / −0.61 | negative 2021, 2023, 2024; positive 2022, 2026 |
+| CTREND | long leg, net | −0.31%/wk | −0.47 | −0.20 | tracks the universe (+0.19%/wk, t 0.3) |
+| CTREND | short leg, net | −0.22%/wk | −0.30 | −0.13 | the mirror |
+| Blend | long-short gross / net (per day) | +0.23% / +0.16% | 2.17 / **1.55** | 0.86 / 0.61 | net: 2020 +90%, 2021 +116%, **2022 −66%**, 2023 +31%, **2024 −20%**, 2025 +171%, 2026 +123% (annualised means) |
+| Blend | long leg / short leg (gross) | +0.24% / −0.01% per day | 2.14 / −0.23 | 0.84 / −0.09 | the long names carry the whole book |
+
+**Conclusions:**
+- **CTREND does not replicate** on liquid Binance perps after 2021. The paper's 2015-2022 result (>3,000 spot coins, much of it small caps) does not carry over to the top-100 universe we can trade, at least not with a ridge combination. Both legs are noise around the universe.
+- **The blend is the best systematic book found so far, but it is not significant net of costs.**
+  - Net Sharpe is 0.61 (t 1.55), with two losing years.
+  - The edge sits entirely in the long leg (high momentum, near 20-day highs, low funding). The short leg earns nothing.
+  - This repeats the academic finding: factor premia live in the long leg, so a short book cannot harvest them.
+- Note: trials are logged under source `xs_daily`, 6 legs in total.
+
 ## Rerun
 ```
 .venv/bin/python -m shortbot.backtest.carry_regime --record     # JSON + provenance.json in data/research/<date>-<sha7>/carry_regime/
 .venv/bin/python -m shortbot.backtest.funding_events --record
+.venv/bin/python -m shortbot.backtest.xs_factors --record
 ```

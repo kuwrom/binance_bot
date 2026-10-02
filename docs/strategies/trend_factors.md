@@ -25,10 +25,10 @@ Format and status rules: [README.md](README.md).
 - mechanism: crypto has no cash-flow fundamentals, so price-path information (MA distances, oscillators, volume) is what gets priced, slowly
 - rules: weekly cross-sectional regressions of next-week return on 28 daily indicators (SMA 3-200d distances, MACD 12/26, RSI, stochastic, Bollinger, volume MAs), combined by elastic net; quintile sort; long the top quintile (short the bottom for relative value); hold 1-4 weeks
 - data needed: daily OHLCV: Binance klines
-- evidence: >3,000 coins Apr-2015 to May-2022: high-low 3.87%/wk (t=5.19) gross, 2.90%/wk (t=3.89) net of 40/30 bp, 2.35% net of 60/50 bp; top-100 coins 1.90%/wk net worst case (t=2.50); breakeven cost 1.41%; weekly turnover 68%; robust across 55,296 design variants; subsumes momentum. Low quintile +0.12%/wk (t=0.16): the short leg is flat (Fieberg et al. JFQA 2025, https://doi.org/10.1017/S0022109024000747)
+- evidence: **Own replication** on Binance top-100 perps, 2021-03 to 2026-08 (docs/REGIME_STUDIES.md §3: 21 indicators, ridge refit weekly out of sample): long-short −0.07%/wk gross (t −0.36), −0.27% net (t −1.44); both legs track the universe. **Does not replicate on our tradable universe.** Paper: >3,000 coins Apr-2015 to May-2022: high-low 3.87%/wk (t=5.19) gross, 2.90%/wk (t=3.89) net of 40/30 bp, 2.35% net of 60/50 bp; top-100 coins 1.90%/wk net worst case (t=2.50); breakeven cost 1.41%; weekly turnover 68%; robust across 55,296 design variants; subsumes momentum. Low quintile +0.12%/wk (t=0.16): the short leg is flat (Fieberg et al. JFQA 2025, https://doi.org/10.1017/S0022109024000747)
 - grade: Peer-reviewed
 - risks: sample ends May 2022; look-ahead if refit carelessly; the short leg is useless in absolute terms
-- fit: High — for a long book the strongest peer-reviewed signal on public daily data; for the short book a veto: don't short high-CTREND coins
+- fit: Low — failed our out-of-sample replication on liquid perps (§3); the paper's premium appears to live in coins we cannot trade
 
 ### cs_momentum_large_caps — Cross-sectional 1-4 week momentum
 - direction: both
@@ -58,10 +58,10 @@ Format and status rules: [README.md](README.md).
 - mechanism: leveraged retail trend-chasing in a fragmented, hard-to-value market gives momentum and breakouts; crowded funding gives carry; blending diversifies
 - rules: top-30 Binance perps by 30d volume ex-stables; weight = 0.5 carry (24h funding, cross-sectional z) + 0.2 momentum (10d return, cross-sectional) + 0.3 breakout (closeness to the 20d high, -9.5..+9.5); normalise to portfolio weights; rebalance daily only when a position drifts past a no-trade buffer; 15 bp per trade cost model; no stops (portfolio level)
 - data needed: daily klines, funding: Binance public
-- evidence: Sep-2019 to Feb-2024 backtest; costs "significantly" erode returns without the buffer, the buffer restores them; Sharpe not published (https://robotwealth.com/a-simple-effective-way-to-manage-turnover-and-not-get-killed-by-costs/). The closest documented small-team perp book. Its carry sleeve failed out of sample in a separate 2025-26 test (see xs_funding_carry_basket)
+- evidence: **Own test** on Binance top-30 perps, 2020-03 to 2026-08 (docs/REGIME_STUDIES.md §3): long-short +0.23%/day gross (t 2.17, Sharpe 0.86), **+0.16% net (t 1.55, Sharpe 0.61)**; 2022 and 2024 negative; the long leg carries everything (+0.24%/day, t 2.14) and the short leg earns nothing (−0.01%, t −0.23). Robot Wealth: Sep-2019 to Feb-2024 backtest; costs "significantly" erode returns without the buffer, the buffer restores them; Sharpe not published (https://robotwealth.com/a-simple-effective-way-to-manage-turnover-and-not-get-killed-by-costs/). The closest documented small-team perp book. Its carry sleeve failed out of sample in a separate 2025-26 test (see xs_funding_carry_basket)
 - grade: Practitioner-data
 - risks: long-biased in bull runs (breakout and momentum legs); crowding; post-2024 decay unknown
-- fit: High — we can run the short half now as a ranking, and the full book once longs are allowed
+- fit: Med — the best systematic book found so far but not significant net, and its edge is the long leg only; the short half alone is worthless. Shadow-track it as the candidate core for a future long/neutral book
 
 ### beta_hedged_rs_pair — BTC-beta-hedged relative-strength alt long (or weak-alt short)
 - direction: neutral

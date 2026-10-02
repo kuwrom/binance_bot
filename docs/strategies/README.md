@@ -41,7 +41,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | 4 | airdrop_hodler_supply_short, lowfloat_highfdv_decay_short, supply_overhang_short | short | ~-70% listing cohort; tags for listing_fade |
 | 5 | tsmom_trend_following | gate / long core | peer-reviewed; "only short downtrends" veto |
 | 6 | long_liq_flush_reclaim_long, oversold_bounce_majors, capitulation_forced_selling_long | long | **tested, fail** in the 60-day window (no edge over same-hour placebos); retest on new data |
-| 7 | ctrend_technical_aggregate, carry_momo_breakout_blend | long / both | strongest long ranking signals |
+| 7 | carry_momo_breakout_blend | long / both | **tested**: net Sharpe 0.61 (t 1.55), long leg only; CTREND failed to replicate on liquid perps |
 | 8 | hack_exploit_short | short | NY Fed: -27% 24h CAR |
 | 9 | premium_index_reversion, funding_interval_switch | both | same code path as premium_hi / squeeze_exhaustion |
 | 10 | oi_price_funding_regime | both | **tested**: long-trap short has a relative edge (+0.10R vs placebo, t 1.7); squeeze-fuel long +0.34R (n 49): shadow-log both. ls_ratio_taker_contrarian and crowded_long_unwind_short failed |
@@ -58,7 +58,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | id | direction | family | grade | fit | file |
 |---|---|---|---|---|---|
 | carry_crash_regime | both | carry | Working-paper | Low | short_and_overlays.md |
-| carry_momo_breakout_blend | both | cross-sectional | Practitioner-data | High | trend_factors.md |
+| carry_momo_breakout_blend | both | cross-sectional | Practitioner-data | Med | trend_factors.md |
 | cs_momentum_large_caps | both | cross-sectional | Peer-reviewed | Med | trend_factors.md |
 | daily_reversal_illiquid_momentum_liquid | both | cross-sectional | Peer-reviewed | High | trend_factors.md |
 | forced_flow_crowding_sizing | both | event/supply | Practitioner-data | Med | short_and_overlays.md |
@@ -94,7 +94,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | etf_flow_follow | long | other | Anecdote | Low | long_side.md |
 | monday_btc_effect | long | other | Peer-reviewed | Low | long_side.md |
 | breakout_20d_overlay | long | trend | Practitioner-data | Med | trend_factors.md |
-| ctrend_technical_aggregate | long | trend | Peer-reviewed | High | trend_factors.md |
+| ctrend_technical_aggregate | long | trend | Peer-reviewed | Low | trend_factors.md |
 | high_funding_trend_confirm | long | trend | Practitioner-data | High | long_side.md |
 | oversold_bounce_majors | long | volatility | Anecdote | High | long_side.md |
 | coinm_usdm_funding_spread | neutral | carry | Single-source | Low | carry_neutral.md |
