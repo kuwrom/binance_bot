@@ -255,7 +255,7 @@ The strategies above are hand-written proxies; none of them runs `signals/`, `ta
 
 **Sources** (checked 2026-10-02): kline intervals, file layout and next-day publication in github.com/binance/binance-public-data; the S3 listing (`s3-ap-northeast-1.amazonaws.com/data.binance.vision?prefix=data/futures/um/daily/`) keeps settled perps (STGUSDT 1m from 2022-08-25 past its 2026-09-24 delivery); funding formula in binance.com/en/support/faq/360033525031; `/fapi/v1/exchangeInfo` still lists 131 SETTLING perps with deliveryDate; `/fapi/v1/ticker/24hr` spans 24 h with a minute-aligned openTime. The developers.binance.com REST pages render client-side and could not be read with our tools; the REST facts above were checked on the public endpoints.
 
-**Verification (2026-10-02, 122 logged scans 09-27 → 10-01, 2,964 candidate rows, code 80130e9).** A row matches when the replay evaluated the same coin and agrees on tradable, setups and tape state. Logged scans before 2026-09-29T19:37 ran code that is not in git (the "OI < $xM" and negative-funding vetoes), so decisions are judged from there on; 3 days, so the day-clustered intervals are descriptive only.
+**Verification (2026-10-02, 122 logged scans 09-27 → 10-01, 2,964 candidate rows, code 9a3e3c7; rerun with the command above).** A row matches when the replay evaluated the same coin and agrees on tradable, setups and tape state. Logged scans before 2026-09-29T19:37 ran code that is not in git (the "OI < $xM" and negative-funding vetoes), so decisions are judged from there on; 3 days, so the day-clustered intervals are descriptive only.
 
 | since 09-29T19:37 (52 scans, 1,243 rows) | value |
 |---|---|
