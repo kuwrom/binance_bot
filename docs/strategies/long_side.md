@@ -36,7 +36,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: weeks of negative funding mean shorts have become the crowded side after a crash; spot sellers are exhausted, the reclaim forces covering, and longs are paid while waiting
 - rules: trigger when Binance BTCUSDT 30d average funding is < 0 for >= 30-40 consecutive days; scale in after a reclaim (price > 20d high or > 20DMA); hold 30-60 days; stop below the capitulation low; majors only
 - data needed: funding history: Binance public
-- evidence: Jun-Jul 2021 (~40d negative, $29k -> $48k in 60d, +65%); Nov-Dec 2022 FTX (~50d negative, $15.5k -> $23k, +48%); Mar-Apr 2026 46d streak (https://phemex.com/blogs/bitcoin-funding-rates-negative-46-days-ftx-bottom). ">10 days negative -> 74% rallies, median +18.6%" (https://cryptorank.io/news/feed/fab7b-bitcoin-negative-funding-rate-rebound, no method)
+- evidence: **Own test** (§4): 3 events (2020-04, 2021-08, 2026-04); 30d +16.9% vs +3.4% unconditional, 60d +9.6% vs +7.4%. Still an anecdote at n=3. Practitioner: Jun-Jul 2021 (~40d negative, $29k -> $48k in 60d, +65%); Nov-Dec 2022 FTX (~50d negative, $15.5k -> $23k, +48%); Mar-Apr 2026 46d streak (https://phemex.com/blogs/bitcoin-funding-rates-negative-46-days-ftx-bottom). ">10 days negative -> 74% rallies, median +18.6%" (https://cryptorank.io/news/feed/fab7b-bitcoin-negative-funding-rate-rebound, no method)
 - grade: Anecdote
 - risks: n=2; 2018-style grinding bears had negative funding without rallies; wide stop and small size required
 - fit: Med — rare (once every 1-2 years) but free to monitor; doubles as a regime flag that vetoes shorts on majors
@@ -47,7 +47,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: crowded shorts pay longs; deeply negative funding z means positioning is extreme and any rise forces covering
 - rules: enter when the 30d rolling z-score of daily average funding crosses below -1.5; exit when z returns above 0 or after 30 days (average hold 5 days). Variant: 7d average funding < -0.01%/8h, hold 30d
 - data needed: fundingRate history: Binance public
-- evidence: 93 trades Sep-2019 to Jun-2026, win 53.8%, +1.14%/trade, "after fees probably zero or negative" (https://tradingstrategies.work/blog/funding-rate-signal-btc-backtest). 7d avg < -0.01% -> median 30d forward +12.4%, 68.7% positive (cryptorank, no method)
+- evidence: **Own test** (docs/REGIME_STUDIES.md §4, BTC 2020-2026): 89 trades averaging 5 days, +1.94% vs +0.57% for any 5-day hold, so +1.37% excess per trade (excess t ≈ 1.65). Practitioner: 93 trades Sep-2019 to Jun-2026, win 53.8%, +1.14%/trade, "after fees probably zero or negative" (https://tradingstrategies.work/blog/funding-rate-signal-btc-backtest). 7d avg < -0.01% -> median 30d forward +12.4%, 68.7% positive (cryptorank, no method)
 - grade: Single-source
 - risks: standalone edge is about zero after costs; in bear trends funding stays negative for weeks
 - fit: Med — use as a short veto and a confirmation for other long setups, not as a trigger
@@ -102,7 +102,7 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: capitulation (forced sellers, negative funding, ETF outflows) pushes BTC below fair value; patient capital is paid by forced and fearful sellers
 - rules: Moon Pursuit runs "bitcoin accumulation at cycle lows" (rules not published). Desk default *(proposed)*: scale in when BTC is >20% under the 200DMA, 30d funding average < 0 and drawdown from ATH > 40%; or (Glassnode) below the short-term-holder cost basis -1 SD band once STH realised losses roll over; hold months; low leverage
 - data needed: klines, funding: Binance public; STH bands need Glassnode (paid); proxy = price vs 155d VWAP
-- evidence: Moon Pursuit Fund I +52% 2025 YTD, ~+170% since Apr-2024 (overlay attribution unknown) (https://www.coindesk.com/business/2025/12/17/moon-pursuit-capital-launches-usd100-million-market-neutral-crypto-fund). Nov-2025: price $89k below the STH -1 SD band ($95.4k), STH realised losses $523M/day, equal to FTX (https://research.glassnode.com/the-week-onchain-week-46-2025/)
+- evidence: **Own test** (§4, mechanical rule): 3 events (2021-07, 2022-11, 2026-02); 90d +35.8% vs +12.6% unconditional, 180d +36.3% vs +31.3%. n=3, an anecdote. Moon Pursuit Fund I +52% 2025 YTD, ~+170% since Apr-2024 (overlay attribution unknown) (https://www.coindesk.com/business/2025/12/17/moon-pursuit-capital-launches-usd100-million-market-neutral-crypto-fund). Nov-2025: price $89k below the STH -1 SD band ($95.4k), STH realised losses $523M/day, equal to FTX (https://research.glassnode.com/the-week-onchain-week-46-2025/)
 - grade: Single-source
 - risks: few signals per decade; -50% after "cycle low" calls (2022); months below the band in true bears
 - fit: Low — rare and long-horizon; at most a regime note ("stop shorting majors when this fires")
@@ -157,10 +157,10 @@ tool. A short book needs events, flows and crowding instead ([trend_factors.md](
 - mechanism: after BTC trends, profit rotates into ETH, then large caps, then small caps; ETH/BTC breakouts lead
 - rules: *(proposed)* ETH/BTC above its 50DMA and BTC lagging a top-20 perp basket over 14d -> allow longs in the top-5 alts by 14d residual strength; off on an ETH/BTC 50DMA loss
 - data needed: klines (public); dominance itself is external
-- evidence: none quantified; attention channel consistent with Liu-Tsyvinski RFS 2021
-- grade: Anecdote
+- evidence: **Own test** (§4, weekly 2020-2026): the dominance regime adds nothing (top-5 residual-strength alts +1.77%/wk on-regime vs +2.10% off). The residual-strength pick beats the top-20 basket by +1.1-1.3%/wk in BOTH regimes (residual momentum)
+- grade: Practitioner-data
 - risks: alt seasons are rare and short after 2021; mostly contemporaneous
-- fit: Low — a regime filter for any future long book
+- fit: Low — the regime filter failed; the residual-strength ranking is the useful part (see beta_hedged_rs_pair)
 
 ### attention_shock_long — Investor-attention surge long
 - direction: long

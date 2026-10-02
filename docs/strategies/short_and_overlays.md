@@ -189,7 +189,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: carry harvesters open just before 00/08/16 UTC and close just after; with large funding this creates a small predictable drift, and the post-settlement pressure reverses
 - rules: *(proposed)* for |predicted funding| > 0.05%: avoid entering on the payer side in the last 30-60 min before settlement; lab test: short T-60m to T+0 when funding > +0.1%, mirror when < -0.1%; fade the 15-60 min move into settlement when funding is extreme, exit within 1-2h
 - data needed: premiumIndex (predicted rate, nextFundingTime), 1m/1h klines: Binance public
-- evidence: settlement-tied intraday spread patterns, spreads peak ~2h after settlement (https://www.mdpi.com/2227-7072/14/5/103, snippet only); Polymarket 5-min BTC contracts show settlement flow spikes and reversals (https://arxiv.org/abs/2606.31675, different venue)
+- evidence: **Own test** (§4, 60d, clustered by print): into prints with |funding| >= 0.1% the payer side loses nothing (−0.19%, t −0.72). In the 2h AFTER, the payer side GAINS +0.29% (t −3.67, 1,046 prints): high funding keeps trending, the opposite of the card. Rule: don't short a high-funding coin right after the print. Literature: settlement-tied intraday spread patterns, spreads peak ~2h after settlement (https://www.mdpi.com/2227-7072/14/5/103, snippet only); Polymarket 5-min BTC contracts show settlement flow spikes and reversals (https://arxiv.org/abs/2606.31675, different venue)
 - grade: Single-source
 - risks: tiny vs fees; hourly-funding symbols blur the timestamps
 - fit: Med — a zero-cost lab test on stored data; at least an execution-timing rule
@@ -200,7 +200,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: recurring flows by time zone and session (funding times, US/Asia opens)
 - rules: signal by hour of day on majors; parameters not published
 - data needed: 1h klines: Binance public
-- evidence: Robot Wealth research strategy, no public stats (https://robotwealth.com/index-of-strategies/)
+- evidence: **Own test** (§4, 60d): UTC 04 / 11 / 16 / 23 positive (16 UTC +21bp, day-clustered t 3.9); the hourly profile correlates 0.48 between halves. Robot Wealth research strategy, no public stats (https://robotwealth.com/index-of-strategies/)
 - grade: Practitioner-data
 - risks: small vs taker fees; regime-dependent
 - fit: Low — an entry-timing tweak only

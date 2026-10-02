@@ -1,6 +1,6 @@
 # Multi-year regime studies (research 2026-10-02)
 
-This file has three daily studies on six years of Binance perps, delisted coins included. The hourly backtest in [BACKTEST.md](BACKTEST.md) covers only 60 days, which is one regime. Each study was fixed in code before its first run, and every cell is logged as a registry trial.
+This file has three daily studies plus the remaining card tests (§4) on six years of Binance perps, delisted coins included. The hourly backtest in [BACKTEST.md](BACKTEST.md) covers only 60 days, which is one regime. Each study was fixed in code before its first run, and every cell is logged as a registry trial.
 
 **Data:** `histdaily.py` → `data/daily.db`:
 - 1d klines and funding for **676 USDT coin perps**;
@@ -128,9 +128,32 @@ The 0.10% threshold gives the same picture: every |t| < 2.
   - This repeats the academic finding: factor premia live in the long leg, so a short book cannot harvest them.
 - Note: trials are logged under source `xs_daily`, 6 legs in total.
 
+## 4. The remaining testable cards (task #28, `backtest/card_tests.py`)
+Each test was fixed before its run. "Excess" means against the unconditional return over the same holding length.
+
+**Daily (BTC unless stated, 2020-2026):**
+
+| card | rule | n | result |
+|---|---|---|---|
+| funding_negative_zscore_long | 30d funding z ≤ −1.5 → long until z > 0 or 30d | 89 (avg 5d) | +1.94% per trade vs +0.57% → **+1.37% excess** (excess t ≈ 1.65) |
+| negative_funding_streak_long | 30d mean funding < 0 for ≥ 30 days and above the 20DMA → long | 3 (2020-04, 2021-08, 2026-04) | 30d +16.9% vs +3.4%; 60d +9.6% vs +7.4%. Anecdote (n = 3) |
+| cycle_low_accumulation | > 20% under the 200DMA, 30d funding < 0, > 40% below the ATH → long | 3 (2021-07, 2022-11, 2026-02) | 90d +35.8% vs +12.6%; 180d +36.3% vs +31.3%. Anecdote |
+| dominance_rotation_long | ETH/BTC above its 50DMA and BTC lagging the alts → top-5 residual-strength alts, 7d | 113 on / 221 off weeks | regime on +1.77%/wk vs off +2.10%: **the regime adds nothing**. The top-5 residual-strength alts beat the basket by +1.1-1.3%/wk in both regimes (residual momentum, long side) |
+
+**Hourly (60 days; t clustered by event hour):**
+
+| card | result |
+|---|---|
+| funding_settlement_drift | Into a print with \|funding\| ≥ 0.1%: payer side −0.19%, t −0.72, i.e. no effect. **2h after the print the payer side GAINS +0.29% (t −3.67, 1,046 prints)**: high funding keeps trending past the print, the opposite of the card. Rule: don't short a high-funding coin right after the print |
+| intraday_hour_seasonality | UTC 04 / 11 / 16 / 23 are positive (hour 16 = +21bp, day-clustered t 3.9); the hourly profile correlates 0.48 between halves. About 10-20bp against ~10bp taker round trip, so a timing tweak only |
+| btc_alt_lead_lag | Alts' next hour after a BTC +1% hour: +0.26% (t 1.78, only 20 BTC hours); after a BTC −1% hour: +0.14% (t 0.58). Weak, consistent with the existing veto on new shorts in a BTC up-impulse |
+
+**Not testable with our data:** etf_flow_follow, cme_gap_fill, usdt/eth_exchange_inflow, upbit_warning_short, buyback_burn_long, liquidation_magnet, attention/adoption. Each needs an external feed we don't record.
+
 ## Rerun
 ```
 .venv/bin/python -m shortbot.backtest.carry_regime --record     # JSON + provenance.json in data/research/<date>-<sha7>/carry_regime/
 .venv/bin/python -m shortbot.backtest.funding_events --record
 .venv/bin/python -m shortbot.backtest.xs_factors --record
+.venv/bin/python -m shortbot.backtest.card_tests            # and --hourly
 ```
