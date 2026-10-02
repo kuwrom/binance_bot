@@ -83,7 +83,9 @@ async def read_coin(symbol: str) -> dict[str, Any]:
 async def position_ladder(symbol: str) -> dict[str, Any]:
     """3-level ladder for an open short (docs/LADDER.md): T1-T3 with no-edge p0 and edge-adjusted odds, EV in R
     net of costs, the state score (squeeze / tape / breadth / time parts) and the exposure the rule would hold.
-    SHADOW MODE: informative only; it is being validated against hold-to-plan and a price-only placebo."""
+    Read-only. For most trades it is shadow, validated against hold-to-plan and a price-only placebo. A trade in the
+    ladder_live_v1 experiment (plan.ladder_live == "v1") acts on it via `shortbot ladder SYM --apply` (preview with
+    --dry-run)."""
     from .exchange import to_symbol
     from .ladder import build_ladder
     app = get_app()

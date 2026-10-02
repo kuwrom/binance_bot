@@ -25,9 +25,14 @@ from . import audit, procs, stale_guard, weight
 from .app import close_app
 from .redact import install_log_redaction
 
-INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Start with the `trading-session` skill.
+INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Call start_session first, then follow the
+`trading-session` skill.
 Flow: journal+learnings -> market_regime -> positions (manage first, per each trade's plan) -> scan_shorts ->
-coin_snapshot on 5-10 -> load the setup's skill -> propose trades WITH a plan -> human approves -> open_short.
+coin_snapshot on 5-10 -> load the setup's skill -> decide on the evidence -> enter WITH a plan (trigger,
+invalidation, targets, time stop, auto flags) -> tell the human what you did and why.
+Kill switch (trading_state): when it isn't ACTIVE, only reduce risk. Trip it with halt_trading when something is
+wrong; never clear it or work around it (human-only: shortbot-admin).
+unknown=true in a result: the order may have executed. Never re-send it; re-read positions and pending_entries.
 Every scan is logged for research; review research_report regularly and record conclusions with add_learning.
 Risk limits are research parameters (set_risk_params). Vetoes are hypotheses too: override only with a
 written veto_override reason (a size above the risk budget: budget_override). Never dodge a rejection silently.

@@ -10,7 +10,8 @@ no MCP tool anticipated can still be answered without adding a tool, and raw dat
     print(lab.group_mean(rows, lambda r: r["features"]["rsi_1h"] > 85, "short_ret_24h"))
     PY
 
-Read-only on purpose: no order functions live here. Orders only go through the MCP tools (human approval).
+Read-only on purpose: no order functions live here. Orders only go through shortbot's order paths (the MCP tools or
+the `shortbot` CLI), where the risk checks, the kill switch and the audit trail apply.
 """
 
 from __future__ import annotations

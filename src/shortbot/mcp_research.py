@@ -168,8 +168,10 @@ async def research_report(min_n: int = 5) -> dict[str, Any]:
 
 @tool
 async def start_session(notes: str = "") -> dict[str, Any]:
-    """Start a trading session in the journal (call once at the beginning). Acknowledges the alerts the brief listed
-    as unacknowledged and returns them (count by kind + the urgent ones), so none is acknowledged unseen."""
+    """Start a trading session in the journal: call it FIRST, once per session. Acknowledges the alerts the brief listed
+    as unacknowledged and returns them (count by kind + the urgent ones), so none is acknowledged unseen. Every row
+    written after it (this server's tools, and `shortbot` CLI calls from the same Claude session) joins this session
+    in the audit trail (`shortbot audit`)."""
     app = get_app()
     return {"session_id": app.journal.start_session(app.settings.mode, notes), "mode": app.settings.mode,
             "experiment": app.ex.experiment, "alerts_acknowledged": alerts_view.acknowledge(app.journal)}

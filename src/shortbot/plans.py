@@ -1,6 +1,5 @@
 """TradePlan: how ONE specific short is managed. Written by the analyst at entry (defaults come from the
-setup), approved by the human together with the order, stored on the trade, and executed/monitored by
-the guardian. This is what makes management dynamic per trade instead of one global rule set.
+setup), sent together with the order, stored on the trade, and executed/monitored by the guardian. This is what makes management dynamic per trade instead of one global rule set.
 
 Mechanical rules the guardian may execute itself (each gated by `auto`):
 - breakeven: once profit >= breakeven_at_pct, move the stop to entry (tighten-only, protective)
