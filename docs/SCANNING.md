@@ -104,6 +104,27 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
 2. **Tier 2 caps itself** at ~150 weight per 15m window (about 20 coins). Excess triggers queue to the next window, highest trigger score first.
 3. **Streams first:** with candles from tier 0, a deep score is ~6-8 weight instead of ~30. Research falls from ~800 per pass to < 1% of the budget, leaving the rest to the protective lane.
 
+### Weight guard spec (task #70)
+**Track weight per host**, from each response's `x-mbx-used-weight-1m`, keyed by the request's host. A host's budget is its `exchangeInfo` REQUEST_WEIGHT limit.
+- **Demo today:** the trade client (`ex.trade`, demo-fapi) and `ex.public` (mainnet fapi) are separate budgets.
+- **Live:** both hit fapi.binance.com from one IP. That shared budget is where the guard matters.
+- `data.binance.vision` (the archives) is a CDN, not API weight: never guarded.
+
+**Callers are tagged by class.** A contextvar is set by the caller; ccxt doesn't need to know.
+
+| class | rule | callers |
+|---|---|---|
+| protective | never waits | the guardian's PROTECTIVE lane (entries, positions, entry_reconcile); WATCH; margin/ADL checks; kill-switch sweeps and flatten; every MCP/CLI order, close, stop and amend path (trading*, entries*, positioning) |
+| desk | waits only above 80%, and never after it has already started an order sequence | MCP/CLI reads the analyst needs before acting: positions, account, coin_snapshot, read_coin, governor/budget reads |
+| research | yields above 50%, and for 2 min after any 429, -1003 or 418 on that host; tier 2 also has its own ~150 weight per 15m cap | the scanner (scan_shorts, scan_job, tier 2 deep scores); guardian MONITOR/RESEARCH lanes (metrics, research/labelling, market_map, sweeps, supply, laggard, calendar, social, refresh); `shortbot.lab`; histdata REST tails; the backtest/refresh scripts |
+
+**Yield means wait, not drop:** check every ~2 s for up to the job's timeout, then raise a `budget_wait` error that the lane records. It must never consume a protective call's turn.
+
+**Tests:**
+- a fake client returns rising weight headers: research calls block above 1,200 while protective calls pass;
+- a 429 on one host doesn't block the other host;
+- demo's split hosts are tracked separately.
+
 ## Build (who)
 1. **Stream collector + local candle store** (`market/streams.py`): tickers, mark/premium/funding, klines for the liquid universe, a reconnect at 24h, SQLite. It is a guardian process like `LiquidationRecorder`, so binance-bot-99 wires it.
 2. **Trigger rules** (`scan_triggers.py`, pure and tested), each logged with its own counts for later evaluation.
