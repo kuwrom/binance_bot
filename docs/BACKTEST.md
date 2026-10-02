@@ -233,3 +233,24 @@ Pooled: −0.01R. Same-coin placebo: −0.06R. Same-hour placebo: −0.01R. Rand
   - First run (10d): pre-registered strategies and grids.
   - After it: two controls added (the same-hour placebo and the paired edge), a funding-index fix found by the look-ahead test, and a listing-date guard.
   - The grids themselves never changed.
+
+## Live-pipeline replay (task #29, stage 1)
+The strategies above are hand-written proxies; none of them runs `signals/`, `tape.py` or `setups.py`. The replay runs **the live code itself** on history: `scanner.scan_shorts` gets a `ReplayExchange` pinned to a past moment, and everything above the exchange (DataHub, every signal, the tape classifier, the setup detectors, the market map and the candidate logging) is the code the desk runs.
+
+| file | what |
+|---|---|
+| `clock.py` | market clock (ContextVar, wall clock by default). signals/, market/ and scanner.py read "now" only through it; `tests/test_clock.py` fails on any other wall-clock read there unless the line says `# wall-clock` |
+| `replay_bars.py` | REST-shaped klines with the forming bar last, the rolling 24h ticker (openTime = floor_minute(now) − 24h), Binance's predicted-funding formula |
+| `replay_store.py`, `replay_fetch.py` | scratch cache: 1m perp klines for every coin perp, 1m mark / premium / spot and 5m metrics for the coins near the top, settled funding, exchangeInfo listing facts |
+| `replay_exchange.py` | the exchange surface the pipeline calls, served as of the clock (SQL-bounded: a bar is read only once it has closed) |
+| `replay_world.py` | read-only journal snapshot, the world copy the replayed DataHub reads guardian feeds from, risk limits in force at t (decisions timeline), blocked network feeds |
+| `replay_compare.py`, `replay_verify.py` | replay every logged scan and compare it with what the desk logged |
+
+    .venv/bin/python -m shortbot.backtest.replay_verify --journal data/shortbot.db --work $SCRATCH/replay-cache \
+        --since 2026-09-27 --until 2026-10-02 --hist data/hist.db --daily data/daily.db --fetch --out $SCRATCH/replay-out/run
+
+**Point in time.** The universe at t is every coin perp with onboardDate ≤ t < deliveryDate (on the demo list, `--universe demo`), ranked by the rolling 24h change rebuilt from 1m bars. The liquidity floor is the one in force at t (20M, 5M from 2026-09-29T18:15 under lev10_risk3+liq_tiers). Liquidations, Square snapshots, unlocks (by `added_at`) and macro events come from the guardian's recordings, bounded by the clock. A test poisons every row after t and requires an identical replayed scan.
+
+**Not replayable** (no point-in-time history): order book, news, listing announcements, CoinGecko trending, Binance hype (blocked; `--oracle` feeds trending/hype from the log), product tags / supply facts / the demo account's coin list (today's snapshot), delisting announcement times (`--lead-days` before deliveryDate). Predicted funding is estimated from 1m premium klines (Binance samples every 5 s).
+
+**Sources** (checked 2026-10-02): kline intervals, file layout and next-day publication in github.com/binance/binance-public-data; the S3 listing (`s3-ap-northeast-1.amazonaws.com/data.binance.vision?prefix=data/futures/um/daily/`) keeps settled perps (STGUSDT 1m from 2022-08-25 past its 2026-09-24 delivery); funding formula in binance.com/en/support/faq/360033525031; `/fapi/v1/exchangeInfo` still lists 131 SETTLING perps with deliveryDate; `/fapi/v1/ticker/24hr` spans 24 h with a minute-aligned openTime. The developers.binance.com REST pages render client-side and could not be read with our tools; the REST facts above were checked on the public endpoints.

@@ -117,9 +117,16 @@ async def fetch_funding(client: httpx.AsyncClient, store: Store, raws: list[str]
         key = f"rest/fundingRate/{raw}/{V.day_str(a)}/{V.day_str(b)}"
         if store.have(key):
             continue
-        r = await client.get(f"{FAPI}/fapi/v1/fundingRate", params={"symbol": raw, "startTime": a, "endTime": b,
-                                                                     "limit": 1000}, timeout=30)
-        if r.status_code == 200:
+        r = None
+        for attempt in range(4):
+            try:
+                r = await client.get(f"{FAPI}/fapi/v1/fundingRate", timeout=30,
+                                     params={"symbol": raw, "startTime": a, "endTime": b, "limit": 1000})
+                break
+            except httpx.HTTPError as e:
+                log.warning("fundingRate %s: %s (try %d)", raw, type(e).__name__, attempt + 1)
+                await asyncio.sleep(2 * 2 ** attempt)
+        if r is not None and r.status_code == 200:
             rows = [(int(x["fundingTime"]) // 1000 * 1000, float(x["fundingRate"])) for x in r.json()]
             store.put_funding(raw, rows)
             store.done(key, len(rows), int(time.time() * 1000))  # wall-clock: fetch log
