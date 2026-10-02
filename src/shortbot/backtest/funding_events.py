@@ -27,12 +27,14 @@ stay with post-pump alts plus a price trigger? Daily data (histdaily.py). Fixed 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import sqlite3
 import statistics
+import sys
+from pathlib import Path
 from typing import Any
 
+from .. import provenance as P
 from .carry_regime import DAY, MIN_AGE, MIN_QV, STABLES, _exit_close, _short_ret, daily_funding, year_of
 
 THRESHOLDS = (0.0005, 0.0010)
@@ -176,18 +178,23 @@ def record(res: dict[str, Any], db_path: str = "data/shortbot.db") -> int:
     return len(res["rows"])
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="shortbot.backtest.funding_events")
-    ap.add_argument("--db", default="data/daily.db")
-    ap.add_argument("--out", default=None)
-    ap.add_argument("--record", action="store_true")
-    args = ap.parse_args()
-    res = run(args.db)
-    if args.out:
-        with open(args.out, "w") as fh:
-            json.dump(res, fh, indent=1)
+    ap.add_argument("--db", type=Path, help="default: <data dir>/daily.db")
+    ap.add_argument("--out", type=Path, help="JSON file (default: <data dir>/research/<date>-<sha7>/funding_events/)")
+    ap.add_argument("--no-save", action="store_true", help="print only")
+    ap.add_argument("--record", action="store_true", help="add every row to the registry trial ledger")
+    given = list(sys.argv[1:] if argv is None else argv)
+    args = ap.parse_args(given)
+    db = args.db or P.data_dir() / "daily.db"
+    fp = P.fingerprint(db)
+    res = run(str(db))
+    if not args.no_save:
+        argv_ = P.ensure_arg([x for x in given if x != "--record"], "--db", db)
+        prov = P.stamp(P.config("shortbot.backtest.funding_events", argv_), {"daily_db": fp})
+        print("saved to", P.write_json("funding_events", prov, res, args.out))
     if args.record:
-        res["recorded_trials"] = record(res)
+        res["recorded_trials"] = record(res, str(P.desk_db()))
     print(f"trades {res['trades']}")
     for r in res["rows"]:
         print(f"{r['thr_pct_8h']:.2f}% {r['entry']:9} {r['cls']:10} {r['h']}d n={r['n']:5} coins={r['coins']:4} "

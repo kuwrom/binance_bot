@@ -14,7 +14,7 @@ The old behaviour is kept behind flags. `--placebo=legacy --dsr=legacy` reproduc
     .venv/bin/python -m shortbot.backtest.run --days60 --round2 --round3 --round4 --compare OLD/results.json --out DIR
     .venv/bin/python -m shortbot.backtest.trail5m --fetch --out DIR
 
-Run outputs: `bt60_fixed/` in the session scratchpad (report.md, results.json, trades.json, trail5m/).
+Run outputs: `bt60_fixed/` in a session scratchpad (report.md, results.json, trades.json, trail5m/). **Lost**: rerun it and cite the stamped `data/research/` dir (docs/BACKTEST.md "Provenance"); once hist.db has grown, pin the 09-29 build's range, `--t0 2026-07-27 --t1 2026-09-29T15:00` (unchanged as of 10-01).
 
 ### 1. What was wrong, and the fix
 

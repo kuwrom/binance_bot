@@ -2,21 +2,28 @@
 computes per-coin metrics (lifecycle_study.py), attaches features (listing type, tags, float, FDV/MC, listing size,
 spot status, listing quarter) and prints markdown tables.
 
-    PYTHONPATH=src .venv/bin/python -m shortbot.lifecycle_report > /tmp/tables.md
+    .venv/bin/python -m shortbot.lifecycle_report [--db data/lifecycle.db] [--out DIR] [--no-save]
+
+Writes lifecycle.md + provenance.json (lifecycle.db fingerprint, code) to DIR, default
+<data dir>/research/<UTC date>-<sha7>/lifecycle/, and prints the tables.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import re
 import sqlite3
 import statistics
+import sys
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from . import lifecycle_study as ls
+from . import provenance as P
 from .lifecycle_data import DAY_MS, LIFE_DB
 
 TYPE_ORDER = ("HODLer", "Launchpool", "Megadrop", "PreMarket", "Alpha", "SpotNew", "PerpOnly", "SpotOld")
@@ -308,5 +315,24 @@ def report(coins) -> str:
     return "\n\n".join(parts)
 
 
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description="listing-lifecycle tables (docs/LIFECYCLE_STUDY.md)")
+    ap.add_argument("--db", type=Path, help="default: <data dir>/lifecycle.db")
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--no-save", action="store_true", help="print the tables only")
+    given = list(sys.argv[1:] if argv is None else argv)
+    a = ap.parse_args(given)
+    db = a.db or P.data_dir() / "lifecycle.db"
+    fp = P.fingerprint(db)
+    md = report(load(db))
+    if not a.no_save:
+        prov = P.stamp(P.config("shortbot.lifecycle_report", P.ensure_arg(given, "--db", db)),
+                       {"lifecycle_db": fp})
+        md += "\n\n" + P.footer(prov) + "\n"
+        out = P.save(a.out or P.run_dir("lifecycle", prov["git"]), prov, {"lifecycle.md": md})
+        md += f"\nsaved to {out}"
+    print(md)
+
+
 if __name__ == "__main__":
-    print(report(load()))
+    main()

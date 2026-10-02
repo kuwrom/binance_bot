@@ -1,24 +1,27 @@
 """Run the hedge overlay (hedge.py, docs/HEDGE.md) over a backtest trade list, a desk-like subset and the desk's
 live trades, and print markdown tables.
 
-    .venv/bin/python -m shortbot.backtest.hedge_report --trades DIR/trades.json --results DIR/results.json --out OUT
+    .venv/bin/python -m shortbot.backtest.hedge_report --trades DIR/trades.json --results DIR/results.json [--out OUT]
 
-Read-only: hist.db and shortbot.db are opened with mode=ro; never touches the exchange or the journal."""
+Writes hedge.md, hedge.json and provenance.json (default <data dir>/research/<UTC date>-<sha7>/hedge/; --no-save
+prints only); `upstream` is the backtest's own provenance. Read-only: hist.db and shortbot.db are opened with
+mode=ro; never touches the exchange or the journal."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .. import provenance as P
 from .hedge import VARIANTS, Ctx, Series, beta, clip_ratio, leg, load_series, shrink_ratio, summarize, tide_up
 from .hedge_diag import splits, trade_diag, verdicts
 from .sim import H
 
-ROOT = Path(__file__).resolve().parents[3]
 STRATS = ("pump_fade", "pump_fade+discount", "post_pump_decay", "bounce_fade", "level_fade", "funding_hi",
           "listing_fade")
 LIVE_VARIANTS = ("btc_1", "btc_ols", "btc_shrink", "btc_mv", "btc_cond", "eth_1", "alt_1", "alt_shrink")
@@ -176,10 +179,15 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trades", type=Path, required=True)
     ap.add_argument("--results", type=Path, required=True)
-    ap.add_argument("--hist", type=Path, default=ROOT / "data" / "hist.db")
-    ap.add_argument("--live", type=Path, default=ROOT / "data" / "shortbot.db")
+    ap.add_argument("--hist", type=Path, help="default: <data dir>/hist.db")
+    ap.add_argument("--live", type=Path, help="default: the journal (SHORTBOT_DB)")
     ap.add_argument("--out", type=Path)
-    a = ap.parse_args(argv)
+    ap.add_argument("--no-save", action="store_true", help="print the markdown only")
+    given = list(sys.argv[1:] if argv is None else argv)
+    a = ap.parse_args(given)
+    a.hist, a.live = a.hist or P.data_dir() / "hist.db", a.live or P.desk_db()
+    inputs = {"hist_db": P.fingerprint(a.hist), "journal_trades": P.fingerprint(a.live, ["trades"], file_hash=False),
+              "results": P.file_digest(a.results), "trades": P.file_digest(a.trades)}
     results = json.loads(a.results.read_text())
     mid = int(results["mid"])
     trades = load_trades(a.trades, results)
@@ -206,10 +214,14 @@ def main(argv: list[str] | None = None) -> None:
     js["live"] = live
     md += ["## Live trades (data/shortbot.db, read-only)", "", live_md(live), ""]
     text = "\n".join(md)
-    if a.out:
-        a.out.mkdir(parents=True, exist_ok=True)
-        (a.out / "hedge.md").write_text(text)
-        (a.out / "hedge.json").write_text(json.dumps(js, indent=1, default=str))
+    if not a.no_save:
+        given = P.ensure_arg(P.ensure_arg(given, "--hist", a.hist), "--live", a.live)
+        prov = P.stamp(P.config("shortbot.backtest.hedge_report", given), inputs,
+                       window=(results.get("provenance") or {}).get("window"), upstream=results.get("provenance"))
+        text += "\n\n" + P.footer(prov) + "\n"
+        out = P.save(a.out or P.run_dir("hedge", prov["git"]), prov, {
+            "hedge.md": text, "hedge.json": json.dumps({**js, "provenance": prov}, indent=1, default=str)})
+        text += f"\nsaved to {out}"
     print(text)
 
 

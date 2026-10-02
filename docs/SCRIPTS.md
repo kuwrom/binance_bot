@@ -1,7 +1,11 @@
 # Market scripts catalog: why the biggest moves happened (forensics 2026-07-31 → 09-29)
 
 Per-episode data (tape features, catalyst, URLs, labels, causal short outcome): `data/scripts_catalog.json`.
-Scratch code: `$TMPDIR/.../scratchpad/forensics/` (not part of the package).
+Code: **lost.** The forensics ran from a session scratchpad (`forensics/`) that no longer exists, so the [U] universe test (303 +35% crossings, 72h net of funding, the premium / funding / weekend splits) and the per-episode feature extraction can't be rerun as computed. What remains:
+- the per-episode data above, which `registry_seed.seed_scripts` loads as `script.*` patterns with hindsight-only `forensics` episodes;
+- in-package re-tests of the hypotheses on hist.db: `backtest/strategies_v2.py` (F4 discount, F5 weekend, the retail flip; [failures/ROUND1.md](failures/ROUND1.md), whose OOS is contaminated for F4) and `backtest/strategies_v4.py` (the veto contradictions; [failures/ROUND3.md](failures/ROUND3.md)).
+
+Treat the [U] numbers below as unreproducible until they are rebuilt as a stamped backtest (docs/BACKTEST.md "Provenance").
 
 **Evidence tags.**
 - **[T]** tape fact: measured on Binance data.

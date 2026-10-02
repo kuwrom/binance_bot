@@ -27,10 +27,14 @@ import argparse
 import json
 import math
 import sqlite3
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from .. import provenance as P
 
 DAY = 86_400_000
 STABLES = {"USDCUSDT", "BUSDUSDT", "TUSDUSDT", "FDUSDUSDT", "USDPUSDT", "DAIUSDT", "USDEUSDT", "EURUSDT"}
@@ -212,18 +216,23 @@ def record(res: dict[str, Any], db_path: str = "data/shortbot.db") -> int:
     return len(res["rows"])
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="shortbot.backtest.carry_regime")
-    ap.add_argument("--db", default="data/daily.db")
-    ap.add_argument("--out", default=None, help="write the JSON result here")
+    ap.add_argument("--db", type=Path, help="default: <data dir>/daily.db")
+    ap.add_argument("--out", type=Path, help="JSON file (default: <data dir>/research/<date>-<sha7>/carry_regime/)")
+    ap.add_argument("--no-save", action="store_true", help="print only")
     ap.add_argument("--record", action="store_true", help="add every cell to the registry trial ledger")
-    args = ap.parse_args()
-    res = run(args.db)
-    if args.out:
-        with open(args.out, "w") as fh:
-            json.dump(res, fh, indent=1)
+    given = list(sys.argv[1:] if argv is None else argv)
+    args = ap.parse_args(given)
+    db = args.db or P.data_dir() / "daily.db"
+    fp = P.fingerprint(db)
+    res = run(str(db))
+    if not args.no_save:
+        argv_ = P.ensure_arg([x for x in given if x != "--record"], "--db", db)
+        prov = P.stamp(P.config("shortbot.backtest.carry_regime", argv_), {"daily_db": fp})
+        print("saved to", P.write_json("carry_regime", prov, res, args.out))
     if args.record:
-        res["recorded_trials"] = record(res)
+        res["recorded_trials"] = record(res, str(P.desk_db()))
     print(json.dumps({k: v for k, v in res.items() if k != "rows"}, indent=1))
     for r in res["rows"]:
         print(f"{r['regime']:16} {r['outcome']:14} n={r['n_days']:5} reg={r['regime_days']:4} "

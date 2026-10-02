@@ -41,6 +41,7 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 - Compare against the baseline (`research_report.all`), not against zero: in a falling market everything "works".
 - Watch `max_adverse_24h` and `squeeze_rate_pct`, not just average return. A short edge that sometimes costs +50% isn't an edge at 3× leverage.
 - Keep one experiment at a time per parameter, so results are attributable.
+- Cite a backtest or study by its stamped dir, `data/research/<UTC date>-<sha7>/...` (code, data fingerprint, window and config in `provenance.json`; docs/BACKTEST.md "Provenance"). Scratchpad and `/tmp` outputs vanish.
 
 ## Risk parameters as experiments
 - **Layers:** baseline limits come from `.env`. The AI may override any of them via `set_risk_params(changes, reasoning, experiment)`, which needs human approval, and only within `BOUND_*` (human-only, `.env`). `reset_risk_params` drops the overrides.

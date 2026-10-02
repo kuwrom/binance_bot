@@ -11,7 +11,10 @@ the stop first and moves breakeven / trail only after a bar closes). Here the SA
 - judged with round 2's pre-registered rule on the paired delta vs fixed at the SAME resolution: on only if > 0 in
   both halves, off if < 0 OOS, neutral if |delta| < 0.02R in both halves.
 
-    .venv/bin/python -m shortbot.backtest.trail5m --fetch --out DIR     # data/hist5m.db, then trail5m.md/.json"""
+    .venv/bin/python -m shortbot.backtest.trail5m --fetch [--out DIR]   # data/hist5m.db, then trail5m.md/.json
+
+Writes trail5m.md, trail5m.json and provenance.json (hist.db + hist5m.db fingerprints) to DIR, default
+<data dir>/research/<UTC date>-<sha7>/trail5m/; --no-save prints only."""
 
 from __future__ import annotations
 
@@ -19,10 +22,12 @@ import argparse
 import asyncio
 import json
 import statistics
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from .. import provenance as P
 from . import hist5m
 from .features import Coin, Market
 from .sim import H, Plan, _funding_index, simulate, vol24
@@ -165,21 +170,29 @@ def main(argv: list[str] | None = None) -> None:
     from .run import load_coins
     ap = argparse.ArgumentParser()
     ap.add_argument("--fetch", action="store_true", help="download the missing 5m files first")
-    ap.add_argument("--db", default=hist5m.DB_PATH)
+    ap.add_argument("--db", type=Path, help="5m cache (default: <data dir>/hist5m.db)")
+    ap.add_argument("--hist", type=Path, help="1h history (default: <data dir>/hist.db)")
     ap.add_argument("--out", type=Path)
-    a = ap.parse_args(argv)
-    m = Market(load_coins(True))
+    ap.add_argument("--no-save", action="store_true", help="print the markdown only")
+    given = list(sys.argv[1:] if argv is None else argv)
+    a = ap.parse_args(given)
+    a.db, a.hist = a.db or P.data_dir() / "hist5m.db", a.hist or P.data_dir() / "hist.db"
+    m = Market(load_coins(True, a.hist))
     if a.fetch:
         pairs = set().union(*(needed(signal_set(m, k)) for k in FAMILIES))
         print(json.dumps(asyncio.run(hist5m.fetch(pairs, a.db))))
+    inputs = {"hist_db": P.fingerprint(a.hist), "hist5m_db": P.fingerprint(a.db)}
     st = study(m, a.db)
     md = markdown(st)
-    if a.out:
-        a.out.mkdir(parents=True, exist_ok=True)
-        (a.out / "trail5m.md").write_text(md)
-        (a.out / "trail5m.json").write_text(json.dumps(st, indent=1))
+    if not a.no_save:
+        given = P.ensure_arg(P.ensure_arg([x for x in given if x != "--fetch"], "--db", a.db), "--hist", a.hist)
+        prov = P.stamp(P.config("shortbot.backtest.trail5m", given), inputs,
+                       window={"t0_ms": m.t0, "t1_ms": m.t1, "coins": len(m.coins)})
+        md += "\n\n" + P.footer(prov) + "\n"
+        out = P.save(a.out or P.run_dir("trail5m", prov["git"]), prov, {
+            "trail5m.md": md, "trail5m.json": json.dumps({**st, "provenance": prov}, indent=1, default=str)})
+        md += f"\nsaved to {out}"
     print(md)
-
 
 if __name__ == "__main__":
     main()

@@ -99,6 +99,6 @@ The 0.10% threshold gives the same picture: every |t| < 2.
 
 ## Rerun
 ```
-.venv/bin/python -m shortbot.backtest.carry_regime --out /tmp/carry.json --record
-.venv/bin/python -m shortbot.backtest.funding_events --out /tmp/funding.json --record
+.venv/bin/python -m shortbot.backtest.carry_regime --record     # JSON + provenance.json in data/research/<date>-<sha7>/carry_regime/
+.venv/bin/python -m shortbot.backtest.funding_events --record
 ```

@@ -3,7 +3,7 @@
 `src/shortbot/backtest/` replays every strategy the docs describe on cached hourly history, with costs, placebos,
 walk-forward and a multiple-testing haircut. Read-only: it never touches the exchange or the journal.
 
-    .venv/bin/python -m shortbot.backtest.run --days60 --out /tmp/bt60     # 60d (data/hist.db); drop --days60 for the 10d cache
+    .venv/bin/python -m shortbot.backtest.run --days60     # data/hist.db -> data/research/<UTC date>-<sha7>/bt60/; drop --days60 for the 10d cache
 
 | file | what |
 |---|---|
@@ -20,6 +20,24 @@ walk-forward and a multiple-testing haircut. Read-only: it never touches the exc
 **Flags that change results** (defaults are the round-4 corrections; `--placebo=legacy --dsr=legacy` reproduces rounds 0–3 exactly):
 - `--placebo=matched|legacy`: the same-hour placebo drawn from the donor's ATR% decile × 24h-volume bucket at that hour (nearest coins when the cell is empty), entered at the fill bar for resting entries, with the donor's funding budget; or the legacy random-coin draw.
 - `--dsr=clustered|legacy`: effective N (trials whose daily R correlates > 0.7 are one family) and V[SR] across families with n ≥ 100; or raw N and V[SR] over every trial with n ≥ 10.
+
+## Provenance (`provenance.py`)
+
+Every run writes `report.md`, `results.json`, `trades.json` and `provenance.json` to `data/research/<UTC date>-<sha7>[-dirty]/<label>/` (`--out DIR` to choose, `--no-save` to print only). An existing non-empty dir is never overwritten: `-2`, `-3`... `data/` is the journal's directory (`SHORTBOT_DB`), so the Docker guardian writes to `/app/data/research`. `refresh.py`, `hedge_report.py`, `trail5m.py`, `carry_regime.py`, `funding_events.py` and `lifecycle_report.py` stamp their outputs the same way. Cite that dir in a learning's evidence, never a scratchpad or `/tmp`.
+
+`provenance.json` (also under `results.json` → `provenance`) records:
+- **Code:** the git sha and a dirty flag (uncommitted or untracked changes under `src/` or `pyproject.toml`), and `code_sha`, a hash of every imported module, which still identifies the code in an installed copy without git.
+- **Data:** each input's fingerprint: per table the rows, the min/max of its time column and the distinct symbols (`id`, about 0.3 s on hist.db), plus the file's sha256 (about 0.1 s), which also catches values overwritten in place. `changed_during_load` means the DB changed while the run read it.
+- **Window and config:** the window (t0/t1, IS/OOS mid, coins), every flag, the ledger, costs and stress costs, and the placebo seeds (`crc32(trial name) % 10000`). Python, ccxt and numpy versions.
+
+    .venv/bin/python -m shortbot.provenance verify data/research/<dir>/bt60_r3   # [] = same code and inputs
+    .venv/bin/python -m shortbot.provenance rerun data/research/<dir>/bt60_r3    # the command, window pinned
+
+**The hist.db window.**
+- hist.db is extended in place every week and never trimmed: `--days60` loads all of it, so the "60-day" run covers 67, 74... days after each refresh and its IS/OOS mid moves. `--t0` / `--t1` (epoch ms or UTC date) pin a window, and `rerun` adds the recorded one.
+- A pinned rerun on a later build is close, not exact. Archive files overwrite the REST-tail hours with archive values. A coin settled before the new build's start is purged, so an old window loses its delisted coins: survivorship bias creeps back into old windows. `verify` names the drift.
+- `refresh.py` fingerprints hist.db before and after each rebuild (`refresh.json` → `hist_db`), so the previous build's fingerprint sits next to the new results.
+- **Proposal (owner's disk, not done):** snapshot hist.db before each rebuild with `shortbot backup --db data/hist.db` (a verified `.db.gz` plus a manifest of row counts and sha256s, see deploy/DEPLOY.md), and keep the copies a learning cites. Without one, an exact rerun of a past window needs the `.db.gz` the weekly backup job still holds.
 
 ## Method
 
