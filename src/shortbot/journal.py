@@ -2,7 +2,11 @@
 metrics. Research tables (scan candidates + outcomes, learnings) live in journal_research.py.
 
 Trade lifecycle: opening -> open -> closed, or opening -> aborted. Rows are addressed by id.
-Schema grows by adding columns to TRADE_COLUMNS; existing DBs are migrated automatically."""
+Schema grows by adding columns to TRADE_COLUMNS; existing DBs are migrated automatically.
+
+Demo and live share this file: every trade carries its `mode`, and the readers that feed decisions (open trades,
+closed results, stats) see only the journal's own mode unless asked for all_modes. Account-level kv (equity peak,
+period marks, research overrides) goes through `mode_key`."""
 
 from __future__ import annotations
 
@@ -43,9 +47,10 @@ TRADE_COLUMNS: dict[str, str] = {
     "experiment": "TEXT", "closed_at": "TEXT", "exit_price": "REAL", "pnl": "REAL", "gross_pnl": "REAL",
     "fees": "REAL", "funding": "REAL", "exit_reason": "TEXT", "lesson": "TEXT", "mae_pct": "REAL",
     "mfe_pct": "REAL", "low_since_entry": "REAL", "targets_hit": "TEXT", "notes": "TEXT",
-    "conviction": "TEXT", "regime_cell": "TEXT", "post_exit": "TEXT",
+    "conviction": "TEXT", "regime_cell": "TEXT", "post_exit": "TEXT", "mode": "TEXT NOT NULL DEFAULT 'demo'",
 }
 JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit")
+MODES = ("demo", "live")
 
 
 def now_iso() -> str:
@@ -84,7 +89,11 @@ def exit_quality(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 class Journal(ResearchStore):
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, mode: str = "demo"):
+        """mode: the account this process trades (settings.mode). Stamped on new trades; filters what it reads."""
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+        self.mode = mode
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +107,11 @@ class Journal(ResearchStore):
         have = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
         for col, ddl in TRADE_COLUMNS.items():
             if col not in have:
-                self.db.execute(f"ALTER TABLE trades ADD COLUMN {col} {ddl}")
+                try:
+                    self.db.execute(f"ALTER TABLE trades ADD COLUMN {col} {ddl}")
+                except sqlite3.OperationalError as e:   # the guardian and the MCP server may migrate at once
+                    if "duplicate column" not in str(e):
+                        raise
         self._migrate_research()
         self.db.commit()
 
@@ -109,6 +122,14 @@ class Journal(ResearchStore):
 
     def _rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+
+    def _in_mode(self, all_modes: bool = False) -> tuple[str, tuple]:
+        return ("1=1", ()) if all_modes else ("mode=?", (self.mode,))
+
+    def mode_key(self, k: str) -> str:
+        """kv key for state that belongs to one account. Demo keeps the bare key (everything before the split was
+        demo, and old processes keep working); live gets '@live', so a switch never inherits demo's peak or marks."""
+        return k if self.mode == "demo" else f"{k}@{self.mode}"
 
     # ------------------------------------------------------------ sessions / decisions
     def start_session(self, mode: str, notes: str = "") -> int:
@@ -141,9 +162,10 @@ class Journal(ResearchStore):
         """Pending row written BEFORE the entry order, so a crash mid-entry is still traceable."""
         return self._insert(
             "INSERT INTO trades (symbol, status, opened_at, stop_price, initial_stop, leverage, setup, thesis, plan,"
-            " entry_features, experiment, targets_hit) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " entry_features, experiment, targets_hit, mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (symbol, "opening", now_iso(), stop_price, stop_price, leverage, setup, thesis,
-             json.dumps(plan or {}, default=str), json.dumps(entry_features or {}, default=str), experiment, "[]"))
+             json.dumps(plan or {}, default=str), json.dumps(entry_features or {}, default=str), experiment, "[]",
+             self.mode))
 
     def activate_trade(self, trade_id: int, entry_price: float, amount: float, notional: float) -> None:
         self.update_trade(trade_id, status="open", entry_price=entry_price, amount=amount, notional=notional,
@@ -172,23 +194,32 @@ class Journal(ResearchStore):
         return self._trade(rows[0]) if rows else None
 
     def active_trade(self, symbol: str) -> dict[str, Any] | None:
-        """Newest opening/open row for a symbol."""
-        rows = self._rows("SELECT * FROM trades WHERE symbol=? AND status IN ('opening','open') "
-                          "ORDER BY id DESC LIMIT 1", (symbol,))
+        """Newest opening/open row for a symbol, in this journal's mode."""
+        rows = self._rows("SELECT * FROM trades WHERE symbol=? AND mode=? AND status IN ('opening','open') "
+                          "ORDER BY id DESC LIMIT 1", (symbol, self.mode))
         return self._trade(rows[0]) if rows else None
 
-    def open_trades(self, include_opening: bool = False) -> list[dict[str, Any]]:
+    def open_trades(self, include_opening: bool = False, all_modes: bool = False) -> list[dict[str, Any]]:
         st = "('opening','open')" if include_opening else "('open')"
-        return [self._trade(r) for r in self._rows(f"SELECT * FROM trades WHERE status IN {st} ORDER BY id")]
+        m, args = self._in_mode(all_modes)
+        return [self._trade(r) for r in self._rows(f"SELECT * FROM trades WHERE status IN {st} AND {m} ORDER BY id",
+                                                   args)]
 
-    def trades(self, limit: int = 50) -> list[dict[str, Any]]:
-        return [self._trade(r) for r in self._rows("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,))]
+    def trades(self, limit: int = 50, all_modes: bool = False) -> list[dict[str, Any]]:
+        m, args = self._in_mode(all_modes)
+        return [self._trade(r) for r in self._rows(f"SELECT * FROM trades WHERE {m} ORDER BY id DESC LIMIT ?",
+                                                   (*args, limit))]
 
-    def closed_results(self) -> list[dict[str, Any]]:
-        """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input)."""
+    def closed_results(self, all_modes: bool = False) -> list[dict[str, Any]]:
+        """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input), and the
+        limits each was sized under (entry_features.limits, JSON text) for attribution."""
+        m, args = self._in_mode(all_modes)
         rows = self._rows(
-            "SELECT setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct, mfe_pct, entry_price,"
-            " initial_stop, amount, plan FROM trades WHERE status='closed' AND pnl IS NOT NULL ORDER BY closed_at")
+            "SELECT setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct, mfe_pct,"
+            " entry_price, initial_stop, amount, plan, CASE WHEN json_valid(entry_features)"
+            " THEN json_extract(entry_features, '$.limits') END AS limits"
+            f" FROM trades WHERE status='closed' AND pnl IS NOT NULL AND {m}"
+            " ORDER BY closed_at", args)
         for r in rows:
             pinned = (json.loads(r.pop("plan") or "{}") or {}).get("r1_usdt")   # adds/split entries pin 1R
             risk = pinned or ((r["initial_stop"] - r["entry_price"]) * r["amount"] if r["initial_stop"]
@@ -197,11 +228,21 @@ class Journal(ResearchStore):
             r["session"] = session_bucket(datetime.fromisoformat(r["opened_at"])) if r.get("opened_at") else None
         return rows
 
-    def stats(self) -> dict[str, Any]:
-        rows = self.closed_results()
-        return {"closed_trades": len(rows), "total_pnl": round(sum(r["pnl"] for r in rows), 2),
-                "by_setup": _group(rows, "setup"), "by_experiment": _group(rows, "experiment", "baseline"),
-                "by_entry_session": _group(rows, "session"), "exits": exit_quality(self.trades(500))}
+    def stats(self, all_modes: bool = False) -> dict[str, Any]:
+        """by_experiment is keyed by the full set of experiments active at entry (params.py); param_sets > 1 means
+        the trades behind one label were sized under different limits (a reused tag, or a new .env baseline)."""
+        rows = self.closed_results(all_modes)
+        by_exp = _group(rows, "experiment", "baseline")
+        for name, g in by_exp.items():
+            g["param_sets"] = len({r["limits"] for r in rows if (r["experiment"] or "baseline") == name
+                                   and r["limits"]})
+        other = {} if all_modes else dict(self.db.execute(
+            "SELECT mode, COUNT(*) FROM trades WHERE status='closed' AND mode!=? GROUP BY mode", (self.mode,)))
+        return {"mode": "all" if all_modes else self.mode, "closed_trades": len(rows),
+                "total_pnl": round(sum(r["pnl"] for r in rows), 2), "by_setup": _group(rows, "setup"),
+                "by_experiment": by_exp, "by_entry_session": _group(rows, "session"),
+                "exits": exit_quality(self.trades(500, all_modes)),
+                **({"other_modes": other} if other else {})}
 
     # ------------------------------------------------------------ kv
     def get(self, k: str) -> str | None:

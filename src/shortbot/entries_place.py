@@ -186,13 +186,15 @@ class EntryPlacement:
             eid = self.j._insert(
                 "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price,"
                 " amount, leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price,"
-                " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon, mode, experiment, limits)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
                  json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
                  p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"),
                  budget.get("cell"), p.get("tranche"), p.get("leg"), cid,
-                 1 if p.get("tranche") else 0))   # a split leg is withdrawn if unsure
+                 1 if p.get("tranche") else 0,    # a split leg is withdrawn if unsure
+                 # what it was sized under: the guardian that journals the fill has no research params (#32)
+                 self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__)))
             try:
                 order = await tr.t.create_order(sym, "limit", "sell", amount, px, {
                     "timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})

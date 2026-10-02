@@ -48,11 +48,13 @@ HINTS = {"placing": "send in flight, or its call died: the guardian resolves it 
 
 
 def external_orders(j) -> list[dict[str, Any]]:
-    """Resting orders the desk didn't place: exposure whose stop is unknown (risk_budget takes the worst case)."""
+    """Resting orders the desk didn't place: exposure whose stop is unknown (risk_budget takes the worst case). This
+    journal's mode only (filtered here, so a table not migrated yet still counts as demo)."""
     try:
-        return j._rows("SELECT symbol, amount, limit_price FROM entries WHERE status='external'")
+        rows = j._rows("SELECT * FROM entries WHERE status='external'")
     except sqlite3.OperationalError:   # no entries table yet
         return []
+    return [{k: r[k] for k in ("symbol", "amount", "limit_price")} for r in rows if (r.get("mode") or "demo") == j.mode]
 
 
 class SendUnknown(Exception):
@@ -246,10 +248,10 @@ async def _external(desk, o: dict, oid: str, cid: str | None, sym: str) -> dict[
     why = ("a shortbot client id without a journal row (restored journal? another DB?)" if clientid.ours(cid)
            else "not placed by shortbot")
     desk.j.db.execute(
-        "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, amount, order_id, reason)"
-        " VALUES ('external', ?, 'external', ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, amount, order_id, reason,"
+        " mode) VALUES ('external', ?, 'external', ?, ?, ?, ?, ?, ?, ?)",
         (sym, now_iso(), int(o.get("goodTillDate") or 0), float(o.get("price") or 0), float(o.get("origQty") or 0),
-         oid, f"{o.get('side')} {o.get('type')} {cid}: {why}"))
+         oid, f"{o.get('side')} {o.get('type')} {cid}: {why}", desk.j.mode))
     desk.j.db.commit()
     await desk.tr.alert("external_order", f"open {o.get('side')} {o.get('type')} {o.get('origQty')} @ {o.get('price')}"
                         f" ({cid}) is {why}: the desk doesn't manage it. Cancel it or journal it.", sym, True)

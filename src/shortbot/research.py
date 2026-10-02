@@ -89,7 +89,7 @@ async def label_post_exit(ex: Exchanges, journal, now_ms: int, limit: int = 10) 
     exits systematically leave the move on the table (hold runners longer) or ONDO-style runs were luck."""
     from datetime import datetime
     n = 0
-    for t in journal.trades(200):
+    for t in journal.trades(200, all_modes=True):   # post-exit moves are market facts, whatever the account
         if t["status"] != "closed" or t.get("post_exit") or not t.get("closed_at") or not t.get("exit_price"):
             continue
         closed_ms = int(datetime.fromisoformat(t["closed_at"]).timestamp() * 1000)

@@ -46,10 +46,12 @@ def finalize(db, placed: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _entries(journal, where: str, args: tuple) -> list[dict[str, Any]]:
+    """This journal's mode only (filtered here, so a table not migrated yet still counts as demo)."""
     try:
-        return journal._rows(f"SELECT * FROM entries WHERE {where} ORDER BY id", args)
+        rows = journal._rows(f"SELECT * FROM entries WHERE {where} ORDER BY id", args)
     except Exception:  # noqa: BLE001 - no entries table yet
         return []
+    return [r for r in rows if (r.get("mode") or "demo") == journal.mode]
 
 
 def pending_legs(journal, symbol: str) -> list[dict[str, Any]]:

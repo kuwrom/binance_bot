@@ -82,8 +82,10 @@ async def risk_params() -> dict[str, Any]:
 async def set_risk_params(changes: dict[str, float], reasoning: str, experiment: str) -> dict[str, Any]:
     """Research: change risk limits within the human-set bounds. REQUIRES HUMAN APPROVAL. Tunable: max_leverage,
     max_position_notional, max_total_notional, max_positions, risk_per_trade_pct, daily_loss_limit_pct,
-    min_stop_distance_pct, max_stop_distance_pct, min_quote_volume_24h, liq_buffer_pct. experiment = tag stored
-    on every trade opened while active; compare via journal stats by_experiment."""
+    min_stop_distance_pct, max_stop_distance_pct, min_quote_volume_24h, liq_buffer_pct. experiment = tag that owns
+    the params it sets; earlier experiments keep the params it doesn't touch. Trades carry every active experiment
+    (sorted, joined by ' + ') plus the limits they were sized under; compare via journal stats by_experiment.
+    Overrides outside bounds the human tightened later are dropped back to .env (alert params_dropped)."""
     return _params().set(changes, reasoning, experiment)
 
 

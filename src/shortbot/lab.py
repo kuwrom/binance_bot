@@ -42,7 +42,8 @@ def _with_ex(fn: Callable[[Exchanges], Any]) -> Any:
 
 
 def journal() -> Journal:
-    return Journal(Settings.from_env().db_path)
+    s = Settings.from_env()
+    return Journal(s.db_path, s.mode)   # stats and trades of this mode; all_modes=True for both
 
 
 # ------------------------------------------------------------ market data (prod, public)

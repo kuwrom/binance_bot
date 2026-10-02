@@ -163,7 +163,7 @@ def btc_vol_now_and_target(daily_closes: list[float]) -> tuple[float | None, flo
 
 def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> float:
     """Highest day P&L seen today (the guardian calls this every minute; arms the give-back stop)."""
-    key = f"day_peak:{(now or datetime.now(timezone.utc)).date().isoformat()}"
+    key = journal.mode_key(f"day_peak:{(now or datetime.now(timezone.utc)).date().isoformat()}")
     peak = max(float(journal.get(key) or 0.0), day_pnl)
     journal.set(key, str(peak))
     return peak

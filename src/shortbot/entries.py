@@ -98,7 +98,8 @@ class EntryDesk(EntryPlacement):
         self.j.db.executescript(SCHEMA)
         have = {r[1] for r in self.j.db.execute("PRAGMA table_info(entries)")}
         for col, typ in (("conviction", "TEXT"), ("regime_cell", "TEXT"), ("tranche", "TEXT"), ("leg", "INTEGER"),
-                         ("client_id", "TEXT"), ("prearm_cid", "TEXT"), ("abandon", "INTEGER DEFAULT 0")):
+                         ("client_id", "TEXT"), ("prearm_cid", "TEXT"), ("abandon", "INTEGER DEFAULT 0"),
+                         ("mode", "TEXT NOT NULL DEFAULT 'demo'"), ("experiment", "TEXT"), ("limits", "TEXT")):
             if col not in have:
                 try:
                     self.j.db.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
@@ -121,7 +122,8 @@ class EntryDesk(EntryPlacement):
 
     # ------------------------------------------------------------ storage
     def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]:
-        rows = self.j._rows(f"SELECT * FROM entries WHERE {where} ORDER BY id", args)
+        """This journal's mode only: a live guardian never polls, cancels or counts a demo order (#32)."""
+        rows = self.j._rows(f"SELECT * FROM entries WHERE ({where}) AND mode=? ORDER BY id", (*args, self.j.mode))
         for r in rows:
             r["plan"] = json.loads(r["plan"]) if r.get("plan") else {}
         return rows

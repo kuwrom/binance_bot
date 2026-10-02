@@ -49,7 +49,7 @@ def confirm(target: str, st: dict[str, Any]) -> str | None:
 async def run(args: argparse.Namespace, settings: Settings | None = None,
               journal: Journal | None = None) -> dict[str, Any]:
     s = settings or Settings.from_env()
-    j = journal or Journal(s.db_path)
+    j = journal or Journal(s.db_path, s.mode)
     if args.cmd == "status":
         return ks.status(j)
     shown = j.get(ks.KV_KEY)   # the exact row the human confirms; the clear swaps only that row

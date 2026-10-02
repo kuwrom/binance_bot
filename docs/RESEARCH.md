@@ -45,6 +45,8 @@ Scans are the fast data source: 15–25 coins per scan, labelled automatically, 
 
 ## Risk parameters as experiments
 - **Layers:** baseline limits come from `.env`. The AI may override any of them via `set_risk_params(changes, reasoning, experiment)`, which needs human approval, and only within `BOUND_*` (human-only, `.env`). `reset_risk_params` drops the overrides.
-- **Scope:** overrides apply in demo only, unless `AI_PARAMS_IN_LIVE=true`. The guardian always uses the baseline.
-- **Tracking:** trades opened under an experiment carry its tag, so compare with `journal` → `stats.by_experiment`. Promote a winning experiment by writing it into `.env` (human).
+- **Scope:** overrides apply in demo only, unless `AI_PARAMS_IN_LIVE=true`, and are stored per mode: a demo experiment never carries into live. The guardian always uses the baseline.
+- **Tracking:** each override belongs to the experiment that last set it. A trade carries every experiment still active (sorted, joined by ` + `, e.g. `lev10_risk3 + liq_tiers`) and the full limits it was sized under (`entry_features.limits`; limit fills get them at placement). Compare with `journal` → `stats.by_experiment`; `param_sets` > 1 means one label covers different limits. Promote a winning experiment by writing it into `.env` (human).
+- **Bounds win:** overrides are re-checked against the current `BOUND_*` on every load. One the human's bounds no longer allow is dropped back to the `.env` value (not clamped), with a `params_dropped` alert and decision.
+- **Demo vs live:** trades and entries carry `mode`. Stats, the governor's streak, tilts and open trades read the current mode only (`all_modes=True` for both); the equity peak, period marks and day peak are kept per mode. `python -m shortbot.params_backfill` (dry run; `--apply` to write) tags limit fills journalled before this without their experiment.
 - **Liquidation:** the code always refuses a stop beyond the estimated liquidation price. Max leverage ≈ 100 / (stop% + liq_buffer_pct + 1).

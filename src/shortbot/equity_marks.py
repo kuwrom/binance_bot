@@ -9,6 +9,8 @@ withdrawal looks like a 12% drawdown). Here:
   loss before it, so the period P&L is the worse of the new and the old definition: the caps never miss a loss.
 - peak: `equity_peak` moves with transfers (a deposit raises it, a withdrawal lowers it), so only trading P&L is
   drawdown; `reset_peak` is the human reset (shortbot-admin).
+Every key here belongs to one account: read and written through `journal.mode_key` (demo keeps the bare key, live
+gets '@live'), so a switch to live never starts from demo's peak or marks (#32).
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ def period_starts(now: datetime) -> dict[str, tuple[str, int]]:
 
 
 def _mark(journal, kind: str, key: str, equity: float, now_ms: int) -> dict[str, Any]:
-    k = f"eq_mark:{kind}:{key}"
+    k = journal.mode_key(f"eq_mark:{kind}:{key}")
     raw = journal.get(k)
     if raw:
         return json.loads(raw)
@@ -79,19 +81,19 @@ def adjusted_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], n
     transfer in [cursor, now - lag) is counted exactly once by whichever caller advances the cursor over it."""
     now_ms = now_ms or int(time.time() * 1000)
     upto = now_ms - CURSOR_LAG_MS
-    db = journal.db
+    db, kp, kc = journal.db, journal.mode_key(KV_PEAK), journal.mode_key(KV_CURSOR)
     db.commit()
     db.execute("BEGIN IMMEDIATE")
     try:
-        row = db.execute("SELECT v FROM kv WHERE k=?", (KV_CURSOR,)).fetchone()
+        row = db.execute("SELECT v FROM kv WHERE k=?", (kc,)).fetchone()
         cursor = int(row[0]) if row else upto
-        row = db.execute("SELECT v FROM kv WHERE k=?", (KV_PEAK,)).fetchone()
+        row = db.execute("SELECT v FROM kv WHERE k=?", (kp,)).fetchone()
         peak = float(row[0]) if row else 0.0
         if upto > cursor:
             peak += transfers(transfer_rows, cursor, upto)
         peak = max(peak, equity)
-        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (KV_PEAK, str(peak)))
-        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (KV_CURSOR, str(max(cursor, upto))))
+        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (kp, str(peak)))
+        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (kc, str(max(cursor, upto))))
         db.commit()
     except Exception:
         db.rollback()
@@ -101,9 +103,9 @@ def adjusted_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], n
 
 def reset_peak(journal, equity: float, reason: str) -> dict[str, Any]:
     """Human reset (shortbot-admin): the drawdown is measured from today's equity from now on."""
-    old = journal.get(KV_PEAK)
-    journal.set(KV_PEAK, str(equity))
-    journal.set(KV_CURSOR, str(int(time.time() * 1000)))
+    old = journal.get(journal.mode_key(KV_PEAK))
+    journal.set(journal.mode_key(KV_PEAK), str(equity))
+    journal.set(journal.mode_key(KV_CURSOR), str(int(time.time() * 1000)))
     journal.log_decision("equity_peak_reset", f"{old} -> {equity}: {reason}", None,
                          snapshot={"old": old, "new": equity, "reason": reason})
     return {"ok": True, "old_peak": float(old) if old else None, "new_peak": equity}
@@ -114,14 +116,14 @@ async def gather(t, journal, equity: float, old_day: float, old_week: float) -> 
     Income unreachable -> old definitions and the stored peak (never blocks the budget)."""
     now = datetime.now(timezone.utc)
     try:
-        starts = [period_starts(now)["week"][1], int(journal.get(KV_CURSOR) or time.time() * 1000)]
+        starts = [period_starts(now)["week"][1], int(journal.get(journal.mode_key(KV_CURSOR)) or time.time() * 1000)]
         rows = await reconcile.income_since(t, min(starts))
         out = period_pnl(journal, equity, rows, old_day, old_week, now)
         out["peak"] = adjusted_peak(journal, equity, rows, int(now.timestamp() * 1000))
         return out
     except Exception:  # noqa: BLE001
         try:
-            peak = max(float(journal.get(KV_PEAK) or 0), equity)
+            peak = max(float(journal.get(journal.mode_key(KV_PEAK)) or 0), equity)
         except Exception:  # noqa: BLE001
             peak = equity
         return {"day_pnl": old_day, "week_pnl": old_week, "peak": peak, "late": {}, "degraded": True}

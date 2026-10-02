@@ -30,7 +30,7 @@ def get_app(research: bool = True) -> App:
     if _app is None:
         s = Settings.from_env()
         ex = Exchanges(s)
-        j = Journal(s.db_path)
+        j = Journal(s.db_path, s.mode)
         params = ResearchParams(s, j) if research else None
         ex.params = params
         _app = App(s, ex, j, Trader(ex, j), params)
