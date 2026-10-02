@@ -65,7 +65,7 @@ async def test_add_only_to_winners_and_within_1R():
     fake.price = 0.9
     bad = await ops.add_to_winner(SYM, 100, 1.04, "too loose")
     assert not bad["ok"] and "1R" in bad["error"]
-    ok = await ops.add_to_winner(SYM, 50, 0.95, "trend continuing")
+    ok = await ops.add_to_winner(SYM, 9, 0.95, "trend continuing")       # within the 100 USDT per-coin cap
     assert ok["ok"] and fake.position > 100 and list(fake.stops.values()) == [0.95]
 
 
@@ -74,7 +74,7 @@ async def test_add_pins_1R_and_records_peak_size_so_later_adds_cannot_grow_the_b
     tr = t.j.active_trade(SYM)
     r1 = (tr["initial_stop"] - tr["entry_price"]) * tr["amount"]
     fake.price = 0.9
-    assert (await ops.add_to_winner(SYM, 50, 0.95, "first add"))["ok"]
+    assert (await ops.add_to_winner(SYM, 9, 0.95, "first add"))["ok"]
     tr2 = t.j.active_trade(SYM)
     assert tr2["plan"]["r1_usdt"] == r1 and tr2["plan"]["full_size"] == tr["amount"]
     assert tr2["amount"] > tr["amount"]                       # targets are shares of the peak size
@@ -108,7 +108,11 @@ async def test_add_beyond_1R_only_when_the_risk_param_allows_it():
     ops, t, fake = await ops_with_open_trade()
     fake.price = 0.9
     # 1R = 5 USDT (100 @ 1.00, stop 1.05). Adding 100 with stop 1.00 -> avg 0.95, loss at stop 0.05*200 = 10 = 2R
-    assert not (await ops.add_to_winner(SYM, 90, 1.0, "double"))["ok"]            # default cap 1R
+    # the size caps and pyramiding rules are tests/test_add_rules.py's; here only the R cap is the baseline one
+    big = {"max_position_notional": 200, "max_add_frac": 1.0}
+    t.ex.settings = replace(t.ex.settings, limits=replace(t.ex.settings.limits, **big))
+    bad = await ops.add_to_winner(SYM, 90, 1.0, "double")
+    assert not bad["ok"] and bad["rejected_by_risk"] == [bad["error"]] and "1R" in bad["error"]   # default cap 1R
     t.ex.settings = replace(t.ex.settings, limits=replace(t.ex.settings.limits, max_add_r_mult=2.0))
     r = await ops.add_to_winner(SYM, 90, 1.0, "double on a sweet score")
     assert r["ok"] and r["worst_case_usdt"] <= 10.0 + 1e-6

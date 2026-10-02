@@ -5,18 +5,21 @@ re-plans the trade as if entering now and returns ranked, reasoned actions. The 
 actions below execute the non-trivial ones safely:
 
 - widen_stop: allowed ONCE per trade, only with a size cut so the $ loss at the new stop ≤ the initial 1R
-- add_to_winner: only in profit; the stop is tightened FIRST so total worst case after the add ≤ 1R
+- add_to_winner: only in profit; the stop is tightened FIRST so total worst case after the add ≤ 1R; inside open_short's
+  caps and the pyramiding rules (risk.check_add: ≥ min_add_r, ≤ max_add_frac of the initial size, ≤ max_adds)
 (Tightening and partial exits already exist: Trader.move_stop / Trader.close(fraction).)
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 from . import clientid, killswitch, stops
 from . import indicators as ind
 from .exchange import to_symbol
+from .risk import AddRequest, RiskViolation, check_add
 
 
 def _r_initial(trade: dict) -> float:
@@ -26,6 +29,15 @@ def _r_initial(trade: dict) -> float:
     if pinned:
         return float(pinned)
     return max(0.0, ((trade.get("initial_stop") or 0) - (trade.get("entry_price") or 0)) * (trade.get("amount") or 0))
+
+
+def adds_done(j, trade: dict) -> int:
+    """Adds already made on this trade: its `add` decisions, filled or of unknown outcome (an ambiguous send may have
+    filled, #9); a refused add logs `add_rejected`. Decisions carry no mode, and no trade id before #10: rows are
+    matched by symbol from the trade's opening on, and a trade id in the snapshot must be this trade's."""
+    rows = j._rows("SELECT snapshot FROM decisions WHERE symbol=? AND action='add' AND ts >= ?",
+                   (trade["symbol"], trade.get("opened_at") or ""))
+    return sum((json.loads(r["snapshot"] or "{}") or {}).get("trade_id") in (None, trade["id"]) for r in rows)
 
 
 def chandelier_stop(c1h: list[list[float]], n: int = 22, k: float = 3.0) -> float | None:
@@ -215,10 +227,14 @@ class PositionOps:
         new_avg = (entry * qty + mark * add_qty) / (qty + add_qty)
         worst = (new_stop - new_avg) * (qty + add_qty)
         r1 = _r_initial(trade)
-        cap = r1 * max(1.0, tr.ex.limits.max_add_r_mult)     # > 1R only via set_risk_params (experiment tag)
-        if worst > cap + 1e-9:
-            return {"ok": False, "error": f"after the add, loss at stop {new_stop} would be {worst:.2f} > "
-                                          f"{cap / r1 if r1 else 1:g}R ({cap:.2f}); tighten the stop or add less"}
+        cur = min((s["trigger"] for s in await tr.stop_orders(symbol, close_position_only=True)), default=None)
+        tighten = cur is None or new_stop < cur * 0.9999   # tighten first; an already-fitting stop stays
+        if refused := await self._refusals(trade, pos, add_qty, new_stop, new_stop if tighten else cur, worst):
+            tr.j.log_decision("add_rejected", "; ".join(refused), symbol, snapshot={
+                "trade_id": trade["id"], "add_qty": add_qty, "price": mark, "new_stop": new_stop, "worst_case": worst})
+            return {"ok": False, "error": "; ".join(refused), "rejected_by_risk": refused,
+                    "hint": "the caps and pyramiding rules are research params: change them openly with "
+                            "set_risk_params under an experiment tag; never split the add"}
         if worst > r1 + 1e-9:   # extra risk must fit today's governor room (daily cap), never around a halt
             from .risk_budget import governor_status
             gov = await governor_status(tr, "unknown")
@@ -229,8 +245,7 @@ class PositionOps:
             if gov.get("halt") or (room is not None and worst - r1 > room):
                 return {"ok": False, "error": f"extra risk {worst - r1:.2f} over 1R does not fit the governor "
                                               f"(halt={gov.get('halt')}, daily room={room})"}
-        cur_stops = [s["trigger"] for s in await tr.stop_orders(symbol, close_position_only=True)]
-        if not cur_stops or new_stop < min(cur_stops) * 0.9999:   # tighten first; an already-fitting stop stays
+        if tighten:
             mv = await tr.move_stop(symbol, new_stop, f"pre-add tighten: {reason}")  # protect first
             if not mv.get("ok"):
                 return {"ok": False, "error": f"could not tighten the stop first: {mv.get('error')}"}
@@ -241,8 +256,8 @@ class PositionOps:
             o = await tr._market_sell(symbol, add_qty, cid)
         except clientid.Unknown as e:   # it may have run: never re-sent (#9); logged as a size change
             msg = f"add of {add_qty}: {e}. Not re-sent: re-read the position before adding again"
-            tr.j.log_decision("add", f"UNKNOWN: {reason}", symbol, snapshot={"add_qty": add_qty, "client_id": cid,
-                                                                             "unknown": True, "new_stop": new_stop})
+            tr.j.log_decision("add", f"UNKNOWN: {reason}", symbol, snapshot={   # counts as an add (adds_done)
+                "trade_id": trade["id"], "add_qty": add_qty, "client_id": cid, "unknown": True, "new_stop": new_stop})
             await tr.alert("add_unknown", msg, symbol, True)
             return {"ok": False, "unknown": True, "client_id": cid, "error": msg}
         except Exception as e:  # noqa: BLE001 - a definite refusal: nothing ran; the tightened stop stays
@@ -257,8 +272,31 @@ class PositionOps:
         tr.j.update_trade(trade["id"], plan=plan,   # amount = peak size: targets are its shares
                           amount=max(float(trade.get("amount") or 0), qty + add_qty),
                           notes=f"{trade.get('notes') or ''} added {add_qty}@{mark}".strip())
-        tr.j.log_decision("add", reason, symbol, snapshot={"add_qty": add_qty, "price": mark, "new_stop": new_stop,
+        tr.j.log_decision("add", reason, symbol, snapshot={"trade_id": trade["id"], "client_id": cid,
+                                                           "add_qty": add_qty, "price": mark, "new_stop": new_stop,
                                                            "worst_case": worst, "r_initial": r1,
                                                            "worst_case_R": round(worst / r1, 2) if r1 else None})
         await tr.alert("action_add", f"added {add_qty} @ {mark}; stop {new_stop}; worst case {worst:.2f}", symbol, False)
         return {"ok": True, "added": add_qty, "price": mark, "new_stop": new_stop, "worst_case_usdt": round(worst, 2)}
+
+    async def _refusals(self, trade: dict, pos: dict, add_qty: float, new_stop: float, stop_after: float,
+                        worst: float) -> list[str]:
+        """Every reason to refuse the add, before anything moves: the loss at new_stop vs the pinned 1R, open_short's
+        caps and the pyramiding rules (risk.check_add, on the stop that rests after the add), the exchange minimum."""
+        tr, lim = self.tr, self.tr.ex.limits
+        symbol, mark, qty, r1 = trade["symbol"], float(pos["markPrice"]), float(pos["contracts"]), _r_initial(trade)
+        cap = r1 * max(1.0, lim.max_add_r_mult)     # > 1R only via set_risk_params (experiment tag)
+        out = [f"after the add, loss at stop {new_stop} would be {worst:.2f} > {cap / r1 if r1 else 1:g}R ({cap:.2f}); "
+               "tighten the stop or add less"] if worst > cap + 1e-9 else []
+        initial = float((trade.get("plan") or {}).get("full_size") or trade.get("amount") or qty)
+        lev = int(float(pos.get("leverage") or trade.get("leverage") or 0))
+        req = AddRequest(symbol, add_qty, mark, stop_after, qty, float(pos["entryPrice"]), lev, initial, r1,
+                         adds_done(tr.j, trade))
+        try:
+            check_add(req, await tr.account_state(), lim)
+        except RiskViolation as e:
+            out += e.reasons
+        min_cost = tr.t.market(symbol)["limits"]["cost"]["min"] or 0
+        if 0 < add_qty * mark < min_cost:
+            out.append(f"add of {add_qty * mark:.2f} USDT is below the exchange minimum {min_cost}")
+        return out

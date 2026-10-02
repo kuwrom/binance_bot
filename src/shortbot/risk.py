@@ -1,4 +1,5 @@
-"""Pure pre-trade risk checks. Every order that opens exposure must pass `check_open_short`.
+"""Pure pre-trade risk checks. Every order that opens exposure must pass `check_open_short` (an add to a winner:
+`check_add`).
 
 The limits passed in are the EFFECTIVE limits: the .env baseline plus any AI research overrides
 (params.py). The checks themselves are not tunable; only their thresholds are."""
@@ -18,6 +19,21 @@ class ShortRequest:
     stop_price: float
     leverage: int
     quote_volume_24h: float
+
+
+@dataclass(frozen=True)
+class AddRequest:
+    """An add to a winning short (PositionOps.add_to_winner), as check_add sees it."""
+    symbol: str
+    add_qty: float         # contracts to add, at exchange precision
+    mark: float            # a market add fills about here
+    stop_price: float      # the protective stop resting after the add
+    qty: float             # contracts short now
+    entry: float           # the position's average entry now
+    leverage: int          # the position's (isolated) leverage; 0 = unknown
+    initial_size: float    # contracts of the planned full entry (plan.full_size): the base of max_add_frac
+    r1: float              # the trade's pinned 1R, USDT
+    adds_done: int         # adds already made on this trade (journal)
 
 
 @dataclass(frozen=True)
@@ -126,5 +142,44 @@ def check_open_short(req: ShortRequest, acct: AccountState, limits: RiskLimits) 
         if acct.day_pnl / acct.equity * 100 <= -limits.daily_loss_limit_pct:
             reasons.append(f"daily loss limit {limits.daily_loss_limit_pct}% hit; no new shorts today")
 
+    if reasons:
+        raise RiskViolation(reasons)
+
+
+def check_add(req: AddRequest, acct: AccountState, limits: RiskLimits) -> None:
+    """Raise RiskViolation listing every rule an add to a winner breaks: the caps check_open_short applies to the new
+    exposure, then the pyramiding rules (docs/RISK_GOVERNANCE.md), research params like every threshold here. The
+    loss at the stop vs the pinned 1R and the governor's room are the caller's (they need the trade and governor)."""
+    reasons: list[str] = []
+    after = req.qty + req.add_qty
+    if req.add_qty <= 0:
+        reasons.append("add size must be positive (the notional is below one lot)")
+    if after * req.mark > limits.max_position_notional + 1e-9:
+        reasons.append(f"position notional would be {after * req.mark:.2f} > per-coin max "
+                       f"{limits.max_position_notional:g}")
+    if acct.total_open_notional + req.add_qty * req.mark > limits.max_total_notional + 1e-9:
+        reasons.append(f"total notional would be {acct.total_open_notional + req.add_qty * req.mark:.2f} "
+                       f"> max {limits.max_total_notional:g}")
+    dist = stop_distance_pct(req.mark, req.stop_price)
+    if dist < limits.min_stop_distance_pct:
+        reasons.append(f"stop {req.stop_price:g} is {dist:.2f}% above price {req.mark:g}: inside "
+                       f"min_stop_distance_pct {limits.min_stop_distance_pct:g}%")
+    avg = (req.entry * req.qty + req.mark * req.add_qty) / after if after > 0 else req.mark
+    from_avg = stop_distance_pct(avg, req.stop_price)
+    if req.leverage < 1:
+        reasons.append("leverage unknown: the liquidation distance can't be checked")
+    elif req.leverage > limits.max_leverage:
+        reasons.append(f"leverage {req.leverage} outside [1, {limits.max_leverage}]")
+    elif from_avg > (liq := est_liquidation_distance_pct(req.leverage)) - limits.liq_buffer_pct:
+        reasons.append(f"at {req.leverage}x liquidation is ~{liq:.1f}% above the new average {avg:.6g}, but the stop "
+                       f"is {from_avg:.1f}% above it (need {limits.liq_buffer_pct:g}% buffer): tighten the stop")
+    profit_r = (req.entry - req.mark) * req.qty / req.r1 if req.r1 > 0 else 0.0
+    if profit_r < limits.min_add_r - 1e-9:
+        reasons.append(f"open profit {profit_r:.2f}R < min_add_r {limits.min_add_r:g}R (research param)")
+    if req.add_qty > limits.max_add_frac * req.initial_size + 1e-9:
+        reasons.append(f"add of {req.add_qty:g} > max_add_frac {limits.max_add_frac:g} x the initial size "
+                       f"{req.initial_size:g} (research param)")
+    if req.adds_done >= limits.max_adds:
+        reasons.append(f"{req.adds_done} adds already on this trade: max_adds is {limits.max_adds} (research param)")
     if reasons:
         raise RiskViolation(reasons)

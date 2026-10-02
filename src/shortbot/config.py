@@ -54,6 +54,9 @@ class RiskLimits:
     moonshot_bucket_pct: float = 5.0          # ring-fenced equity for "M" bets; 25% of it at risk per bet
     max_conviction_mult: float = 1.5          # cap on conviction x cell tilt
     max_add_r_mult: float = 1.0               # adds to a winner may raise the loss at stop to this x the pinned 1R
+    min_add_r: float = 1.0                    # pyramiding: add only once the open profit is >= this x the pinned 1R
+    max_add_frac: float = 0.5                 # each add <= this fraction of the initial size (plan.full_size)
+    max_adds: int = 2                         # adds per trade (add_to_winner)
 
     @classmethod
     def from_env(cls) -> "RiskLimits":
@@ -81,6 +84,9 @@ class RiskLimits:
             moonshot_bucket_pct=_f("MOONSHOT_BUCKET_PCT", cls.moonshot_bucket_pct),
             max_conviction_mult=_f("MAX_CONVICTION_MULT", cls.max_conviction_mult),
             max_add_r_mult=_f("MAX_ADD_R_MULT", cls.max_add_r_mult),
+            min_add_r=_f("MIN_ADD_R", cls.min_add_r),
+            max_add_frac=_f("MAX_ADD_FRAC", cls.max_add_frac),
+            max_adds=_i("MAX_ADDS", cls.max_adds),
         )
 
 
@@ -110,6 +116,9 @@ DEFAULT_BOUNDS: dict[str, tuple[float, float]] = {
     "moonshot_bucket_pct": (0.0, 10.0),
     "max_conviction_mult": (1.0, 2.0),
     "max_add_r_mult": (1.0, 2.0),
+    "min_add_r": (0.0, 5.0),
+    "max_add_frac": (0.1, 1.0),
+    "max_adds": (0, 10),
 }
 
 

@@ -27,7 +27,7 @@
   - B: 1×.
   - A: 1.5×. A needs ≥ 30 trades of that setup with the lower 90% CI of R above 0; otherwise it's downgraded to B.
   - The combined multiplier (conviction × tilt) is capped at 1.5×.
-- **Pyramiding:** only at ≥ +1R, each add ≤ 50% of the initial size, at most 2 adds, and total risk stays ≤ the initial R (see `add_to_winner`).
+- **Pyramiding:** only at ≥ +1R (`min_add_r`), each add ≤ 50% of the initial size (`max_add_frac`), at most 2 adds (`max_adds`), and total risk stays ≤ the initial R (`max_add_r_mult`). An add also passes open_short's notional caps, minimum stop distance and liquidation buffer (`risk.check_add`). All are research params: change them with `set_risk_params` under an experiment tag.
 - **Moonshot bucket:** 5% of equity, ring-fenced. At most 25% of the bucket at risk per trade. Refilled only quarterly and only from profits. No conviction multipliers.
 - **Hot-hand multiplier:** OFF. To enable it:
   - at least 200 closed trades

@@ -217,9 +217,9 @@ async def test_an_add_whose_answer_was_lost_is_found_and_journalled(fault):
     ops, t, fake = await ops_with_open_trade()
     fake.price, n = 0.9, len(sends(fake, "market"))
     on_send(fake, "market", 1, arm=fault)
-    r = await ops.add_to_winner(SYM, 50, 0.95, "trend continuing")
-    assert r["ok"] and r["added"] == 55.5 and fake.position == 155.5 and len(sends(fake, "market")) == n + 1
-    assert t.j.active_trade(SYM)["amount"] == 155.5
+    r = await ops.add_to_winner(SYM, 9, 0.95, "trend continuing")    # 10 more: within the 100 USDT cap
+    assert r["ok"] and r["added"] == 10 and fake.position == 110 and len(sends(fake, "market")) == n + 1
+    assert t.j.active_trade(SYM)["amount"] == 110
 
 
 @pytest.mark.parametrize("fault", UNSENT)
@@ -227,7 +227,7 @@ async def test_an_add_of_unknown_outcome_is_never_resent(fault):
     ops, t, fake = await ops_with_open_trade()
     fake.price, n = 0.9, len(sends(fake, "market"))
     on_send(fake, "market", 1, arm=fault)
-    r = await ops.add_to_winner(SYM, 50, 0.95, "trend continuing")
+    r = await ops.add_to_winner(SYM, 9, 0.95, "trend continuing")
     assert not r["ok"] and r["unknown"] and fake.position == 100 and len(sends(fake, "market")) == n + 1
     assert "add_unknown" in kinds(t) and t.j.decisions(SYM)[0]["action"] == "add"
     assert list(fake.stops.values()) == [0.95]                       # the tightened stop stays

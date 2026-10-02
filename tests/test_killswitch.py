@@ -201,7 +201,7 @@ async def test_a_trip_after_the_pre_add_tighten_stops_the_add_and_keeps_the_tigh
         await ks.trip(t.j, SETTINGS, HALTED, "agent", "halt")
         return r
     t.move_stop = move_then_trip
-    r = await PositionOps(t).add_to_winner(SYM, 50, 0.95, "trend")
+    r = await PositionOps(t).add_to_winner(SYM, 9, 0.95, "trend")
     assert r["kill_switch"] == HALTED and fake.position == 100 and list(fake.stops.values()) == [0.95]
 
 
