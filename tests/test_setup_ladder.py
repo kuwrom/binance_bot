@@ -108,3 +108,15 @@ def test_risk_budget_applies_the_ladder_multiplier_with_its_reason():
     assert full["multipliers"]["m_ladder"] == 1.0 and half["multipliers"]["m_ladder"] == 0.5
     assert half["risk_usd"] == pytest.approx(full["risk_usd"] / 2, abs=0.01) and "setup ladder: half" in half["reasons"]
     assert shadow["risk_usd"] == 0 and shadow["blocked"]
+
+
+def test_ladder_failure_fails_closed_from_the_frozen_stop_record():
+    from shortbot.risk_budget import _ladder_fallback
+    j = J(rows([2] + [-1] * 13))
+    assert _ladder_fallback(j, "pump_fade", RuntimeError("x"))["mult"] == 0.5          # nothing recorded: half
+    L.status(j, "pump_fade")                                                           # records the stop
+    assert _ladder_fallback(j, "pump_fade", RuntimeError("x"))["mult"] == 0.0          # unreleased stop: 0
+    ev = json.loads(j.kv["setup_ladder:pump_fade"])
+    ev["reenables"] = [ev["stops"][-1]["at"] + "Z"]
+    j.kv["setup_ladder:pump_fade"] = json.dumps(ev)
+    assert _ladder_fallback(j, "pump_fade", RuntimeError("x"))["mult"] == 0.5          # re-enabled since: half

@@ -252,8 +252,23 @@ def _ladder(journal, setup: str | None) -> dict[str, Any] | None:
             hit = _dup_cache[setup] = (time.time(), dups)
         dups = hit[1]
         return status(journal, setup, epoch=(p or {}).get("created_at"), overlaps=dups)
-    except Exception as e:  # noqa: BLE001 - sizing must not crash; the reason says the ladder is unknown
-        return {"state": "UNKNOWN", "mult": 1.0, "reasons": [f"setup ladder unavailable ({type(e).__name__})"]}
+    except Exception as e:  # noqa: BLE001 - sizing must not crash; fail closed like the kill switch's unreadable row
+        return _ladder_fallback(journal, setup, e)
+
+
+def _ladder_fallback(journal, setup: str, err: Exception) -> dict[str, Any]:
+    """The ladder could not be replayed: use the stop record frozen in kv. An unreleased stop -> 0 (SHADOW);
+    otherwise 0.5, half size until the ladder reads again. Never full size on an unknown state."""
+    try:
+        from .setup_ladder import events
+        ev = events(journal, setup)
+        last_stop = max((x["at"] for x in ev.get("stops") or []), default=None)
+        stopped = last_stop is not None and not any(r >= last_stop for r in ev.get("reenables") or [])
+    except Exception:  # noqa: BLE001 - even the kv read failed: half size
+        stopped = False
+    mult = 0.0 if stopped else 0.5
+    return {"state": "UNKNOWN", "mult": mult,
+            "reasons": [f"setup ladder unavailable ({type(err).__name__}): {'stopped -> 0' if stopped else 'half size'}"]}
 
 
 async def governor_status(trader, regime: str, limits: RiskLimits | None = None) -> dict[str, Any]:
