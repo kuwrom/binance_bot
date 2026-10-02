@@ -4,7 +4,8 @@ Every entry row and its client order id are journalled BEFORE the order is sent 
 outcome: placing -> pending (acked, resting) | rejected (definite refusal) | unknown (timeout, 5xx, -1007...).
 A pre-armed stop's send is unresolved while prearm_cid is set and prearm_id is NULL.
 
-`reconcile` (its own protective guardian job) resolves them by client id, never by resending (clientid.py):
+`reconcile` (its own protective guardian job, 60 s; the 5 s fill poll runs `resolve` on 'unknown' rows too) resolves
+them by client id, never by resending (clientid.py):
 - unknown, found -> pending: the poll adopts its fill and protects it. If abandoned (a rolled-back split leg, or a
   placing call that never returned, so nobody was told it rests) and unfilled -> cancelled. A fill is never stripped.
 - unknown, not found GRACE_S after the send -> rejected (it never reached the book)
@@ -95,7 +96,7 @@ async def reconcile(desk) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for r in desk._rows("status IN ('placing','unknown') AND client_id IS NOT NULL"):
         try:
-            ev = await _resolve(desk, r)
+            ev = await resolve(desk, r)
         except Exception as e:  # noqa: BLE001 - stays unresolved; retried next tick
             log.warning("entry #%s unresolved: %s: %s", r["id"], type(e).__name__, e)
             continue
@@ -109,7 +110,9 @@ async def reconcile(desk) -> list[dict[str, Any]]:
     return events
 
 
-async def _resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
+async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
+    """One placing/unknown row, by its client id (module doc). The 5 s fill poll runs it on each 'unknown' row too:
+    with no pre-armed stop, its fill must not wait for this job's 60 s tick (entries._poll_unknown)."""
     age = _age_s(r)
     if r["status"] == "placing":
         if age < GRACE_S:

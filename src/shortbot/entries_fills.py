@@ -1,4 +1,8 @@
-"""Fills the 5 s entry poll learns about late (#8), rebuilt from the account's trade history (used by entries.py).
+"""Journalling the fills the 5 s entry poll finds (entries._on_fill), and those it learns about late (#8), rebuilt from
+the account's trade history.
+
+- a fill with its position open is journalled inside the symbol lock (`adopt`), siblings and alerts come after it
+  (`announce`): a session's close never finds the position without its trade (#60)
 
 - every limit trade opens at its first fill (exchange clock), not at the poll: finalize's income query starts at
   opened_at, so a poll-time open dropped the entry commission (#6)
@@ -81,6 +85,55 @@ def first_fill_ms(trades: list[dict], e: dict[str, Any], o: dict[str, Any]) -> i
     """When the order first filled: its earliest trade, else its last fill (lastTradeTimestamp), else None (now)."""
     mine = own(trades, e["order_id"])
     return int(mine[0]["timestamp"]) if mine else o.get("lastTradeTimestamp")
+
+
+async def plan_stop(desk, e: dict[str, Any], cps: list[dict]) -> None:
+    """A closePosition stop looser than the plan's (e.g. the guardian's +10% fallback stop landed first) is tightened
+    to this entry's plan stop. A widened trade keeps its wider stop (its size was cut for it, #14)."""
+    jt = desk.j.active_trade(e["symbol"]) or {}
+    stop = max(e["stop_price"], float(jt.get("stop_price") or 0)) if "widened" in (jt.get("notes") or "") \
+        else e["stop_price"]
+    if cps and min(c["trigger"] for c in cps) > stop * 1.0001:
+        await desk.tr.move_stop(e["symbol"], stop, f"entry #{e['id']} filled: plan stop")
+
+
+def adopt(desk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
+          trades: list[dict]) -> tuple[dict[str, Any], tuple[str, bool] | None]:
+    """A fill whose position is open, journalled (inside the symbol lock): an add to the open trade of its split entry
+    or of a same-symbol sibling (tranches.join), else a new trade. Returns (event, (alert, urgent) or None) for
+    announce(), which runs after the lock."""
+    from . import tranches
+    at = first_fill_ms(trades, e, o)
+    tid = tranches.open_trade_id(desk, e)   # a split entry's later leg, or a same-symbol sibling that filled too
+    if tid:
+        return tranches.join(desk, e, pos, tid, iso(at))
+    sib = desk._filled_sibling(e)            # a sibling on another symbol filled too: two positions, one budget
+    orphan = bool(e.get("tranche")) and tranches.parent_closed(desk, e)   # a fresh position nobody asked for
+    fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
+    tid = new_trade(desk, e, at)
+    if not desk._settle(e["id"], "pending", status="filled", trade_id=tid, filled_at=iso(at), fill_price=fill,
+                        filled_qty=qty):
+        desk.j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
+        return {"entry_id": e["id"], "event": "resolved_elsewhere"}, None
+    desk.j.activate_trade(tid, fill, qty, round(fill * qty, 2))
+    head = ((f"sibling #{sib} also filled: group over its single-bet budget. " if sib else "")
+            + (f"leg filled after its trade closed: new trade #{tid}. " if orphan else ""))
+    return ({"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill, "qty": qty},
+            (head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed", bool(head)))
+
+
+async def announce(desk, e: dict[str, Any], ev: dict[str, Any], alert: tuple[str, bool] | None) -> dict[str, Any]:
+    """After the symbol lock: a new trade's OCO siblings are cancelled (they may rest on other symbols, and a task
+    holds one symbol lock at a time), then the fill is alerted."""
+    if alert is None:
+        return ev
+    msg, urgent = alert
+    if ev["event"] == "filled":
+        others = await desk.cancel_group(e["group_id"], f"sibling #{e['id']} filled", keep=e["id"],
+                                         keep_tranche=e.get("tranche"))
+        msg += f"; {others['cancelled']} sibling order(s) cancelled{late_note(others)}"
+    await desk.tr.alert("action_fill", msg, e["symbol"], urgent)
+    return ev
 
 
 def new_trade(desk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> int:

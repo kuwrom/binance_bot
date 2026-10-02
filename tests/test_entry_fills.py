@@ -156,12 +156,11 @@ async def test_an_order_adopted_after_its_round_trip_was_journalled_links_to_tha
     d, t, fake = desk()
     fake.price = 1.035
     a, b = (x["entry_id"] for x in (await d.propose_group([prop(1.04), prop(1.06, stop=1.12)]))["placed"])
-    d._update(b, status="unknown")                              # its send's outcome unknown (#13 resolves it later)
+    d._update(b, status="unknown", order_id=None)               # its send's outcome unknown (#13): no order id
     fake.price = 1.13
-    (ev,) = await d.poll()
-    assert ev["event"] == "round_trip" and d._rows("id=?", (b,))[0]["status"] == "unknown"
-    assert d._settle(b, "unknown", status="pending")            # entry_intents adopts it: found, filled
-    assert [(x["event"], x["trade_id"]) for x in await d.poll()] == [("fill_linked", ev["trade_id"])]
+    # the poll looks it up by client id after a's round trip (#60): adopted (found, filled) and linked, same pass
+    ev, linked = await d.poll()
+    assert ev["event"] == "round_trip" and (linked["event"], linked["trade_id"]) == ("fill_linked", ev["trade_id"])
     (tr,) = t.j.trades()
     assert tr["pnl"] == pytest.approx(net_income(fake)) and d._rows("id=?", (b,))[0]["trade_id"] == tr["id"]
 

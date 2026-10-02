@@ -291,9 +291,7 @@ class PositionChecks:
             await self._halt_sweep()
         else:   # a governor halt or a market pause withdraws resting entries too (#12)
             await entry_gates.guardian_sweep(self.entries, self.n)
-        if not self.entries.pending():
-            return
-        for ev in await self.entries.poll():
+        for ev in await self.entries.poll():   # pending rows and sends of unknown outcome (#60)
             if ev["event"] in ("cancelled", "expired"):
                 await self.n.send(f"entry_{ev['event']}", f"entry #{ev['entry_id']}: {ev.get('why', '')}",
                                   cooldown_s=0)

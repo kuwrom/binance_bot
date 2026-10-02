@@ -69,7 +69,7 @@ async def detect(ex, journal) -> int:
                  leader["r4h"], g["symbol"], g["r4h"], tk[g["symbol"]]["last"], ctl and ctl["symbol"],
                  ctl and ctl["r4h"], ctl and tk[ctl["symbol"]]["last"], m["header"]["breadth_pct"]))
             n += 1
-    journal.db.commit()
+        journal.db.commit()   # before the next sector's await: no write transaction spans an exchange call
     return n
 
 
@@ -107,7 +107,7 @@ async def label(ex, journal, limit: int = 20) -> int:
             pass
         journal.db.execute("UPDATE laggard_events SET outcome=?, labelled_at=? WHERE id=?",
                            (json.dumps(o), datetime.now(timezone.utc).isoformat(timespec="seconds"), rid))
-    journal.db.commit()
+        journal.db.commit()   # per row: the guardian's shared connection must not hold a write across the next await
     return len(rows)
 
 

@@ -15,7 +15,10 @@ Mechanics (Binance USDⓈ-M, verified in docs/ccxt 2026-09):
   landed keeps its stop and is adopted by the poll; a failed cancel is retried, never relabelled
 - risk: every pending order is sized from the CURRENT risk budget; a group counts once (only one may fill)
 - journal-first: the row and its client order id are written BEFORE the order is sent; an ambiguous send is
-  resolved by that id, never by resending (entry_intents.py)
+  resolved by that id, never by resending (entry_intents.py). Such a row ('unknown': no order id, no pre-armed stop)
+  is looked up by that id on every 5 s poll and cancelled with its group like any order that may rest (#60)
+- a fill is protected AND journalled inside the symbol lock: a session's close never finds the position without
+  its trade (#60)
 Every entry row is research data: fill rate, time-to-fill, level type, and unfilled counterfactuals.
 
 This module: entry rows and their lifecycle (fill, expiry, cancel). Placement is mixed in from entries_place.py
@@ -37,7 +40,8 @@ import ccxt.async_support as ccxt
 from . import entries_fills as fills
 from .entries_amend import EntryAmend
 from .entries_place import MIN_TTL_S, EntryPlacement  # noqa: F401 (MIN_TTL_S re-export)
-from .entry_intents import HINTS, ON_BOOK, located
+from .entry_gates import RESTING
+from .entry_intents import GRACE_S, HINTS, ON_BOOK, located, resolve
 from .stops import is_clock_drift
 from .symlock import SymbolBusy
 
@@ -57,6 +61,8 @@ DEAD = ("canceled", "expired", "rejected")
 CANCEL_FAILS_ALERT = 3   # sibling-retry cancels failed in a row before a human is told (once per streak)
 POLL_FAILS_ALERT = 3     # polls of one entry failed in a row before a human is told (a fill may go unseen)
 TICKER_TIMEOUT_S = 5.0   # the price for the cancel rules; the fill check doesn't wait on it
+LIVE = ("pending", "placing", "unknown")   # the desk's rows that are or may be on the book (RESTING)
+POLLED = "status='pending' OR (status='unknown' AND client_id IS NOT NULL)"
 
 
 async def withdraw(t, e: dict[str, Any]) -> str:
@@ -154,11 +160,28 @@ class EntryDesk(EntryPlacement, EntryAmend):
 
     # ------------------------------------------------------------ cancel
     async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:
-        """Relabel the row only when its limit died unfilled; returns withdraw's outcome."""
+        """Withdraw one live row; returns withdraw's outcome. The row is re-read inside the symbol lock: one resolved
+        meanwhile is left as it is ("filled" if it filled, else "unfilled"). A send of unknown outcome is first found by
+        its client id; not on the book GRACE_S after the send, it is 'rejected', as the reconciler would label it. Only
+        a limit that died unfilled is relabelled, compare-and-set against the status read here: a resolution another
+        process wrote meanwhile is never overwritten."""
         async with self.tr.symbol_lock(e["symbol"], f"cancel entry #{e['id']}: {reason}"):
+            now = self._rows("id=?", (e["id"],))
+            if not now or now[0]["status"] not in LIVE:
+                return "filled" if now and now[0]["status"] in ("filled", "error") else "unfilled"
+            e, frm = now[0], now[0]["status"]
+            if not e.get("order_id"):   # placing (its call died: a live one holds this lock) or unknown
+                found = await located(self.tr.t, e)
+                if found == "unfilled":
+                    self._settle(e["id"], frm, status="rejected",
+                                 reason=f"{reason}; not on the exchange {GRACE_S} s after the send: never placed")
+                    return "unfilled"
+                if isinstance(found, str):
+                    return found
+                e = found
             got = await withdraw(self.tr.t, e)
             if got == "unfilled":
-                self._update(e["id"], status=status, reason=reason)
+                self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
         return got
 
     def _filled_sibling(self, e: dict) -> int | None:
@@ -170,12 +193,19 @@ class EntryDesk(EntryPlacement, EntryAmend):
 
     async def cancel_group(self, group_id: str, reason: str, keep: int | None = None,
                            keep_tranche: str | None = None) -> dict[str, Any]:
-        """filled_first: filled before the cancel landed, so they keep their stops and the guardian's poll adopts them.
-        cancel_failed: still live and pending; call again."""
+        """Every order of the group that is or may be on the book, sends of unknown outcome too: an OCO sibling whose
+        answer was lost must not fill after the group's first fill (#60).
+        filled_first: filled before the cancel landed, so they keep their stops and the guardian's poll adopts them.
+        cancel_failed: (maybe) still live; call again (after a fill, the poll's sibling rule retries it). A symbol busy
+        with a session's action is one of those: the fill that called this must still be journalled and announced."""
         got: dict[str, list[int]] = {"unfilled": [], "filled": [], "unknown": []}
-        for e in self.pending(group_id):
+        for e in self._rows(RESTING + " AND group_id=?", (group_id,)):
             if e["id"] != keep and not (keep_tranche and e.get("tranche") == keep_tranche):
-                got[await self._cancel_entry(e, "cancelled", reason)].append(e["id"])
+                try:
+                    got[await self._cancel_entry(e, "cancelled", reason)].append(e["id"])
+                except SymbolBusy as x:
+                    log.info("entry #%s not cancelled: %s", e["id"], x)
+                    got["unknown"].append(e["id"])
         return {"ok": not got["unknown"], "cancelled": len(got["unfilled"]), "filled_first": got["filled"],
                 "cancel_failed": got["unknown"]}
 
@@ -184,16 +214,19 @@ class EntryDesk(EntryPlacement, EntryAmend):
         """Detect fills (protect + journal + cancel siblings), expiries, and cancel conditions. A cancel that doesn't
         kill the order unfilled leaves the row pending: the next pass adopts the fill or retries the cancel.
         One entry's failure never stops the others being polled (_poll_failed streaks and alerts). A pass in which
-        every entry failed raises: that is an outage, so the guardian lane escalates and the heartbeat stalls."""
+        every entry failed raises: that is an outage, so the guardian lane escalates and the heartbeat stalls.
+        Sends of unknown outcome are polled too, by client id (_poll_unknown)."""
         events: list[dict[str, Any]] = []
         now_ms = int(time.time() * 1000)
         tried, failed, last = 0, 0, None
-        for e in self.pending():
-            if not self._rows("id=? AND status='pending'", (e["id"],)):
+        for e in self._rows(POLLED):
+            now = self._rows(f"id=? AND ({POLLED})", (e["id"],))
+            if not now:
                 continue   # a sibling filled earlier in this pass and cancelled it: keep that status and reason
+            e = now[0]
             tried += 1
             try:
-                ev = await self._poll_one(e, now_ms)
+                ev = await (self._poll_unknown(e, now_ms) if e["status"] == "unknown" else self._poll_one(e, now_ms))
             except SymbolBusy as x:   # a session acts on this symbol: the row stays pending, retried next pass
                 log.info("entry #%s skipped this pass: %s", e["id"], x)
                 continue
@@ -231,6 +264,16 @@ class EntryDesk(EntryPlacement, EntryAmend):
         if why and await self._cancel_by_rule(e, why) == "unfilled":
             return {"entry_id": e["id"], "event": "cancelled", "why": why}
         return None
+
+    async def _poll_unknown(self, e: dict, now_ms: int) -> dict[str, Any] | None:
+        """A send of unknown outcome has no pre-armed stop (one is sent only after an ack): if it rests and fills, the
+        fill is naked until the row is adopted. So every pass looks it up by its client id rather than leaving it to
+        the reconciler's 60 s tick: one weight-1 Query Order, what fetch_order costs a pending row, for at most
+        GRACE_S. The reconciler's own rules resolve it (entry_intents.resolve, which alerts); one adopted is polled at
+        once, so its fill is protected, or its group's sibling rule cancels it, in this same pass."""
+        await resolve(self, e)
+        now = self._rows("id=? AND status='pending'", (e["id"],))
+        return await self._poll_one(now[0], now_ms) if now else None
 
     async def _forgotten(self, e: dict) -> dict[str, Any] | None:
         """Not found past its GTD: Binance forgets an unfilled CANCELED/EXPIRED order 3 days after its creation and
@@ -292,60 +335,48 @@ class EntryDesk(EntryPlacement, EntryAmend):
         return None
 
     async def _on_fill(self, e: dict, o: dict) -> dict[str, Any]:
-        """Protect, then journal. The remainder of a partial fill is pulled first (withdraw: what filled is believed,
-        the pre-arm is not touched here). Make before break: the pre-armed stop goes only once the whole-position
-        stop rests; if that stop can't be placed the pre-arm stays and the row stays pending (StopNotPlaced)."""
+        """Protect, then journal, both inside the symbol lock: a session's close() between the two would find no trade,
+        strip the new stop and finalize nothing, and the fill would then be journalled as an open trade on a flat
+        symbol (#60). The row is re-read inside the lock. The remainder of a partial fill is pulled first (withdraw:
+        what filled is believed, the pre-arm is not touched here). Make before break: the pre-armed stop goes only once
+        the whole-position stop rests; if that stop can't be placed the pre-arm stays and the row stays pending
+        (StopNotPlaced). After the lock (siblings may rest on other symbols): the round trip, the OCO cancel, alerts."""
         tr, sym = self.tr, e["symbol"]
-        rest, cps = "filled", []
-        async with tr.symbol_lock(sym, f"entry #{e['id']} filled: protect it"):
-            if o.get("status") == "open":   # partly filled and still resting
-                rest = await withdraw(tr.t, {**e, "prearm_id": None})
+        async with tr.symbol_lock(sym, f"entry #{e['id']} filled: protect and journal it"):
+            now = self._rows("id=? AND status='pending'", (e["id"],))
+            if not now:
+                return {"entry_id": e["id"], "event": "resolved_elsewhere"}
+            e = now[0]
+            rest = await withdraw(tr.t, {**e, "prearm_id": None}) if o.get("status") == "open" else "filled"
             pos = await tr._verified_position(sym)
-            if pos:
-                cps = await tr.stop_orders(sym, close_position_only=True)
-                if not cps:   # a pre-armed reduce-only stop (another leg / order) is NOT whole-position protection
-                    try:
-                        await tr._place_stop(sym, e["stop_price"], tries=3)
-                    except Exception as x:  # noqa: BLE001
-                        raise fills.StopNotPlaced(e, x) from x
-                if e["prearm_id"]:
-                    try:
-                        await tr.t.cancel_order(e["prearm_id"], sym, params={"trigger": True})
-                    except Exception:  # noqa: BLE001
-                        pass
+            cps = await self._protect(e) if pos else []
+            if rest != "unknown":
+                self._cancel_fails.pop(e["id"], None)
+                await fills.plan_stop(self, e, cps)
+                trades = await fills.history(tr.t, e, o)
+                done = fills.adopt(self, e, o, pos, trades) if pos else None
         if rest == "unknown":
             return await self._rest_unknown(e)
-        self._cancel_fails.pop(e["id"], None)
-        jt = self.j.active_trade(sym) or {}   # a widened trade keeps its wider stop (its size was cut for it, #14)
-        plan_stop = max(e["stop_price"], float(jt.get("stop_price") or 0)) if "widened" in (jt.get("notes") or "") \
-            else e["stop_price"]
-        if cps and min(c["trigger"] for c in cps) > plan_stop * 1.0001:
-            # e.g. the guardian's +10% fallback stop landed first: tighten it to this entry's plan stop
-            await tr.move_stop(sym, plan_stop, f"entry #{e['id']} filled: plan stop")
-        trades = await fills.history(tr.t, e, o)
         if not pos:   # filled and closed again before this poll (its pre-armed stop): rebuild it from history
             return await fills.round_trip(self, e, o, trades)
-        at = fills.first_fill_ms(trades, e, o)
-        from . import tranches
-        tid = tranches.open_trade_id(self, e)   # a split entry's later leg, or a same-symbol sibling that filled too
-        if tid:
-            return await tranches.join(self, e, pos, tid, fills.iso(at))
-        sib = self._filled_sibling(e)            # a sibling on another symbol filled too: two positions, one budget
-        orphan = bool(e.get("tranche")) and tranches.parent_closed(self, e)   # a fresh position nobody asked for
-        fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
-        tid = fills.new_trade(self, e, at)
-        if not self._settle(e["id"], "pending", status="filled", trade_id=tid, filled_at=fills.iso(at),
-                            fill_price=fill, filled_qty=qty):
-            self.j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
-            return {"entry_id": e["id"], "event": "resolved_elsewhere"}
-        self.j.activate_trade(tid, fill, qty, round(fill * qty, 2))
-        others = await self.cancel_group(e["group_id"], f"sibling #{e['id']} filled", keep=e["id"],
-                                         keep_tranche=e.get("tranche"))
-        head = ((f"sibling #{sib} also filled: group over its single-bet budget. " if sib else "")
-                + (f"leg filled after its trade closed: new trade #{tid}. " if orphan else ""))
-        await tr.alert("action_fill", head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed; "
-                       f"{others['cancelled']} sibling order(s) cancelled{fills.late_note(others)}", sym, bool(head))
-        return {"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill, "qty": qty}
+        return await fills.announce(self, e, *done)
+
+    async def _protect(self, e: dict) -> list[dict]:
+        """The whole-position stop (a pre-armed reduce-only stop of another leg or order is NOT that), then this
+        entry's pre-arm goes. Returns the closePosition stops that already rested."""
+        tr, sym = self.tr, e["symbol"]
+        cps = await tr.stop_orders(sym, close_position_only=True)
+        if not cps:
+            try:
+                await tr._place_stop(sym, e["stop_price"], tries=3)
+            except Exception as x:  # noqa: BLE001
+                raise fills.StopNotPlaced(e, x) from x
+        if e["prearm_id"]:
+            try:
+                await tr.t.cancel_order(e["prearm_id"], sym, params={"trigger": True})
+            except Exception:  # noqa: BLE001
+                pass
+        return cps
 
     async def _rest_unknown(self, e: dict) -> dict[str, Any]:
         """The fill is protected but its remainder's cancel failed: it may still rest and fill more, so the row stays
