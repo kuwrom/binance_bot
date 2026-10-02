@@ -56,6 +56,10 @@ class Engine(ReduceOnly):
         for i in [i for i, a in self.algo.items() if a.get("status") in ("CANCELED", "EXPIRED") and not a.get("actual")
                   and a.get("ts", old) < old]:
             del self.algo[i]
+        for s in [s for s, due in self.countdowns.items() if due and due <= self.now_ms()]:
+            self.countdowns[s] = None   # countdownCancelAll fired: once, regular orders only (inferred)
+            for o in self.limits.values():
+                o["status"] = "canceled" if o["symbol"] == s and o["status"] == "open" else o["status"]
 
     # ------------------------------------------------------------ prices
     def set_price(self, s: str, p: float) -> None:
@@ -125,23 +129,24 @@ class Engine(ReduceOnly):
 
     def _fill(self, s: str, side: str, amount: float, order: str | None = None) -> None:
         """A trade at the current price, stamped by the exchange clock, as ccxt parses a userTrades row
-        (Account-Trade-List doc), with its income rows (Get-Income-History doc: symbol, incomeType, income)."""
+        (Account-Trade-List doc), with its income rows (Get-Income-History doc: symbol, incomeType, income, time and
+        the trade's tradeId; the same exchange time as the trade is the fake's assumption, demo probe #55 measures it)."""
         b = self.sym[s]
-        px, ms = b["price"], self.now_ms()
+        px, ms, tid = b["price"], self.now_ms(), str(len(self.fills) + 1)
         fee, pnl = px * amount * FEE, (b["entry"] - px) * amount if side == "buy" else 0.0
-        self.fills.append({"id": str(len(self.fills) + 1), "symbol": s, "order": order, "side": side, "price": px,
+        self.fills.append({"id": tid, "symbol": s, "order": order, "side": side, "price": px,
                            "amount": amount, "timestamp": ms, "takerOrMaker": "taker",
                            "fee": {"cost": fee, "currency": "USDT"},
                            "info": {"orderId": order, "side": side.upper(), "realizedPnl": str(pnl),
                                     "commission": str(fee), "time": ms}})
         self.income.append({"symbol": raw(s), "incomeType": "COMMISSION", "income": str(-fee), "asset": "USDT",
-                            "time": ms})
+                            "time": ms, "tradeId": tid})
         if side == "sell":
             b["entry"] = (b["entry"] * b["qty"] + px * amount) / (b["qty"] + amount)
             b["qty"] += amount
             return
         self.income.append({"symbol": raw(s), "incomeType": "REALIZED_PNL", "income": str(pnl), "asset": "USDT",
-                            "time": ms})
+                            "time": ms, "tradeId": tid})
         b["qty"] = round(max(0.0, b["qty"] - amount), 8)
         if not b["qty"]:
             self._ro_flat(s)
@@ -165,6 +170,33 @@ class Engine(ReduceOnly):
             raise err.lookup_interval_too_big()
         rows = [f for f in self.fills if f["symbol"] == s and start <= f["timestamp"] <= (end or float("inf"))]
         return rows[:min(limit or 500, 1000)]
+
+    # ------------------------------------------------------------ raw order endpoints (demo probes, #55)
+    def _by_raw(self, rid: str) -> str:
+        s = next((k for k in self.sym if raw(k) == rid), None)
+        if s is None:
+            raise err.invalid_symbol()
+        return s
+
+    async def fapiPrivatePostCountdownCancelAll(self, req):
+        """POST /fapi/v1/countdownCancelAll (Auto-Cancel-All-Open-Orders doc, weight 10): every open order of the symbol
+        is cancelled once countdownTime ms pass without another call; 0 stops the timer; answers {symbol,
+        countdownTime}. Inferred: regular orders only (allOpenOrders and algoOpenOrders are separate endpoints since the
+        Algo migration); demo probe #55 measures whether conditional orders go too. Fires on `advance`."""
+        s, ms = self._by_raw(req["symbol"]), int(req["countdownTime"])
+        self.countdowns[s] = self.now_ms() + ms if ms else None
+        return {"symbol": req["symbol"], "countdownTime": str(ms)}
+
+    async def fapiPrivateGetAlgoOrder(self, req=None):
+        """Raw GET /fapi/v1/algoOrder by algoId or clientAlgoId (Query-Algo-Order doc), fields as ccxt's info carries
+        them. An unknown id: -2013, as the fake's fetch_order assumes (undocumented; demo probe #55 measures it)."""
+        r = req or {}
+        cid = r.get("clientAlgoId")
+        hits = [k for k, a in self.algo.items() if (a.get("cid") == cid if cid else k == str(r.get("algoId")))]
+        if not hits:
+            raise err.no_such_order()
+        v = self._algo_view(max(hits, key=int))
+        return {"algoId": int(v["id"]), "clientAlgoId": v["clientOrderId"], "symbol": raw(v["symbol"]), **v["info"]}
 
     # ------------------------------------------------------------ margin
     def available(self) -> float:

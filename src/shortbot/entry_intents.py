@@ -204,8 +204,8 @@ async def _sweep(desk) -> list[dict[str, Any]]:
     events = []
     for o in orders:
         oid, cid, sym = str(o["orderId"]), o.get("clientOrderId"), to_symbol(o["symbol"])
-        if targets.is_target(cid):
-            continue   # a resting plan target: targets_sync keeps those (#65)
+        if targets.is_target(cid) or str(cid or "").startswith(f"{clientid.PREFIX}-{clientid.KINDS['probe']}"):
+            continue   # a resting plan target: targets_sync keeps those (#65); a demo probe cleans up its own (#55)
         r = by_cid.get(cid) or by_oid.get(oid)
         try:
             if r is None:
@@ -245,8 +245,10 @@ def explained_symbols(desk) -> set[str]:
     book (the fill poll or the reconciler journals it), a send rejected in the last LATE_S (it may still have run:
     the sweep adopts its fill), or an external order that filled (already alerted)."""
     since = datetime.fromtimestamp(time.time() - LATE_S, timezone.utc).isoformat(timespec="seconds")
-    return {r["symbol"] for r in desk._rows("status IN ('pending','placing','unknown','external','external_filled')"
+    from .probes import active_symbols   # a live demo probe's position (#55); an expired row counts as absent
+    ours = {r["symbol"] for r in desk._rows("status IN ('pending','placing','unknown','external','external_filled')"
                                             " OR (status='rejected' AND created_at >= ?)", (since,))}
+    return ours | active_symbols(desk.j)
 
 
 async def _external(desk, o: dict, oid: str, cid: str | None, sym: str) -> dict[str, Any]:

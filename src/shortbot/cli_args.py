@@ -1,11 +1,11 @@
-"""`shortbot` argument tree: every subcommand and its flags (dispatch: cli.py). kill-switch / flatten, book-plan and
-backup add their own parsers (killswitch_ops.add_cli, allocator.add_cli, backup.add_args)."""
+"""`shortbot` argument tree: every subcommand and its flags (dispatch: cli.py). kill-switch / flatten, book-plan, probe
+and backup add their own parsers (killswitch_ops.add_cli, allocator.add_cli, probes.add_cli, backup.add_args)."""
 
 from __future__ import annotations
 
 import argparse
 
-from . import allocator, backup, killswitch_ops
+from . import allocator, backup, killswitch_ops, probes
 from .journal_research import LEARNING_KINDS
 from .tilts import TIERS
 
@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--expect-contracts", type=float, help="the size you saw: refused if it changed since")
     c.add_argument("--of-original", action="store_true", help="fraction = share of the ORIGINAL size gone by the end")
     killswitch_ops.add_cli(sub)
+    probes.add_cli(sub)
     allocator.add_cli(sub)
     sub.add_parser("reassess", help="re-plan a position from its current state").add_argument("symbol")
     bu = sub.add_parser("budget", help="current dynamic risk budget for a new short")

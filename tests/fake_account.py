@@ -14,6 +14,19 @@ from tests.fake_engine import SYM, WEEK_MS, raw
 
 
 class Account:
+    # ccxt 4.5.84 binance.py urls['demo'], what Exchanges' trade client holds after enable_demo_trading(True)
+    urls = {"api": {"fapiPrivate": "https://demo-fapi.binance.com/fapi/v1"}}
+
+    async def fapiPublicGetPremiumIndex(self, req=None):
+        """GET /fapi/v1/premiumIndex on the demo host (Mark-Price doc): the demo book's mark is its price here."""
+        s = self._by_raw((req or {}).get("symbol"))
+        return {"symbol": raw(s), "markPrice": str(self.sym[s]["price"]), "indexPrice": str(self.sym[s]["price"]),
+                "time": self.now_ms()}
+
+    async def fapiPrivatePostListenKey(self, req=None):
+        """POST /fapi/v1/listenKey (Start-User-Data-Stream doc): one key per account, extended when it exists."""
+        return {"listenKey": "fakeListenKeyDoNotLog0123456789abcdef"}
+
     def _position(self, s: str, b: dict) -> dict:
         iso = b.get("margin", "ISOLATED") == "ISOLATED"
         n, upnl = b["qty"] * b["price"], (b["entry"] - b["price"]) * b["qty"]

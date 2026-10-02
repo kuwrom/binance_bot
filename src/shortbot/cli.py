@@ -156,6 +156,9 @@ async def _run(args: argparse.Namespace) -> object:
                 return await allocator.run_cli(app, args)
             case "kill-switch" | "flatten":
                 return await killswitch_ops.run_cli(app, args)
+            case "probe":
+                from . import probes
+                return await probes.run_cli(app, args)
             case "move-stop":
                 return await app.trader.move_stop(args.symbol, args.price, args.reason)
             # MCP tools with logic of their own: the tool's body runs here (one copy of the code)
@@ -243,7 +246,7 @@ def tool_body(module: str, name: str):
 # Exchange weight classes (#70, weight.py), as for the MCP tools: order / close / stop / amend paths never wait for
 # budget, scans and studies yield to them, every other command is a desk read (untagged).
 PROTECTIVE_CMDS = frozenset({"open", "close", "move-stop", "widen-stop", "add", "propose", "cancel-group", "amend",
-                             "update-plan", "set-params"})
+                             "update-plan", "set-params", "probe"})
 RESEARCH_CMDS = frozenset({"scan", "map", "sweeps", "study", "book-plan"})
 
 

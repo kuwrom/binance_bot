@@ -61,7 +61,7 @@ class FakeCcxt(Account, Engine):
         self.ack_lost_503 = 0       # orders that EXECUTE, then answer 503 "Unknown error" (status unknown)
         self.unavailable_503 = 0    # orders refused with 503 "Service Unavailable." (nothing ran)
         self.ack_lost_unsent = 0    # orders that answer -1007 and did NOT run: "unknown" cuts both ways
-        self.multi_assets, self.adl_answer, self.force_orders = False, None, []   # fake_account.py
+        self.multi_assets, self.adl_answer, self.force_orders, self.countdowns = False, None, [], {}   # fake_account.py
         self.prod = ProdView(self)
         self.add_symbol(SYM, price)
 
