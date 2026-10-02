@@ -55,36 +55,39 @@ def group(bars: Sequence[Bar], step: int) -> list[Bar]:
     return out
 
 
-def _sources(fine: Sequence[Bar], t_ms: int, a: int, coarse: Sequence[Bar], coarse_step: int | None) -> list[Bar]:
+def _sources(fine: Sequence[Bar], t_ms: int, a: int, coarse: Sequence[Bar], coarse_step: int | None,
+             fine_step: int = MIN) -> list[Bar]:
     """Closed source bars from `a` up to t: coarse bars (each coarse_step long, fully closed) first, then the fine
-    1m bars after the coarse coverage."""
+    bars (1m, or 5m for stage 2's auxiliary series) after the coarse coverage."""
     cs = [b for b in between(coarse, a, t_ms) if b[TS] + (coarse_step or 0) <= t_ms] if coarse_step else []
     cov = cs[-1][TS] + coarse_step if cs else a
-    fs = [b for b in between(fine, max(a, cov), t_ms) if b[TS] + MIN <= t_ms]
+    fs = [b for b in between(fine, max(a, cov), t_ms) if b[TS] + fine_step <= t_ms]
     return cs + fs
 
 
 def klines(fine: Sequence[Bar], tf: str, t_ms: int, limit: int, coarse: Sequence[Bar] = (),
-           coarse_step: int | None = None) -> list[Bar]:
+           coarse_step: int | None = None, fine_step: int = MIN) -> list[Bar]:
     """The last `limit` bars of `tf` as of t_ms, the forming one last, like the REST klines endpoint.
     `coarse` (optional) holds closed bars of `coarse_step` (a divisor of tf, e.g. hourly for 1h/4h, daily for 1d)
     that stand in for the 1m bars over closed history."""
     step = tf_ms(tf)
+    if step < fine_step:
+        raise ValueError(f"{tf} bars need fine bars of {step // MIN}m or less, have {fine_step // MIN}m")
     cur = t_ms // step * step
     first = cur - (max(limit, 1) - 1) * step
-    src = _sources(fine, t_ms, first, coarse, coarse_step)
+    src = _sources(fine, t_ms, first, coarse, coarse_step, fine_step)
     out = group(src, step)
     if not out or out[-1][TS] != cur:
-        prior = src[-1][C] if src else _last_close(fine, coarse, coarse_step, first, t_ms)
+        prior = src[-1][C] if src else _last_close(fine, coarse, coarse_step, first, t_ms, fine_step)
         if prior is not None:
             out.append((cur, prior, prior, prior, prior, 0.0, 0.0, 0, 0.0, 0.0))
     return out[-limit:]
 
 
 def _last_close(fine: Sequence[Bar], coarse: Sequence[Bar], coarse_step: int | None, before: int,
-                t_ms: int) -> float | None:
+                t_ms: int, fine_step: int = MIN) -> float | None:
     """Close of the latest bar closed before `before` (a coin with no trade inside the requested window)."""
-    f = [b for b in between(fine, 0, before) if b[TS] + MIN <= t_ms]
+    f = [b for b in between(fine, 0, before) if b[TS] + fine_step <= t_ms]
     if f:
         return f[-1][C]
     c = [b for b in between(coarse, 0, before) if b[TS] + (coarse_step or 0) <= t_ms] if coarse_step else []
@@ -115,12 +118,13 @@ def ticker(fine: Sequence[Bar], t_ms: int, coarse: Sequence[Bar] = (), coarse_st
 
 
 def predicted_funding(prem: Sequence[Bar], t_ms: int, last_settle_ms: int, interval_h: int,
-                      interest_8h: float = 0.0001, clamp: float = 0.0005, cap: float = 0.02) -> float | None:
+                      interest_8h: float = 0.0001, clamp: float = 0.0005, cap: float = 0.02,
+                      fine_step: int = MIN) -> float | None:
     """Binance's estimate of the next funding rate (binance.com/en/support/faq/360033525031, 2026-10-02):
     F = [P + clamp(I - P, -0.05%, +0.05%)] / (8 / N), with N the interval in hours, I = 0.01% and P the average
     premium index since the last settlement: time-weighted (1..n) for N > 1, equally weighted for N = 1; capped at
     +-2% for most contracts. Approximate here: one premium sample per closed minute (Binance samples every 5 s)."""
-    xs = [b[C] for b in between(prem, last_settle_ms, t_ms) if b[TS] + MIN <= t_ms]
+    xs = [b[C] for b in between(prem, last_settle_ms, t_ms) if b[TS] + fine_step <= t_ms]
     if not xs:
         return None
     if interval_h == 1:

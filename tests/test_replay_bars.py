@@ -121,3 +121,19 @@ def test_hourly_taker_ratio_uses_closed_hours():
     bars = series(200)                                     # each minute: v 10, taker buy 6 -> buy/sell 1.5
     r = RB.taker_ratios(bars, T0 + 3 * HOUR + 5 * MIN, 6)
     assert r == [pytest.approx(1.5)] * 3
+
+
+def test_five_minute_fine_bars_build_the_same_coarser_bars():
+    """Stage 2 keeps mark / premium / spot at 5m: a bar closes when its 5 minutes are over, not after one."""
+    bars = series(600)
+    five = RB.group(bars, 5 * MIN)
+    for t in (T0 + 2 * HOUR + 30 * MIN, T0 + 3 * HOUR, T0 + 7 * HOUR + 35 * MIN):
+        for tf, lim in (("5m", 24), ("15m", 8), ("1h", 5)):
+            assert RB.klines(five, tf, t, lim, fine_step=5 * MIN) == RB.klines(bars, tf, t, lim)
+    t = T0 + 2 * HOUR + 32 * MIN                           # the 02:30 5m bar is still open at 02:32
+    k = RB.klines(five, "1h", t, 1, fine_step=5 * MIN)
+    assert k[-1][RB.C] == bars[149][4]                     # last close from the 02:25 bar (closed at 02:30)
+    prem = [(T0 + i * 5 * MIN, 0, 0, 0, 0.0001, 0, 0, 0, 0, 0) for i in range(24)]
+    assert RB.predicted_funding(prem, T0 + HOUR, T0, 8, fine_step=5 * MIN) == pytest.approx(0.0001)
+    with pytest.raises(ValueError):
+        RB.klines(five, "1m", t, 5, fine_step=5 * MIN)
