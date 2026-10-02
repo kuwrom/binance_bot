@@ -46,7 +46,13 @@ class PositionChecks:
             await self.ex.resync_time()
             self._last_resync = time.time()
         live = await tr._raw_positions()
-        for res in await reconcile.reconcile(tr, live):
+        try:   # journalling closed trades must never cost the stop checks below
+            closed = await reconcile.reconcile(tr, live)
+        except Exception as e:  # noqa: BLE001
+            log.exception("reconcile failed")
+            await send_safe(self.n, "reconcile_error", f"{type(e).__name__}: {e}", cooldown_s=1800)
+            closed = []
+        for res in closed:
             await self.n.send("trade_closed", f"{res['reason']}: net {res['net']:+.2f} USDT (fees {res['fees']:.2f}, "
                               f"funding {res['funding']:.2f})", res["symbol"], cooldown_s=0, urgent=res["liquidated"])
         acct = await tr.account(live)

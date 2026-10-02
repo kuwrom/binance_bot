@@ -100,6 +100,23 @@ async def test_a_triggered_stop_fills_under_its_own_order_id_and_since_is_a_hard
     assert await fake.fapiPrivateGetIncome({"startTime": trades[1]["timestamp"] + 1}) == []
 
 
+async def test_user_trades_answer_7_day_windows_as_ccxt_asks_for_them():
+    fake = FakeCcxt()
+    fake.clock_s = -9 * 86400                                              # a short opened 9 days ago
+    await short(fake)
+    fake.advance(9 * 86400)
+    await fake.create_order(SYM, "market", "buy", 100, None, {"reduceOnly": True})
+    sell, buy = fake.fills
+    assert await fake.fetch_my_trades(SYM, since=sell["timestamp"]) == [sell]   # ccxt caps endTime at since + 7 d
+    with pytest.raises(ccxt.BadRequest, match="-1127"):                    # more than 7 days apart
+        await fake.fetch_my_trades(SYM, since=sell["timestamp"], params={"until": buy["timestamp"]})
+    assert await fake.fetch_my_trades(SYM) == [buy]                        # neither bound: the last 7 days
+    assert await fake.fetch_my_trades(SYM, since=buy["timestamp"] - 1, params={"until": buy["timestamp"] - 1}) == []
+    fake.fills += [{**buy, "id": str(i)} for i in range(3, 1203)]
+    assert len(await fake.fetch_my_trades(SYM, since=buy["timestamp"])) == 500        # default limit
+    assert len(await fake.fetch_my_trades(SYM, since=buy["timestamp"], limit=5000)) == 1000
+
+
 async def test_a_prearmed_stop_without_a_position_is_rejected_when_it_triggers():
     fake = FakeCcxt()
     pre = await stop(fake, 1.10, qty=100)                                    # accepted: no check before trigger

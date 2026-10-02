@@ -25,6 +25,12 @@ def no_such_order():   # -2013 NO_SUCH_ORDER (common map)
     return ccxt.OrderNotFound(_body(-2013, "Order does not exist."))
 
 
+def lookup_interval_too_big():
+    # -1127 MORE_THAN_XX_HOURS (common map -> BadRequest). Inferred: Account-Trade-List says startTime..endTime "cannot
+    # be longer than 7 days" but not which code it answers; -1127 is the error-code page's interval error
+    return ccxt.BadRequest(_body(-1127, "More than 168 hours between startTime and endTime."))
+
+
 def margin_insufficient():   # -2019 (linear map -> InsufficientFunds)
     return ccxt.InsufficientFunds(_body(-2019, "Margin is insufficient."))
 

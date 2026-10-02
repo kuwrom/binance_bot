@@ -11,6 +11,7 @@ from tests import fake_errors as err
 
 SYM = "PUMP/USDT:USDT"
 FEE = 0.0005
+WEEK_MS = 7 * 86_400_000
 FORGET_MS = 3 * 86_400_000   # Query-Order: an unfilled CANCELED/EXPIRED order is not found once 3 days old
 # ccxt 4.5.84 parse_order_status() for algoStatus (Query-Algo-Order doc / ALGO_UPDATE statuses)
 ALGO_STATUS = {"NEW": "open", "TRIGGERING": "open", "TRIGGERED": "closed", "FINISHED": "closed",
@@ -134,6 +135,22 @@ class Engine:
             # (github.com/bcup02/trade-alerts PR #65); a reduce-only stop stays and is rejected if it triggers
             for i in [i for i in self.stops if self._algo_sym(i) == s]:
                 self._retire(i, "EXPIRED")
+
+    async def fetch_my_trades(self, s, since=None, limit=None, params=None):
+        """GET /fapi/v1/userTrades the way ccxt 4.5.84 asks for it (async_support/binance.py fetch_my_trades): since ->
+        startTime, params until/endTime -> endTime, and given only a since a week old or more ccxt itself caps endTime
+        at min(since + 7 d, now) by ITS clock. Account-Trade-List doc: startTime..endTime are hard bounds at most 7 days
+        apart, neither = the last 7 days, limit 500 by default and 1000 at most (ccxt clamps it). Which rows a window
+        holding more than `limit` answers is undocumented: the oldest here (the desk must not rely on it)."""
+        p = params or {}
+        end = p.get("until", p.get("endTime"))
+        if since is not None and end is None and time.time() * 1000 - since >= WEEK_MS:
+            end = min(since + WEEK_MS, int(time.time() * 1000))
+        start = since if since is not None else (end if end is not None else self.now_ms()) - WEEK_MS
+        if end is not None and end - start > WEEK_MS:
+            raise err.lookup_interval_too_big()
+        rows = [f for f in self.fills if f["symbol"] == s and start <= f["timestamp"] <= (end or float("inf"))]
+        return rows[:min(limit or 500, 1000)]
 
     # ------------------------------------------------------------ margin
     def available(self) -> float:

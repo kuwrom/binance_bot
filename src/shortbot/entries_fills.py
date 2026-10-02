@@ -7,7 +7,7 @@
   exchange-truth PnL, fees and funding, so the loss streak, R stats and lessons see it. The orders it folded in are
   recorded (entry_features.round_trip.orders): a row adopted later (entry_intents) links to it, never counts twice
 - a fill into a journal trade still 'open' although its position is gone links to that trade: reconcile closes it
-  with this fill's income in it (split between two trades, the unbounded finalize would count it twice: #15)
+  through this fill (a trade ends at the flat point after the last fill attributed to it: episodes.match), once
 
 Binance USDⓈ-M (developers.binance.com, checked 2026-10-01): userTrades rows carry their orderId; startTime..endTime
 spans at most 7 days (ccxt caps endTime at since + 7 d on its own), 3 months back (Account-Trade-List). A triggered
@@ -22,6 +22,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import reconcile
+from .episodes import qty as _qty
+from .episodes import vwap as _vwap
+from .episodes import walk   # the one flat-to-flat walk: reconcile matches journal trades with it too
 from .market.market_map import cached
 from .sessions import session_bucket
 
@@ -51,14 +54,6 @@ def _num(x: Any) -> int:
         return 0
 
 
-def _qty(xs: list[dict]) -> float:
-    return sum(float(x["amount"]) for x in xs)
-
-
-def _vwap(xs: list[dict]) -> float:
-    return sum(float(x["price"]) * float(x["amount"]) for x in xs) / _qty(xs)
-
-
 def own(trades: list[dict], order_id: Any) -> list[dict]:
     return [x for x in trades if str(x.get("order")) == str(order_id)]
 
@@ -85,34 +80,6 @@ def first_fill_ms(trades: list[dict], e: dict[str, Any], o: dict[str, Any]) -> i
     """When the order first filled: its earliest trade, else its last fill (lastTradeTimestamp), else None (now)."""
     mine = own(trades, e["order_id"])
     return int(mine[0]["timestamp"]) if mine else o.get("lastTradeTimestamp")
-
-
-def walk(trades: list[dict], order_id: Any) -> dict[str, Any] | None:
-    """From the order's first fill to the next flat point (sells add, buys reduce). None while the history doesn't
-    reach flat, or if it buys back more than was sold (the symbol wasn't flat before this fill: never guessed)."""
-    start = next((i for i, x in enumerate(trades) if str(x.get("order")) == str(order_id) and x["side"] == "sell"),
-                 None)
-    if start is None:
-        return None
-    sells: list[dict] = []
-    buys: list[dict] = []
-    net = 0.0
-    for i in range(start, len(trades)):
-        x = trades[i]
-        (sells if x["side"] == "sell" else buys).append(x)
-        net += float(x["amount"]) * (1 if x["side"] == "sell" else -1)
-        tol = 1e-9 * _qty(sells)
-        if net < -tol:
-            return None
-        if buys and net <= tol:
-            closed = int(x["timestamp"])
-            nxt = int(trades[i + 1]["timestamp"]) if i + 1 < len(trades) else None
-            return {"sells": sells, "qty": _qty(sells), "entry": _vwap(sells), "exit": _vwap(buys),
-                    "opened_ms": int(sells[0]["timestamp"]), "closed_ms": closed,
-                    "until_ms": max(closed, nxt - 1) if nxt else None,   # the next activity on the symbol isn't ours
-                    "orders": sorted({str(s["order"]) for s in sells}),
-                    "exit_orders": sorted({str(b["order"]) for b in buys})}
-    return None
 
 
 def new_trade(desk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> int:
@@ -175,8 +142,7 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
             _claim(desk, x, own(rt["sells"], x["order_id"]), tid)
     res = None
     try:
-        res = await reconcile.finalize(desk.tr, j.get_trade(tid), reason, until_ms=rt["until_ms"])
-        j.update_trade(tid, closed_at=iso(rt["closed_ms"]))
+        res = await reconcile.finalize(desk.tr, j.get_trade(tid), reason, episode=rt)   # closed_at = its exit fill
     except Exception as x:  # noqa: BLE001 - the trade stays open with no position: reconcile closes it (60 s)
         log.warning("round trip #%s not finalized: %s: %s", tid, type(x).__name__, x)
     others = await desk.cancel_group(e["group_id"], f"sibling #{e['id']} filled", keep=e["id"],

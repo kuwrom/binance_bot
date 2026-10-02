@@ -11,7 +11,7 @@
   GTD under 10 min (-5040), a client id that an OPEN order already uses (-4116)
 - fault injection: answers lost after the order ran (-1007 / 503), 503 before it ran, -1021 around cancels
 - `fake.prod` is the separate keyless prod client (`ex.public`): its prices can diverge from the demo book
-- fills and income (REALIZED_PNL / COMMISSION) so PnL reconciliation can be tested."""
+- fills and income (REALIZED_PNL / COMMISSION) so PnL reconciliation can be tested; userTrades in 7-day windows (fake_engine)"""
 
 from __future__ import annotations
 
@@ -319,10 +319,6 @@ class FakeCcxt(Engine):
                 if o["symbol"] == s and o["status"] == "open":
                     o["status"] = "canceled"
         return {"code": 200, "msg": "The operation of cancel all open order is done."}
-
-    async def fetch_my_trades(self, s, since=None, limit=None):
-        # startTime is a hard bound (Account-Trade-List / Get-Income-History docs; ccxt sends since as startTime)
-        return [f for f in self.fills if f["symbol"] == s and f["timestamp"] >= (since or 0)]
 
     async def fapiPrivateGetIncome(self, req):
         return [i for i in self.income if i["time"] >= req.get("startTime", 0)
