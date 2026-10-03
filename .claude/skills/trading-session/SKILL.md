@@ -6,7 +6,7 @@ when_to_use: User says "run a trading session", "let's trade", "check the market
 
 # Trading session
 
-The shortbot state was injected at session start: kill switch, stale processes, open positions, entry orders, unacknowledged alerts (urgent first) and active learnings. If you don't see it, run `.venv/bin/shortbot brief`.
+The shortbot state was injected at session start: kill switch, stale processes, open positions, entry orders, unacknowledged alerts (urgent first), the learnings rulebook and the learnings relevant now. If you don't see it, run `.venv/bin/shortbot brief`.
 
 ## 0. Start: session, kill switch, health
 - **`start_session` first, every session.** It acknowledges the alerts the brief listed (and returns them; until then they stay listed). It also links every later row, from the MCP tools and from this Claude session's `shortbot` CLI calls, to the session in the audit trail.
@@ -20,8 +20,9 @@ The shortbot state was injected at session start: kill switch, stale processes, 
 - **Unexplained change** (a stop moved, an order or decision you don't recognise): `shortbot audit --since 24h` shows who acted (mcp, cli, guardian, admin), from which Claude session and code version.
 
 ## 1. Learn before acting (2 minutes)
-- `journal`: read `stats.by_setup` / `by_experiment` (win rate, avg R, MAE/MFE) and the **learnings**.
-- Say in one line which learnings apply today. A learning the brief lists under "learnings to re-check" (review due, or supported on n < 30) isn't settled: don't lean on it alone. Re-checking is `research-review` work.
+- `journal`: read `stats.by_setup` / `by_experiment` (win rate, avg R, MAE/MFE) and the **learnings** index (one compact row each, best first).
+- The brief's **rulebook** holds the settled learnings (adopted, or supported on a real sample); **relevant now** adds the ones that match your open trades, resting entries and the latest scans. Before deciding on a coin or setup, search the rest: `learnings` with a query (`learnings "ZRO fakeout"`), `--setup` or `--id`.
+- Say in one line which learnings apply today. One marked "(not settled)" or listed under "learnings to re-check" (review due, n < 30, harmful, expired) isn't settled: don't lean on it alone. Re-checking is `research-review` work.
 - Run `session_clock` (`shortbot clock`). It shows the UTC session, minutes to funding, macro events and whether the desk is **cold**.
   - Cold means idle ≥ 6h or the first session of the UTC day. Run `warmup_start`, study the tape for 15 minutes (regime, governor, charts), then run `warmup_check`. Trade only coins that persisted.
   - Warm: skip the warm-up.
@@ -107,13 +108,13 @@ Unless the trigger needs an immediate market entry, place a **group of 3-5 limit
 ## 6. Decide and execute
 **Execution path.** You decide and execute; there is no per-trade approval step. The MCP tools and the `.venv/bin/shortbot` CLI run the same code and checks: vetoes, risk budget, account lock, governor, setup ladder, kill switch, audit trail. If an MCP tool refuses with `stale_code`, run the CLI command the refusal names. The CLI always runs the code on disk.
 - Enter only when the trigger is **confirmed**. Everything else goes on the watchlist with `log_decision("watch", ...)`, noting what would confirm it.
-- Every entry carries the full plan: trigger, invalidation, targets, time_stop_hours, auto flags. The thesis says why now, what confirmed it and which evidence card supports it.
+- Every entry carries the full plan: trigger, invalidation, targets, time_stop_hours, auto flags, and `uses_learnings`: the ids of the learnings the entry relies on (set at entry only; each closed trade scores them by its R). The thesis says why now, what confirmed it and which evidence card supports it.
 - Per candidate, settle: coin | setup | trigger confirmed? | entry | stop (tight or wide) | size/risk | plan | main risk.
 
 ## 7. Close the loop
 - Tell the human what you opened, closed or changed, and why, with that row per trade.
 - `log_decision("session_summary", ...)`: what we did, what we learned, what to check next time.
-- If something looked like a pattern: `add_learning` as a **hypothesis**, with the evidence (trade ids, candidate counts), its `provenance` (e.g. `["trade:12", "research_report"]`), its `kind` (usually `statistical`) and `n` / `days` (one trade = n 1).
+- If something looked like a pattern: `add_learning` as a **hypothesis**, with the evidence (trade ids, candidate counts), its `provenance` (e.g. `["trade:12", "research_report"]`), its `kind` (usually `statistical`) and `n` / `days` (one trade = n 1). A tell from one day or one coin gets a `valid_until`. If the result's `similar` already says it, append evidence to that learning (`update_learning`) instead.
 - Every few sessions, load `research-review`.
 
 ## Hard rules

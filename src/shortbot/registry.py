@@ -9,7 +9,7 @@ is a versioned record with a status, its episodes (as-of features + outcome) and
   baseline- and cost-adjusted, decided once on a fixed sample at alpha / M. Backtest "OOS" rows never promote.
   Probation / retirement when the last-90-day forward CI (day-clustered) crosses zero (decay alarm)
 - a new pattern whose episodes mostly coincide with an existing one's is flagged as a duplicate
-Evidence cards summarise a node for `read_coin`; lessons are full-text searchable (FTS5)."""
+Evidence cards summarise a node for `read_coin`; pattern definitions are full-text searchable (FTS5, lessons_fts)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from typing import Any
 from . import cluster_se as C
 from . import registry_forward as F
 from . import research_stats as rs
+from .journal_learnings import fts_query
 
 STATUSES = ("draft", "shadow", "live", "probation", "retired")
 LEVELS = ("regime", "lifecycle", "tape", "controller", "script", "setup", "detector", "strategy", "filter", "veto")
@@ -252,13 +253,12 @@ def tree(db) -> dict[str, list[dict[str, Any]]]:
 
 
 # ------------------------------------------------------------------ lessons search (FTS5)
+# Patterns only: learnings have their own index, kept current by triggers (journal_learnings.search_learnings).
 def reindex_lessons(db) -> int:
     ensure(db)
     db.execute("DELETE FROM lessons_fts")
-    rows = [("learning", f"#{i}", f"{s or ''} {st} {ev or ''}")
-            for i, s, st, ev in db.execute("SELECT id, setup, statement, evidence FROM learnings")]
-    rows += [("pattern", pid, f"{n or ''} {m or ''} {d or ''}")
-             for pid, n, m, d in db.execute("SELECT id, name, mechanism, definition FROM patterns")]
+    rows = [("pattern", pid, f"{n or ''} {m or ''} {d or ''}")
+            for pid, n, m, d in db.execute("SELECT id, name, mechanism, definition FROM patterns")]
     db.executemany("INSERT INTO lessons_fts (kind, ref, text) VALUES (?,?,?)", rows)
     db.commit()
     return len(rows)
@@ -266,10 +266,12 @@ def reindex_lessons(db) -> int:
 
 def search(db, query: str, limit: int = 8) -> list[dict[str, Any]]:
     ensure(db)
-    q = " OR ".join(w for w in query.replace('"', " ").split() if len(w) > 2) or query
+    q = fts_query(query)
+    if not q:
+        return []
     try:
         rows = db.execute("SELECT kind, ref, snippet(lessons_fts, 2, '[', ']', '…', 12) FROM lessons_fts WHERE"
-                          " lessons_fts MATCH ? ORDER BY rank LIMIT ?", (q, limit)).fetchall()
+                          " lessons_fts MATCH ? AND kind='pattern' ORDER BY rank LIMIT ?", (q, limit)).fetchall()
     except Exception:  # noqa: BLE001 - FTS syntax errors on odd input: no results, never a crash
         return []
     return [{"kind": k, "ref": r, "snippet": s} for k, r, s in rows]

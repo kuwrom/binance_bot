@@ -158,7 +158,8 @@ def seed_all(journal, bt_dir: str | Path | None = None, week_coins: list | None 
         out["week_study_episodes"] = seed_week_study(db, week_coins)
     if bt_dir and Path(bt_dir, "results.json").exists():
         out["backtest_episodes"] = seed_backtest(db, Path(bt_dir, "results.json"), Path(bt_dir, "trades.json"))
-    out["lessons_indexed"] = R.reindex_lessons(db)
+    out["lessons_indexed"] = R.reindex_lessons(db)            # pattern definitions
+    out["learnings_indexed"] = journal.rebuild_learnings_index()   # kept current by triggers: this repairs drift
     return out
 
 

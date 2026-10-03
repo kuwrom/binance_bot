@@ -143,7 +143,8 @@ class EntryPlacement:
         if stop <= limit:
             raise ValueError("stop must be above the limit price")
         plan = build_plan(st.default_plan, p.get("plan"))
-        errs = validate_plan(plan, limit, stop)
+        errs = validate_plan(plan, limit, stop) + [f"uses_learnings: no learning #{i}"
+                                                   for i in self.j.unknown_learnings(plan.uses_learnings)]
         if errs:
             raise ValueError("; ".join(errs))
         budget = await tr.budget(tr, sym, regime, p.get("conviction", "B"), p["setup"])

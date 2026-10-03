@@ -11,7 +11,7 @@ Each trade carries a **plan** (from its setup's defaults plus the entry decision
 ## Inputs
 - `positions`: plan, entry, exchange stop, MAE/MFE, targets_hit, age.
 - `coin_snapshot <coin>`: structure, funding trend, OI, taker flow, news now.
-- `journal`: the entry thesis (and the learnings for this setup).
+- `journal`: the entry thesis. The learnings for this setup: `learnings --setup <setup>`; the ones the entry relied on: `learnings --id <id>` for each id in the plan's `uses_learnings`.
 - Deeper, ad-hoc questions: `shortbot.lab` via Bash (see `research-review`).
 
 ## Start zero-based: `.venv/bin/shortbot reassess <coin>`

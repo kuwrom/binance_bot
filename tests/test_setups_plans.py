@@ -33,6 +33,14 @@ def test_plan_defaults_overrides_and_validation():
         build_plan({}, {"take_profit": 1})
 
 
+def test_uses_learnings_is_normalised_and_bad_citations_are_refused():
+    assert build_plan({}, None).uses_learnings == []
+    assert build_plan({}, {"uses_learnings": [11, 81, 11]}).uses_learnings == [11, 81]   # each once, in order
+    for bad in (["11"], [True], [0], [-3], "11", 11, [1.5], list(range(1, 12))):
+        with pytest.raises(ValueError, match="uses_learnings"):
+            build_plan({}, {"uses_learnings": bad})
+
+
 def test_breakdown_detects_losers_with_lower_highs():
     m = {"symbol": "DUMP/USDT:USDT", "change_24h": -15, "quote_volume": 1e8, "lower_high": True}
     assert "breakdown" in detect_all(m)

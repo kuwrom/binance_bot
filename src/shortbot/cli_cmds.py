@@ -71,8 +71,11 @@ async def registry(action: str, arg: str | None = None, status: str | None = Non
         return {**seed_all(j, bt_dir, patterns_data.load(j)), "scan_episodes": feed_candidates(j)}
     if action == "card":
         return R.card(j.db, arg) or {"error": "unknown pattern"}
-    if action == "search":
-        return R.search(j.db, arg or "", 10)
+    if action == "search":   # learnings in full: the `learnings` command
+        from .learnings_view import text
+        return {"patterns": R.search(j.db, arg or "", 10),
+                "learnings": [{"id": r["id"], "status": r["status"], "setup": r["setup"], "text": text(r)}
+                              for r in j.search_learnings(arg or "", limit=10)]}
     if action == "forward":
         from .registry_forward import report as forward_report
         return forward_report(j.db, arg)

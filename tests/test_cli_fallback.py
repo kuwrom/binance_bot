@@ -189,12 +189,18 @@ def test_set_params_rejects_a_malformed_pair():
 async def test_update_learning_parity(tmp_path, monkeypatch):
     def learning(a):
         a.journal.add_learning("pumps fade", "trades 1-3", None, "hypothesis", "low", ["trade:1"], kind="statistical")
+        a.journal.add_learning("pumps fade fast", "trades 1-9", None, "hypothesis", "low", ["trade:9"],
+                               kind="statistical")
     res_mcp, res_cli, calls = await _both(
         tmp_path, monkeypatch, learning,
         lambda: TOOLS["update_learning"](1, status="supported", evidence="trades 4-9", confidence="medium",
-                                             provenance=["trade:9", "research_report"], n=31, days=12),
+                                             provenance=["trade:9", "research_report"], n=31, days=12,
+                                             rule="fade pumps after a failed sweep", setup="pump_fade",
+                                             superseded_by=2, valid_until="2026-12-31"),
         ["update-learning", "1", "--status", "supported", "--evidence", "trades 4-9", "--confidence", "medium",
-         "--provenance", "trade:9", "--provenance", "research_report", "--n", "31", "--days", "12"])
+         "--provenance", "trade:9", "--provenance", "research_report", "--n", "31", "--days", "12",
+         "--rule", "fade pumps after a failed sweep", "--setup", "pump_fade", "--superseded-by", "2",
+         "--valid-until", "2026-12-31"])
     assert res_mcp == res_cli == {"ok": True}
     assert calls["cli"] == [("cli:update-learning", "done")]
 

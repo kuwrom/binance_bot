@@ -16,7 +16,7 @@ This is how the library of tapes, scripts and strategies stays honest as it grow
 | `pattern_plans` | One frozen plan per (id, version): registration time, spec hash, metric, target sample, decision rule. The table refuses UPDATE and DELETE. |
 | `pattern_trials` | Legacy (#31): every parameter set tried up to #31. Now every study writes to the trial register (`data/research/trials.db`, docs/BACKTEST.md "Trial register"); this table was copied in once after #31. Cards count a pattern's trials from the register (the legacy count when the register is absent). Exploratory: the backtest's deflated Sharpe counts them; the forward family (M) does not. |
 | `pattern_learnings` | Links from patterns to `learnings`. |
-| `lessons_fts` | FTS5 index over learnings and pattern definitions. |
+| `lessons_fts` | FTS5 index over pattern definitions (rebuilt by `registry seed`). Learnings have their own index, `learnings_fts`, kept current by triggers (`journal_learnings.py`); `read_coin` and `registry search` query both. |
 
 ## Rules (enforced in code)
 - **A new version** is created when the definition, detector, metric or an explicit plan changes. Old episodes stay with the old version.

@@ -105,7 +105,8 @@ async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, pl
     setup: a registered setup (list_setups) or 'exp_<name>'. thesis: why now, what confirmed it.
     plan (optional, merged over the setup's defaults): trigger, invalidation, targets [{price, fraction}],
     time_stop_hours, breakeven_at_pct, trail_activate_pct, trail_pct, review_every_hours, kill_conditions [..],
-    auto {breakeven, trail, targets, time_stop} = what the guardian may execute without asking.
+    auto {breakeven, trail, targets, time_stop} = what the guardian may execute without asking, uses_learnings [ids]
+    = the learnings this entry relies on (set at entry only, unknown ids refused; their outcome scores come from it).
     Omit notional_usdt to auto-size to the per-trade risk cap. Scanner vetoes, a cold desk and a hostile/unknown
     regime block the trade unless veto_override gives a research reason. An explicit notional_usdt that risks more
     than the current risk budget is refused unless budget_override gives one. Neither lifts a blocked budget (governor
@@ -145,7 +146,8 @@ async def move_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]
                                   metavar="JSON", convert=json.loads), Arg("reason", "--reason")))
 async def update_plan(symbol: str, changes: dict[str, Any], reason: str) -> dict[str, Any]:
     """Change an open trade's plan (targets, time stop, trailing, auto flags...). Auto flags let the
-    guardian act on its own, so set them deliberately. The desk's pins (r1_usdt, full_size, ladder_live) are kept."""
+    guardian act on its own, so set them deliberately. The desk's pins (r1_usdt, full_size, ladder_live) are kept;
+    uses_learnings is set at entry only."""
     app = get_app()
     tr = app.journal.active_trade(to_symbol(symbol))
     if not tr or tr["status"] != "open":
@@ -213,7 +215,8 @@ async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.
     """Limit-entry GROUP (3-5 shorts at better levels). Each: {symbol, limit_price (ABOVE market), stop_price, setup,
     thesis, plan?, leverage?, level_type (round_number|prior_high|sweep|vwap_band|ema_retest), level_reason,
     cancel_below?, conviction? (C|B|A|M, default B), veto_override? (research reason; no budget override: always
-    sized from the current risk budget)}. GTD expiry on the exchange (ttl_hours <= 24); pre-armed reduce-only stop;
+    sized from the current risk budget)}; plan.uses_learnings as in open_short (carried onto the trade at the fill).
+    GTD expiry on the exchange (ttl_hours <= 24); pre-armed reduce-only stop;
     the guardian protects fills within 5 s and cancels the siblings of the first fill. Resting entries are withdrawn
     while the governor halts new entries or a market pause is on (one placed over that pause stays). A send whose
     outcome is unknown (timeout, 5xx) is listed under `unknown`: it may rest on the book, so don't re-propose it."""

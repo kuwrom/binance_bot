@@ -14,7 +14,7 @@ from datetime import datetime
 
 from . import alerts_view, killswitch, procs, setup_ladder_view
 from .entries import EntryDesk
-from .untrusted import clean, flat, third_party_alert, third_party_tag
+from .untrusted import clean
 
 BRIEF_TIMEOUT_S = 20
 BACKUP_MAX_AGE_H = 36
@@ -67,20 +67,11 @@ async def brief(app) -> str:
         lines += alerts_view.brief_lines(j)
     except Exception as e:  # noqa: BLE001
         lines.append(f"### ⚠️ could not load alerts: {type(e).__name__}: {e}")
-    ls = j.learnings()
-    if ls:
-        from . import learnings_view   # kind / sample / review date (#28): flags, never gates
-        try:
-            ls = learnings_view.annotate(j, ls)
-        except Exception as e:  # noqa: BLE001
-            lines.append(f"- ⚠️ could not audit learnings: {type(e).__name__}: {e}")
-        lines.append("### active learnings")
-        lines += [f"- #{x['id']} [{x['status']}/{x['confidence']}"
-                  + (f" {learnings_view.tag(x['audit'])}" if "audit" in x else "")
-                  + f"] {x['setup'] or 'all'}: {flat(x['statement'], 300)}"
-                  + (" ⚠️ evidence from third-party text" if _third_party(j, x.get("provenance")) else "")
-                  for x in ls[:10]]
-        lines += learnings_view.brief_lines(ls) if all("audit" in x for x in ls) else []
+    try:   # the rulebook, what is relevant now, what to re-check
+        from . import learnings_brief
+        lines += learnings_brief.section(j, orders)
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"### ⚠️ could not load learnings: {type(e).__name__}: {e}")
     from .warmup import desk_clock
     dc = desk_clock(app.settings, j)
     c = dc["clock"]
@@ -107,15 +98,3 @@ def backup_line(j, now: float | None = None) -> str:
         return (f"- ⚠️ backup: last verified copy {age_h:.0f} h ago (> {BACKUP_MAX_AGE_H} h): check the backup job"
                 f"{off}")
     return f"- backup verified {age_h:.0f} h ago{off}"
-
-
-def _third_party(j, provenance: list[str] | None) -> bool:
-    """Did a learning's evidence come from third-party text (a news tool, or a news/announcement alert)?"""
-    for tag in provenance or []:
-        if third_party_tag(tag):
-            return True
-        if tag.startswith("alert:") and tag[6:].isdigit():
-            kind = alerts_view.kind_of(j, int(tag[6:]))
-            if kind and third_party_alert(kind):
-                return True
-    return False

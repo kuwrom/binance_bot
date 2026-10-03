@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import Any
 
 WRITES = ("INSERT", "UPDATE", "DELETE", "REPLACE")
-STORES = ("journal.py", "journal_research.py", "journal_writer.py", "intents.py")
+STORES = ("journal.py", "journal_research.py", "journal_learnings.py", "journal_writer.py", "intents.py")
 
 
 def _on_loop() -> bool:
