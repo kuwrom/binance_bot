@@ -348,14 +348,14 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 - Should the gateway re-check the hard caps, or trust the caller's policy? Recommended: re-check, under the effective limits (§4.1).
 - Remote sessions would need remote journal reads, which is out of scope. DEPLOY §5 already runs Claude Code on the server.
 
-**Decisions for the owner:**
-- **D1 Where:** own process (recommended) or inside the guardian (one process fewer, restarts with every merge).
-- **D2 Topology:** the desk host holds the journal, the gateway and the guardian, with sessions in tmux on it (DEPLOY §5). No laptop-to-AWS write path except over SSH.
-- **D3 Break-glass when the gateway is down:** same host only, for the `killswitch.ALLOWED` set and guardian protection (recommended); never; or also cross-host.
-- **D4 Longs:** LONG_BUILD phase 2 waits for step 8 (recommended; already its plan). Revisit if the gateway slips past ~6 weeks.
-- **D5 Stale guard after step 5:** protocol version only for intents (recommended) or keep refusing every write from stale code.
-- **D6 Soak periods** before steps 5 and 6 go default-on (suggested: 3 demo days each, with no `breakglass` or `unknown` rows left unexplained).
-- **D7 Exchange user data stream** in the gateway (step 9): yes or later.
+**Decisions (settled 2026-10-03; the owner agreed to one desk host and left the rest to practicality):**
+- **D1 Where:** its own process, `shortbot-gateway`. Merges restart the guardian, so the gateway must not restart with it.
+- **D2 Topology:** one desk host holds the journal, the gateway, the guardian and the trading sessions. Today that host is the laptop. When the AWS box is set up, all four move together, with sessions in tmux over SSH (DEPLOY §5). The journal and the order path are never split across hosts.
+- **D3 Break-glass when the gateway is down:** same host only, for the `killswitch.ALLOWED` set and guardian protection; cross-host callers fail closed.
+- **D4 Longs:** LONG_BUILD phase 2 waits for step 8.
+- **D5 Stale guard after step 5:** only the protocol version is checked for intents. The gateway runs the code on disk, so a stale client can't send a stale order path.
+- **D6 Soak periods:** 3 demo days before steps 5 and 6 go default-on, with no `breakglass` or `unknown` rows left unexplained.
+- **D7 Exchange user data stream:** now. #54 builds it in the guardian as a latency trigger, with REST polls as the truth, and step 9 moves it into the gateway.
 
 ## Sources (checked 2026-10-02)
 - NautilusTrader:

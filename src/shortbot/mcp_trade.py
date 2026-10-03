@@ -79,12 +79,12 @@ async def positions() -> list[dict[str, Any]]:
     return await get_app().trader.positions()
 
 
-@tool(human=True)
+@tool
 async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, plan: dict[str, Any] | None = None,
                      notional_usdt: float | None = None, leverage: int = 2,
                      veto_override: str | None = None, conviction: str = "B",
                      budget_override: str | None = None) -> dict[str, Any]:
-    """Open a market short with a mandatory exchange stop. REQUIRES HUMAN APPROVAL.
+    """Open a market short with a mandatory exchange stop; executes on the exchange (vetoes, risk budget, kill switch).
     setup: a registered setup (list_setups) or 'exp_<name>'. thesis: why now, what confirmed it.
     plan (optional, merged over the setup's defaults): trigger, invalidation, targets [{price, fraction}],
     time_stop_hours, breakeven_at_pct, trail_activate_pct, trail_pct, review_every_hours, kill_conditions [..],
@@ -100,10 +100,10 @@ async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, pl
                                              veto_override, conviction, budget_override)
 
 
-@tool(human=True)
+@tool
 async def close_position(symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,
                          expect_contracts: float | None = None, of_original: bool = False) -> dict[str, Any]:
-    """Buy back all or a fraction of a short (reduce-only). REQUIRES HUMAN APPROVAL. A full close records
+    """Buy back all or a fraction of a short (reduce-only); executes on the exchange. A full close records
     exchange-truth PnL (fees + funding included) and your lesson in the journal. `fraction` is of the CURRENT size:
     pass the contracts you saw as expect_contracts (refused if the position changed since, e.g. the guardian took a
     target). For a plan target use of_original=true: fraction = share of the ORIGINAL size gone by the end, as plan
@@ -117,10 +117,10 @@ async def move_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]
     return await get_app().trader.move_stop(symbol, new_stop, reason)
 
 
-@tool(human=True)
+@tool
 async def update_plan(symbol: str, changes: dict[str, Any], reason: str) -> dict[str, Any]:
-    """Change an open trade's plan (targets, time stop, trailing, auto flags...). REQUIRES HUMAN APPROVAL,
-    because auto flags let the guardian act on its own. The desk's pins (r1_usdt, full_size, ladder_live) are kept."""
+    """Change an open trade's plan (targets, time stop, trailing, auto flags...). Auto flags let the
+    guardian act on its own, so set them deliberately. The desk's pins (r1_usdt, full_size, ladder_live) are kept."""
     app = get_app()
     tr = app.journal.active_trade(to_symbol(symbol))
     if not tr or tr["status"] != "open":
@@ -158,19 +158,19 @@ async def risk_budget(symbol: str, conviction: str = "B", setup: str | None = No
     return await app.trader.budget(app.trader, to_symbol(symbol), reg, conviction, setup)
 
 
-@tool(human=True)
+@tool
 async def widen_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]:
     """Widen a stop ONCE per trade; size is cut automatically so the loss at the new stop stays ≤ the initial 1R."""
     return await PositionOps(get_app().trader).widen_stop(symbol, new_stop, reason)
 
 
-@tool(human=True)
+@tool
 async def add_to_winner(symbol: str, notional_usdt: float, new_stop: float, reason: str) -> dict[str, Any]:
     """Pyramid into a profitable short: the stop is tightened first so total worst case after the add ≤ 1R."""
     return await PositionOps(get_app().trader).add_to_winner(symbol, notional_usdt, new_stop, reason)
 
 
-@tool(human=True)
+@tool
 async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.0,
                           warmup_override: str | None = None) -> dict[str, Any]:
     """Limit-entry GROUP (3-5 shorts at better levels). Each: {symbol, limit_price (ABOVE market), stop_price, setup,
@@ -200,7 +200,7 @@ async def cancel_entry_group(group_id: str, reason: str) -> dict[str, Any]:
     return await EntryDesk(get_app().trader).cancel_group(group_id, reason)
 
 
-@tool(human=True)
+@tool
 async def amend_entry(entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
     """Move a pending limit ONCE (don't chase). Lowering it re-runs the risk check (more risk at the same size) and
     is refused for a split entry's leg; every amend is a logged decision."""

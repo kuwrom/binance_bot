@@ -74,4 +74,4 @@ async def test_mcp_tools_and_cli_subcommands_match_the_snapshot(monkeypatch):
         for name in want[key]:
             assert got[key][name] == want[key][name], f"{key}/{name} changed"
     human = sorted(n for n, t in got["tools"].items() if (t["meta"] or {}).get("anthropic/requiresUserInteraction"))
-    assert {"open_short", "close_position", "flatten_all", "set_risk_params"} <= set(human)
+    assert human == [], f"owner decision 2026-10-02: no per-call approval gates, found {human}"

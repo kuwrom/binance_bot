@@ -202,9 +202,9 @@ async def test_cli_shows_and_trips_but_cannot_clear():
         p.parse_args(["kill-switch", ACTIVE])
 
 
-async def test_mcp_tools_can_trip_and_flatten_needs_approval_but_nothing_clears():
+async def test_mcp_tools_can_trip_and_flatten_but_nothing_clears():
     from shortbot.mcp_server import mcp
     tools = {x.name: x for x in await mcp.list_tools()}
-    assert (tools["flatten_all"].meta or {}).get("anthropic/requiresUserInteraction")
-    assert not tools["halt_trading"].meta and not tools["trading_state"].meta
+    assert {"flatten_all", "halt_trading", "trading_state"} <= set(tools)
+    assert not any((t.meta or {}).get("anthropic/requiresUserInteraction") for t in tools.values())
     assert not [n for n in tools if "clear" in n or "resume" in n or "unhalt" in n]

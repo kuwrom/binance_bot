@@ -48,8 +48,8 @@ tmux new -A -s desk          # the session survives disconnects
 cd ~/binance_bot && claude   # first run: log in; approve the project's 'shortbot' MCP server
 ```
 Then say "run a trading session". Claude loads the `trading-session` skill.
-- **Approval prompts.** Nine MCP tools that change money at risk are flagged `requiresUserInteraction`: `open_short`, `propose_entries`, `close_position`, `add_to_winner`, `widen_stop`, `amend_entry`, `update_plan`, `set_risk_params` and `flatten_all`. Claude Code asks you on **every** call, even in auto or bypass mode, and dontAsk mode denies them. That needs Claude Code v2.1.199 or later; check with `claude --version`.
-- **The CLI.** `.claude/settings.json` allowlists `.venv/bin/shortbot *`. The CLI runs the same actions with the same checks and audit trail, and it doesn't ask. Only `update_plan` and `set_risk_params` have no CLI form.
+- **No approval prompts.** The agent trades on its own judgement (owner decision, 2026-10-02): no MCP tool is flagged `requiresUserInteraction`. Money at risk is bounded in code: vetoes, risk budget, account lock, governor, setup ladder, kill switch, stale-code guard, audit trail. Allowlist `mcp__shortbot__*` in `.claude/settings.json` so tools never prompt.
+- **The CLI.** `.claude/settings.json` allowlists `.venv/bin/shortbot *`. Every MCP write tool has a CLI form with the same checks and audit trail (#68). An MCP server on stale code refuses writes and names the CLI command to use instead.
 - **Secrets.** Claude is denied read and write access to `.env` (`.claude/settings.json`). Shell deny rules are best-effort, so don't give Claude a shell on a box with live keys if you don't trust the session.
 - **Kill switch.** Claude may trip it (`halt_trading`, `shortbot kill-switch`), and the guardian trips it on its loss limits. Only you clear it, from your own terminal: `.venv/bin/shortbot-admin clear --reason ...` (docs/RISK_GOVERNANCE.md).
 

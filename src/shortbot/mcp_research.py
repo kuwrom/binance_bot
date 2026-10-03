@@ -78,9 +78,9 @@ async def risk_params() -> dict[str, Any]:
     return _params().describe()
 
 
-@tool(human=True)
+@tool
 async def set_risk_params(changes: dict[str, float], reasoning: str, experiment: str) -> dict[str, Any]:
-    """Research: change risk limits within the human-set bounds. REQUIRES HUMAN APPROVAL. Tunable: max_leverage,
+    """Research: change risk limits within the human-set bounds; tell the human. Tunable: max_leverage,
     max_position_notional, max_total_notional, max_positions, risk_per_trade_pct, daily_loss_limit_pct,
     min_stop_distance_pct, max_stop_distance_pct, min_quote_volume_24h, liq_buffer_pct. experiment = tag that owns
     the params it sets; earlier experiments keep the params it doesn't touch. Trades carry every active experiment

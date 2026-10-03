@@ -105,7 +105,7 @@ Unless the trigger needs an immediate market entry, place a **group of 3-5 limit
 - Never a single close a fraction of a percent past it. Fake-outs run 2-5% and can close beyond (ZRO #8, 2026-09-29).
 
 ## 6. Decide and execute
-**Execution path.** Nine MCP tools are flagged `requiresUserInteraction`, so they prompt the owner on every call: `open_short`, `propose_entries`, `close_position`, `add_to_winner`, `widen_stop`, `amend_entry`, `update_plan`, `set_risk_params` and `flatten_all`. The `.venv/bin/shortbot` CLI runs the same code and checks (vetoes, risk budget, governor, setup ladder, kill switch, audit trail). `update_plan` and `set_risk_params` have no CLI form.
+**Execution path.** You decide and execute; there is no per-trade approval step. The MCP tools and the `.venv/bin/shortbot` CLI run the same code and checks: vetoes, risk budget, account lock, governor, setup ladder, kill switch, audit trail. If an MCP tool refuses with `stale_code`, run the CLI command the refusal names. The CLI always runs the code on disk.
 - Enter only when the trigger is **confirmed**. Everything else goes on the watchlist with `log_decision("watch", ...)`, noting what would confirm it.
 - Every entry carries the full plan: trigger, invalidation, targets, time_stop_hours, auto flags. The thesis says why now, what confirmed it and which evidence card supports it.
 - Per candidate, settle: coin | setup | trigger confirmed? | entry | stop (tight or wide) | size/risk | plan | main risk.

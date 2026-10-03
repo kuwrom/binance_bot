@@ -7,7 +7,7 @@ Claude Code ── skills (playbooks) ── lab (ad-hoc analysis, read-only)
      │
      └─MCP / CLI─► shortbot ──► Binance (demo | live)
                risk, veto + kill-switch checks server-side · per-trade plans · audit trail
-               approval prompts: deploy/DEPLOY.md §5
+               no per-trade approval: limits are enforced in code (deploy/DEPLOY.md §5)
                journal: trades (true PnL, MAE/MFE) · candidates + 72h outcomes · learnings
 Guardian (Docker, AWS Tokyo): reconcile, restore stops, execute plan rules, Telegram alerts,
                               label research outcomes, record metrics history

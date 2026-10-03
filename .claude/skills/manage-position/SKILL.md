@@ -42,7 +42,7 @@ ideal size for today's risk budget, and ranked actions. Rules: docs/POSITION_MAN
    - Without it, take the partial close from the plan with `of_original` (`--of-original`): the fraction is then of the ORIGINAL size, as the plan counts it, so a target the guardian already took closes nothing more (STX 2026-10-01).
 5. **Time stop**: past `time_stop_hours` with no follow-through means exit (the playbook says a dead short is capital at risk for nothing).
 6. **Profit protection**: breakeven and trailing are automatic when their auto flags are on. Otherwise suggest `move_stop`.
-7. **Update the plan when the facts change**, e.g. extend a time stop that is working, or add a target. Use `update_plan` and write down why. It prompts the owner on every call, because auto flags let the guardian act alone.
+7. **Update the plan when the facts change**, e.g. extend a time stop that is working, or add a target. Use `update_plan` (or `shortbot update-plan`) and write down why. Set auto flags deliberately: they let the guardian act alone.
 
 ## After the trade closes
 - The PnL in the journal comes from Binance income (fees and funding included). Add the `lesson` when closing.
