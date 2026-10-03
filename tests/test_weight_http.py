@@ -169,8 +169,8 @@ async def test_mcp_tools_run_under_their_class(monkeypatch):
         return {"verdict_for_shorts": "favorable"}
     app = SimpleNamespace(ex=None, journal=None, trader=SimpleNamespace(move_stop=record))
     monkeypatch.setattr(mcp_trade, "get_app", lambda: app)
-    monkeypatch.setattr(mcp_trade, "scanner", SimpleNamespace(market_regime=record, scan_shorts=record,
-                                                              coin_snapshot=record))
+    monkeypatch.setattr(mcp_trade, "regime", SimpleNamespace(market_regime=record))
+    monkeypatch.setattr(mcp_trade, "scanner", SimpleNamespace(scan_shorts=record, coin_snapshot=record))
     await mcp_trade.scan_shorts()
     await mcp_trade.coin_snapshot("BTC")
     await mcp_trade.move_stop("BTC", 1.0, "test")

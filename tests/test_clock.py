@@ -20,17 +20,16 @@ def test_default_is_the_wall_clock():
     assert abs(clock.now_ms() - time.time() * 1000) < 1000
     assert abs(clock.now_dt().timestamp() - time.time()) < 1
     assert clock.now_dt().tzinfo is not None
-    assert not clock.replaying()
 
 
 def test_at_pins_and_restores():
     with clock.at(T):
-        assert clock.now_ms() == T and clock.replaying()
+        assert clock.now_ms() == T
         assert clock.now_dt() == datetime.fromtimestamp(T / 1000, timezone.utc)
         with clock.at(T + 5):
             assert clock.now_ms() == T + 5
         assert clock.now_ms() == T
-    assert not clock.replaying()
+    assert abs(clock.now_ms() - time.time() * 1000) < 1000   # the wall clock again
 
 
 def test_tasks_inherit_the_pinned_clock():

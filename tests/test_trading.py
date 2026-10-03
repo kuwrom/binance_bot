@@ -166,7 +166,7 @@ async def test_ensure_stop_restores_or_force_closes():
 
 
 def test_protective_stop_detection_matches_real_ccxt_shape():
-    from shortbot.trading import is_protective_stop
+    from shortbot.stops import is_protective_stop
     real = {"type": "market", "side": "buy", "reduceOnly": True, "triggerPrice": 188.6,
             "info": {"orderType": "STOP_MARKET", "closePosition": True, "algoType": "CONDITIONAL"}}
     assert is_protective_stop(real)

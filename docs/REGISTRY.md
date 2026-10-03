@@ -14,7 +14,7 @@ This is how the library of tapes, scripts and strategies stays honest as it grow
 | `patterns` | One row per (id, version). Fields: level (regime, lifecycle, tape, controller, script, setup, detector, strategy, filter, veto), parent, mechanism (who is forced to trade), definition, detector, metric, status, source. |
 | `pattern_episodes` | One row per occurrence: symbol, time, source (scan / bt60 / week_study / forensics / live), `oos` flag, outcome (in the metric's unit), win, MAE, as-of features. |
 | `pattern_plans` | One frozen plan per (id, version): registration time, spec hash, metric, target sample, decision rule. The table refuses UPDATE and DELETE. |
-| `pattern_trials` | Legacy (#31): every parameter set tried up to #31. Now every study writes to the trial register (`data/research/trials.db`, docs/BACKTEST.md "Trial register"); `python -m shortbot.trial_register migrate` copies this table in once. Cards count a pattern's trials from the register (the legacy count when the register is absent). Exploratory: the backtest's deflated Sharpe counts them; the forward family (M) does not. |
+| `pattern_trials` | Legacy (#31): every parameter set tried up to #31. Now every study writes to the trial register (`data/research/trials.db`, docs/BACKTEST.md "Trial register"); this table was copied in once after #31. Cards count a pattern's trials from the register (the legacy count when the register is absent). Exploratory: the backtest's deflated Sharpe counts them; the forward family (M) does not. |
 | `pattern_learnings` | Links from patterns to `learnings`. |
 | `lessons_fts` | FTS5 index over learnings and pattern definitions. |
 

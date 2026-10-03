@@ -172,7 +172,7 @@ async def test_a_read_that_crashes_on_stale_code_says_so(tmp_path, monkeypatch):
     async def regime(ex):
         return {"verdict_for_shorts": "neutral"}
     monkeypatch.setattr("shortbot.risk_budget.governor_status", gs)
-    monkeypatch.setattr(mcp_desk.scanner, "market_regime", regime)
+    monkeypatch.setattr(mcp_desk.regime, "market_regime", regime)
     _disk_is(monkeypatch, NEW)
     with pytest.raises(ToolError) as e:
         await mcp_desk.governor_status()

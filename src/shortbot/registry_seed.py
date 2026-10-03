@@ -125,7 +125,7 @@ def seed_backtest(db, results_path: str | Path, trades_path: str | Path) -> dict
         _reg(db, id=f"strategy.{strat}", level="strategy", name=strat, definition=f"backtest/strategies*.py {strat}",
              detector="backtest", metric="trade_r", source="docs/BACKTEST.md")
         a, o = t.get("all") or {}, t.get("oos") or {}
-        R.add_trial(db, f"strategy.{strat}", {"trial": tname, **(t.get("params") or {})}, "bt60",
+        R.add_trial(f"strategy.{strat}", {"trial": tname, **(t.get("params") or {})}, "bt60",
                     {"n": a.get("n"), "n_coins": a.get("coins"), "mean": a.get("avg_r"), "t": a.get("t_2way"),
                      "t_kind": "2way", "oos_n": o.get("n"), "oos_mean": o.get("avg_r")})
         if strat in STRAT_LEARN:
@@ -152,14 +152,12 @@ def _ts(s: str) -> int:
 def seed_all(journal, bt_dir: str | Path | None = None, week_coins: list | None = None) -> dict[str, Any]:
     db = journal.db
     R.ensure(db)
-    from . import registry_forward as F
     from .library_seed import seed_library
     out: dict[str, Any] = {"static": seed_static(db), "scripts": seed_scripts(db), "library": seed_library(db)}
     if week_coins:
         out["week_study_episodes"] = seed_week_study(db, week_coins)
     if bt_dir and Path(bt_dir, "results.json").exists():
         out["backtest_episodes"] = seed_backtest(db, Path(bt_dir, "results.json"), Path(bt_dir, "trades.json"))
-    out["plans_backfilled"] = F.freeze_missing(db)                 # pre-#26 versions: the forward clock starts now
     out["lessons_indexed"] = R.reindex_lessons(db)
     return out
 
@@ -216,12 +214,10 @@ def feed_candidates(journal) -> int:
     becomes, once per symbol-episode (rescans within 24h are the same bet), a `scan` episode of the nodes it sat in
     AT SCAN TIME, scored against the same scan's unflagged coins after costs (features.adj); then closed trades
     (feed_trades). Each node's forward rows are rebuilt on every call. Returns the net change in rows."""
-    from . import registry_forward as F
     from .research import COST_PCT, HORIZON_H, funding_carry_24h
     from .research_stats import episodes
     db = journal.db
     R.ensure(db)
-    F.freeze_missing(db)
     targets = _targets(db, "scan")
     n = 0
     if targets:

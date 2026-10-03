@@ -7,8 +7,8 @@ created on demand by a writer; to a reader a missing file is an empty register.
 - Controls (placebo / random groups) are recorded with control=1 and never counted.
 - Each row may carry its daily series ({UTC day: summed outcome}); trials_eff clusters them into independent families
   (effective N). A trial without a series counts as its own family (conservative).
-- The old ledgers (journal pattern_trials, ladder trial_ledger) are copied in once by migrate_legacy (journal opened
-  read-only; idempotent via `origin`) and are not written any more.
+- The old ledgers (journal pattern_trials, ladder trial_ledger) were copied in once after #31 (origin
+  `pattern_trials:<id>` / `trial_ledger:<variant>`).
 - SHORTBOT_TRIALS_ASOF=<id> pins a rerun to the register as it was (results.json "register" records max_id).
 """
 
@@ -39,7 +39,7 @@ CREATE TRIGGER IF NOT EXISTS trials_no_delete BEFORE DELETE ON trials
 """
 COLS = ("study", "family", "name", "params", "spec", "metric", "control", "n", "days", "coins", "mean", "se", "t",
         "t_kind", "sr", "n_eff", "daily", "run_dir", "git_sha", "code_sha", "window", "origin", "created_at")
-# legacy pattern_trials.source -> the study that writes those trials now (same params shape, so the same spec)
+# a registry trial's source -> the study that writes those trials (same params shape, so the same spec)
 LEGACY_STUDY = {"bt60": "backtest", "flow_60d": "backtest", "long_sleeve_60d": "backtest", "rungs_60d": "rungs",
                 "rungs_daily": "rungs_daily", "carry_regime_daily": "carry_regime",
                 "funding_events_daily": "funding_events", "xs_daily": "xs_factors", "card_tests": "card_tests"}
@@ -67,16 +67,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _write(db_path: Path | None = None) -> sqlite3.Connection:
-    p = db_path or path()
+def _write() -> sqlite3.Connection:
+    p = path()
     p.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(p), timeout=30)
     db.executescript(SCHEMA)
     return db
 
 
-def _read(db_path: Path | None = None) -> sqlite3.Connection | None:
-    p = db_path or path()
+def _read() -> sqlite3.Connection | None:
+    p = path()
     if not p.exists():
         return None
     db = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=30)
@@ -100,17 +100,17 @@ def _values(study: str, r: dict[str, Any], prov: dict[str, Any] | None, run_dir:
             json.dumps({d: round(v, 4) for d, v in sorted(daily.items())}, separators=(",", ":")) if daily else None,
             None if run_dir is None else str(run_dir), git.get("sha"), (prov or {}).get("code_sha"),
             json.dumps((prov or {}).get("window"), default=str) if (prov or {}).get("window") else None,
-            r.get("origin"), r.get("created_at") or _now())
+            None, _now())   # origin: set only on the rows copied in from the old ledgers
 
 
 def record(study: str, rows: Iterable[dict[str, Any]], prov: dict[str, Any] | None = None,
-           run_dir: Path | str | None = None, db_path: Path | None = None) -> int:
+           run_dir: Path | str | None = None) -> int:
     """Append one row per trial (keys: name, family, params, metric, control, n, days, coins, mean, se, t, t_kind,
     sr, n_eff, daily). prov: provenance.stamp's dict (git sha, code sha, window). Returns the rows written."""
     vals = [_values(study, r, prov, None if run_dir is None else str(run_dir)) for r in rows]
     if not vals:
         return 0
-    db = _write(db_path)
+    db = _write()
     try:
         with db:
             db.executemany(f"INSERT OR IGNORE INTO trials ({', '.join(COLS)}) VALUES ({', '.join('?' * len(COLS))})",
@@ -124,10 +124,10 @@ def _asof(asof: int | None) -> int | None:
     return asof if asof is not None else (int(os.environ[ASOF_ENV]) if os.getenv(ASOF_ENV) else None)
 
 
-def summary(family: str | None = None, db_path: Path | None = None, asof: int | None = None) -> dict[str, Any]:
+def summary(family: str | None = None, asof: int | None = None) -> dict[str, Any]:
     """rows, distinct non-control specs, control specs, specs by study, max id. A missing register is empty."""
     out: dict[str, Any] = {"rows": 0, "specs": 0, "controls": 0, "by_study": {}, "max_id": 0}
-    db = _read(db_path)
+    db = _read()
     if db is None:
         return out
     try:
@@ -147,20 +147,19 @@ def summary(family: str | None = None, db_path: Path | None = None, asof: int | 
     return out
 
 
-def count(family: str | None = None, db_path: Path | None = None) -> int:
+def count(family: str | None = None) -> int:
     """Distinct non-control trials (of one family: a registry pattern id, its card's trial count). For the MCP and
     the guardian: a missing or unreadable register counts 0, never an error."""
     try:
-        return summary(family, db_path)["specs"]
+        return summary(family)["specs"]
     except (sqlite3.Error, OSError, ValueError):
         return 0
 
 
-def others(exclude: Iterable[str] = (), db_path: Path | None = None, asof: int | None = None
-           ) -> tuple[dict[str, dict[str, float]], int]:
+def others(exclude: Iterable[str] = (), asof: int | None = None) -> tuple[dict[str, dict[str, float]], int]:
     """({spec: daily series} of every counted trial with a series, number of counted specs without one), outside
     `exclude` (the caller's own specs). The latest row of a spec wins."""
-    db = _read(db_path)
+    db = _read()
     if db is None:
         return {}, 0
     skip, a = set(exclude), _asof(asof)
@@ -186,71 +185,14 @@ def backtest_row_key(strategy: str, name: str, params: dict[str, Any]) -> tuple[
     return f"strategy.{strategy}", {"trial": name, **params}
 
 
-def _ledger_match(p: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    """A --flow / --long legacy row (recorded by hand, without the trial name) -> the ledger trial it was, if
-    exactly one matches its params (and its strategy, when the row names one)."""
-    from .backtest.strategies_flow import trials_flow
-    from .backtest.strategies_long import trials_long
-    rest = {k: v for k, v in p.items() if k != "strategy"}
-    hits = [t for t in [*trials_flow(), *trials_long()]
-            if t.params == rest and p.get("strategy") in (None, t.strategy)]
-    return backtest_row_key(hits[0].strategy, hits[0].name, hits[0].params) if len(hits) == 1 else None
-
-
-def _legacy_rows(j: sqlite3.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    have = {r[0] for r in j.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    pt, tl = [], []
-    if "pattern_trials" in have:
-        for i, pid, params, src, n, mean, t, created in j.execute(
-                "SELECT id, pattern_id, params, source, n, mean, t, created_at FROM pattern_trials ORDER BY id"):
-            p = json.loads(params or "{}")
-            if src in ("flow_60d", "long_sleeve_60d") and (hit := _ledger_match(p)):
-                pid, p = hit
-            pt.append({"study": LEGACY_STUDY.get(src, f"legacy:{src}"), "family": pid, "params": p,
-                       "name": p.get("trial") or pid, "n": n, "mean": mean, "t": t,
-                       "t_kind": "welch_vs_placebo" if src == "bt60" else "legacy",
-                       "control": p.get("group") == "random",
-                       "origin": f"pattern_trials:{i}", "created_at": created})
-    if "trial_ledger" in have:
-        for variant, fam, params, created in j.execute("SELECT variant, family, params, created FROM trial_ledger"):
-            p = json.loads(params or "{}")
-            tl.append({"study": fam or "ladder", "family": fam or "ladder", "params": {"variant": variant, **p},
-                       "name": variant, "control": bool(p.get("placebo")), "origin": f"trial_ledger:{variant}",
-                       "created_at": created})
-    return pt, tl
-
-
-def migrate_legacy(journal: Path | str, db_path: Path | None = None) -> dict[str, int]:
-    """Copy the journal's pattern_trials and trial_ledger rows in (journal read-only; idempotent)."""
-    jp = Path(journal)
-    if not jp.exists():
-        return {"pattern_trials": 0, "trial_ledger": 0, "added": 0}
-    j = sqlite3.connect(f"file:{jp}?mode=ro", uri=True, timeout=30)
-    try:
-        pt, tl = _legacy_rows(j)
-    finally:
-        j.close()
-    by: dict[str, list[dict[str, Any]]] = {}
-    for r in pt + tl:
-        by.setdefault(r.pop("study"), []).append(r)
-    added = sum(record(study, rows, db_path=db_path) for study, rows in by.items())
-    return {"pattern_trials": len(pt), "trial_ledger": len(tl), "added": added}
-
-
 def main(argv: list[str] | None = None) -> int:
-    """python -m shortbot.trial_register summary | migrate [--journal PATH]  (migrate: once, after deploying #31)."""
+    """python -m shortbot.trial_register summary"""
     import argparse
     import sys
     ap = argparse.ArgumentParser(prog="python -m shortbot.trial_register")
-    ap.add_argument("action", choices=("summary", "migrate"))
-    ap.add_argument("--journal", type=Path, help="migrate from (default: SHORTBOT_DB, the journal)")
-    a = ap.parse_args(sys.argv[1:] if argv is None else argv)
-    out: dict[str, Any] = {"register": str(path())}
-    if a.action == "migrate":
-        from .provenance import desk_db
-        out["migrated"] = migrate_legacy(a.journal or desk_db())
-    out["summary"] = summary()
-    print(json.dumps(out, indent=1))
+    ap.add_argument("action", choices=("summary",))
+    ap.parse_args(sys.argv[1:] if argv is None else argv)
+    print(json.dumps({"register": str(path()), "summary": summary()}, indent=1))
     return 0
 
 

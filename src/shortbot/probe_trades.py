@@ -8,10 +8,9 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from . import clientid
+from . import errors
 from . import probe_kit as kit
 from .probe_kit import TRIG, Probe, algo_status, outcome, say
-from .stops import would_trigger
 
 TRIGGER_WAIT_S = 24     # probe 3: how long the near stop gets to trigger (polled every 2 s)
 ADL_POLLS, ADL_EVERY_S = 7, 5.0   # probe 13: adlQuantile "values update every 30 s" (its doc notes)
@@ -23,7 +22,7 @@ def _n_close(listed: list[dict] | None) -> int | None:
 
 
 def _refused(ok: bool, res: Any, code: int) -> bool:
-    return not ok and clientid.code(res) == code
+    return not ok and errors.code(res) == code
 
 
 async def second_close_stop(p: Probe) -> dict[str, Any]:
@@ -87,7 +86,7 @@ async def _near_stop(p: Probe, size: float) -> str | None:
         ok, o, _ = await p.stop(f"near reduce-only stop at mark + {k} tick(s)", px, close=False, qty=size)
         if ok:
             return str(o["id"])
-        if not would_trigger(o):
+        if errors.classify(o) is not errors.WouldTrigger:
             return None
     return None
 

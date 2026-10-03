@@ -1,8 +1,8 @@
 """#27 in the calibration report: overlapping research brackets count once per (source, symbol) episode, and
 P(target first) intervals are clustered by day (Wilson with the df-adjusted effective n)."""
 
-from shortbot.probability.evaluate import brier, expectancy, wilson
-from shortbot.research_stats import clustered_wilson
+from shortbot.probability.evaluate import brier, expectancy
+from shortbot.research_stats import clustered_wilson, wilson
 
 H = 3_600_000
 DAY = 24 * H

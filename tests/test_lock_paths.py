@@ -74,7 +74,7 @@ async def test_cancel_legs_holds_no_write_transaction_across_an_exchange_call(mo
     async def withdraw(_t, e, alert=None):
         seen.append(t.j.db.in_transaction)   # an open write here would span this (network) await
         return "unfilled"
-    monkeypatch.setattr("shortbot.entries.withdraw", withdraw)
+    monkeypatch.setattr("shortbot.entries_cancel.withdraw", withdraw)
     monkeypatch.setattr(tranches, "own_legs", lambda j, tid: j._rows("SELECT * FROM entries ORDER BY id"))
     got = await tranches.cancel_legs(t, 7, "trade closed")
     assert seen == [False, False] and len(got["unfilled"]) == 2 and not t.j.db.in_transaction

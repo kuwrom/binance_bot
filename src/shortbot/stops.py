@@ -33,10 +33,6 @@ BRIDGE = f"{clientid.PREFIX}-{clientid.KINDS['bridge']}"   # client id prefix of
 SETTLE_S = 20.0   # an interrupted swap gets this long to end with a closePosition stop
 
 
-def is_clock_drift(e: BaseException) -> bool:   # -1021 (errors.ClockDrift): resync the clock
-    return errors.classify(e) is errors.ClockDrift
-
-
 def is_protective_stop(o: dict) -> bool:
     """Buy-side stop that closes/reduces the short. Take-profit orders don't count as protection."""
     info = o.get("info", {}) or {}
@@ -59,10 +55,6 @@ def trigger_of(o: dict) -> float:
         return float(o.get("triggerPrice") or o.get("stopPrice") or (o.get("info") or {}).get("triggerPrice"))
     except (TypeError, ValueError):
         return 0.0
-
-
-def would_trigger(e: BaseException) -> bool:   # -2021 / -4142: the stop would trigger at once (price is past it)
-    return errors.classify(e) is errors.WouldTrigger
 
 
 async def listed(tr, symbol: str) -> tuple[list[dict], list[dict]]:
@@ -138,7 +130,7 @@ async def _first(tr, symbol: str, stop: float) -> dict[str, Any]:
     try:
         placed = await tr._place_stop(symbol, stop, tries=3)
     except Exception as e:  # noqa: BLE001 - classified; anything not settled here is re-raised
-        if would_trigger(e):
+        if errors.classify(e) is errors.WouldTrigger:
             return await _crossed(tr, symbol, stop, set())
         if errors.classify(e) is errors.ReduceOnlyRejected and await tr.flat_now(symbol):   # -4509: flat first
             await strip_flat(tr, symbol)
@@ -158,7 +150,7 @@ async def _swap(tr, symbol: str, ids: set[str], cur: float, new_stop: float, con
     try:
         bridge = await _bridge(tr, symbol, min(cur, new_stop), contracts)
     except Exception as e:  # noqa: BLE001 - nothing was cancelled: the old stop stays
-        if would_trigger(e):
+        if errors.classify(e) is errors.WouldTrigger:
             return await _crossed(tr, symbol, min(cur, new_stop), ids)
         return {"ok": False, "error": f"stop not moved: its bridge stop was not placed ({e}); {cur} stays"}
     placed, err, doubt = None, None, set()
@@ -169,7 +161,7 @@ async def _swap(tr, symbol: str, ids: set[str], cur: float, new_stop: float, con
             break
         except Exception as e:  # noqa: BLE001 - the listing decides, not the code (-4130 is undocumented now)
             err = e
-            if would_trigger(e):
+            if errors.classify(e) is errors.WouldTrigger:
                 return await _crossed(tr, symbol, new_stop, ids)
             try:
                 close, _ = await listed(tr, symbol)

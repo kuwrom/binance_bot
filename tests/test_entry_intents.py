@@ -260,7 +260,7 @@ async def test_a_fresh_rejected_send_still_explains_a_position_for_a_while():
 
 
 async def test_withdraw_finds_a_row_without_an_order_id_by_its_client_id():
-    from shortbot.entries import withdraw
+    from shortbot.entries_cancel import withdraw
     d, t, fake = desk()
     fake.ack_lost = 1                                               # it rests; the row has no order id
     a = row(d, (await d.propose_group([prop(1.04)]))["unknown"][0]["entry_id"])

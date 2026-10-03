@@ -78,8 +78,8 @@ def _unit(r: dict[str, Any]) -> dict[str, Any]:
 
 
 async def located(t, e: dict[str, Any]) -> dict[str, Any] | str:
-    """For entries.withdraw(): a send of unknown outcome (no order id yet), found by its client id. Returns the row
-    with the order id it got, "unfilled" if it never reached the book (not found GRACE_S after the send), or
+    """For entries_cancel.withdraw(): a send of unknown outcome (no order id yet), found by its client id. Returns the
+    row with the order id it got, "unfilled" if it never reached the book (not found GRACE_S after the send), or
     "unknown" (not found yet, or the lookup failed)."""
     if not e.get("client_id"):
         return "unknown"
@@ -146,7 +146,7 @@ async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
         return await _done(desk, r, "expired" if o["status"] == "expired" else "cancelled",
                            f"found {o['status']} and unfilled", order_id=o["id"])
     if r["abandon"] and not filled:
-        from .entries import withdraw
+        from .entries_cancel import withdraw
         async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: withdraw an abandoned intent"):
             got = await withdraw(t, {**r, "order_id": o["id"]}, desk.tr.alert)
         if got == "unknown":
@@ -288,7 +288,7 @@ async def _late(desk, r: dict, o: dict, oid: str, cid: str | None, sym: str) -> 
             await desk.tr.alert("zombie_order", f"entry #{r['id']} is {r['status']} in the journal but its order "
                                 f"{oid} still rests; check Binance", sym, True)
         return None
-    from .entries import withdraw
+    from .entries_cancel import withdraw
     async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a late order"):   # cancel first; a fill is kept
         got = await withdraw(desk.tr.t, {**r, "order_id": oid}, desk.tr.alert)
     if got == "unknown":

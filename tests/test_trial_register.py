@@ -1,6 +1,5 @@
 """#31: one append-only trial register for every study (data/research/trials.db)."""
 
-import hashlib
 import json
 import random
 import sqlite3
@@ -56,45 +55,6 @@ def test_provenance_is_stamped(reg):
     assert r[:3] == ("abc1234def", "c0de", "data/research/x/hedge") and json.loads(r[3]) == {"t0": "2026-07-27"}
 
 
-def _journal(path):
-    db = sqlite3.connect(path)
-    db.executescript("""
-        CREATE TABLE pattern_trials (id INTEGER PRIMARY KEY, pattern_id TEXT, version INTEGER, params TEXT, source TEXT,
-            n INTEGER, n_coins INTEGER, mean REAL, t REAL, oos_n INTEGER, oos_mean REAL, created_at TEXT);
-        CREATE TABLE trial_ledger (variant TEXT PRIMARY KEY, family TEXT, params TEXT, created TEXT);""")
-    db.executemany("INSERT INTO pattern_trials (pattern_id, version, params, source, n, mean, t, created_at) "
-                   "VALUES (?,?,?,?,?,?,?,?)",
-                   [("strategy.x", 1, json.dumps({"trial": "a", "k": 1}, sort_keys=True), "bt60", 9, 0.1, 2.0, "t"),
-                    ("lib.w", 1, json.dumps({"group": "random", "variant": "v"}), "rungs_60d", 9, 0.0, 0.1, "t"),
-                    ("lib.c", 1, json.dumps({"regime": "top", "outcome": "o"}), "carry_regime_daily", 9, 0.1, 1.0, "t")])
-    db.executemany("INSERT INTO trial_ledger VALUES (?,?,?,?)",
-                   [("base", "ladder", "{}", "t"), ("placebo", "ladder", json.dumps({"placebo": True}), "t")])
-    db.commit()
-    db.close()
-
-
-def test_legacy_ledgers_are_migrated_once_and_read_only(reg, tmp_path):
-    j = tmp_path / "shortbot.db"
-    _journal(j)
-    before = hashlib.sha256(j.read_bytes()).hexdigest()
-    out = TR.migrate_legacy(j)
-    assert out == {"pattern_trials": 3, "trial_ledger": 2, "added": 5}
-    assert TR.migrate_legacy(j)["added"] == 0                          # idempotent
-    assert hashlib.sha256(j.read_bytes()).hexdigest() == before        # the journal is only read
-    s = TR.summary()
-    assert s["controls"] == 2 and s["by_study"] == {"backtest": 1, "carry_regime": 1, "ladder": 1}
-    # a legacy bt60 row is the same spec as the backtest's own record of that trial: no double count
-    TR.record("backtest", [{"name": "a", "family": "strategy.x", "params": {"trial": "a", "k": 1}, "n": 9}])
-    assert TR.summary()["specs"] == 3
-
-
-def test_migration_from_a_journal_without_the_tables(reg, tmp_path):
-    j = tmp_path / "empty.db"
-    sqlite3.connect(j).close()
-    assert TR.migrate_legacy(j) == {"pattern_trials": 0, "trial_ledger": 0, "added": 0}
-    assert TR.migrate_legacy(tmp_path / "missing.db")["added"] == 0
-
-
 def _series(rng, days, base=None, noise=1.0):
     return {d: (base[d] if base else 0) + rng.gauss(0, noise) for d in days}
 
@@ -129,9 +89,8 @@ def test_readers_on_the_guardian_or_mcp_never_crash(reg):
         TR.summary()                                                 # a study reading N must not run on a broken one
 
 
-def test_cli_migrates_and_summarises(reg, tmp_path, capsys):
-    j = tmp_path / "shortbot.db"
-    _journal(j)
-    assert TR.main(["migrate", "--journal", str(j)]) == 0
+def test_cli_summarises(reg, capsys):
+    TR.record("backtest", [{"name": "a", "family": "strategy.x", "params": {"k": 1}, "n": 9}])
+    assert TR.main(["summary"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["migrated"]["added"] == 5 and out["summary"]["specs"] == 3 and out["register"] == str(reg)
+    assert out["summary"]["specs"] == 1 and out["register"] == str(reg)

@@ -103,15 +103,6 @@ async def read_coin(ex, journal, symbol: str) -> dict[str, Any]:
                                      snap.get("setups") or [], reg)}
 
 
-STAGE_STRATEGY = {"delisting_risk": "strategy.delisting", "new_listing": "strategy.listing_fade",
-                  "bleeding": "strategy.bounce_fade", "post_pump": "strategy.pump_fade", "pumping": "strategy.pump_fade"}
-
-
-def relevant_strategies(stage: str, game: str, setups: list[str]) -> list[str]:
-    ids = [TAPE_STRATEGY.get(game), STAGE_STRATEGY.get(stage), *(SETUP_STRATEGY.get(s) for s in setups)]
-    return list(dict.fromkeys(i for i in ids if i))
-
-
 def gate_by_registry(verdict: dict[str, Any], stage: str, game: str, setups: list[str],
                      reg: dict[str, Any]) -> dict[str, Any]:
     """The playbook is a prior; the registry holds the evidence. Retired strategies can't carry a trade (observe);

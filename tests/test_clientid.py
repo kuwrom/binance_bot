@@ -5,7 +5,7 @@ import asyncio
 import ccxt
 import pytest
 
-from shortbot import clientid
+from shortbot import clientid, errors
 
 
 def test_ids_fit_binance_format_and_are_unique_per_intent():
@@ -26,7 +26,7 @@ def test_ids_fit_binance_format_and_are_unique_per_intent():
     (ccxt.InsufficientFunds("-2019 margin"), False), (ccxt.OrderImmediatelyFillable("-2021"), False),
     (ccxt.BadRequest("-1102"), False)])
 def test_only_a_definite_refusal_counts_as_not_placed(err, unknown):
-    assert clientid.send_unknown(err) is unknown
+    assert errors.classify(err).unknown is unknown
 
 
 async def test_lookup_returns_none_only_when_binance_does_not_know_the_id():

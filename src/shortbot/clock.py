@@ -33,10 +33,6 @@ def now_dt() -> datetime:
     return datetime.fromtimestamp(now_s(), timezone.utc)
 
 
-def replaying() -> bool:
-    return _PINNED.get() is not None
-
-
 @contextmanager
 def at(ts_ms: int | float) -> Iterator[None]:
     token = _PINNED.set(float(ts_ms) / 1000)

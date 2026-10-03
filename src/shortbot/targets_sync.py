@@ -29,7 +29,6 @@ import ccxt.async_support as ccxt
 
 from . import clientid, errors, targets
 from .steps import floor_amount
-from .stops import is_clock_drift
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.targets")
@@ -140,7 +139,7 @@ async def _cancel(tr, symbol: str, o: dict, row: dict | None, why: str) -> bool:
     except ccxt.OrderNotFound:   # filled or gone meanwhile: what Binance says now decides
         resp = None
     except Exception as e:  # noqa: BLE001 - in doubt: the next listing decides
-        if is_clock_drift(e):
+        if errors.classify(e) is errors.ClockDrift:
             await tr.ex.resync_time()
         log.warning("target %s on %s: cancel in doubt: %s: %s", o.get("id"), symbol, type(e).__name__, e)
         return False

@@ -280,19 +280,20 @@ Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe rece
 
 ## 6. Error vocabulary (#37)
 The gateway needs these types. Each has a stable `code`, a tri-state `sent` (False / True / None = unknown), `retryable`, and `to_dict`/`from_dict` for the wire.
+#37 built `errors.classify` and the types; their `sent`, `retryable`, `to_dict`/`from_dict` and `wrap` had no caller yet and were removed in #77: the gateway adds them back with its first caller.
 
 | family | `sent` | types |
 |---|---|---|
 | refused | False | `KillSwitchRefused(state)`, `PreconditionFailed(what changed)`, `RiskRefused(reasons)`, `BudgetRefused`, `Vetoed(vetoes)`, `TooSmall`, `ProtocolMismatch`, `ModeMismatch`, `StaleCode` |
 | busy | False | `SymbolBusy` (exists, symlock.py:53), `QueueFull`, `Expired` |
-| exchange refusal | True, nothing ran | `ExchangeRefused(code, msg)`: ccxt `ExchangeError` subclasses, `STOP_REFUSALS` (-4130/-4120/-2021), `would_trigger` |
+| exchange refusal | True, nothing ran | `ExchangeRefused(code, msg)`: ccxt `ExchangeError` subclasses, -4130/-4120/-2021 (`errors.StopExists`, `Refused`, `WouldTrigger`) |
 | unknown | None | `SendUnknown(client_ids, cause)`: one type for `clientid.Unknown` and `entry_intents.SendUnknown` |
 | partial / critical | True | `Incomplete(filled, remaining)`, `Unprotected(symbol, why)` (NAKED_POSITION) |
 | transport | per case | `ClockDrift` (-1021), `RateLimited` (429/418/-1003), `BudgetWait` (weight.py), `Network` |
 | client side | False / None | `GatewayUnavailable`, `ReceiptUnknown` |
 
 **What #37 must provide:**
-- one classifier (ccxt exception + Binance code → type) that replaces the string matching in `clientid.send_unknown`/`code`, `stops.would_trigger` and `is_clock_drift`;
+- one classifier (ccxt exception + Binance code → type) that replaces the string matching in the order path (done: `errors.classify`; the old helpers were removed in #77);
 - a mapping to and from today's result dicts (`ok`, `error`, `unknown`, `noop`, `rejected_by_*`), so steps 1-2 change no tool output;
 - `sent` named explicitly. It is the gateway's core question.
 

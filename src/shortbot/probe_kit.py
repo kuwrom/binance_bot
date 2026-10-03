@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import clientid
+from . import clientid, errors
 from . import killswitch as ks
 from .exchange import to_raw
 from .stops import is_close_position
@@ -56,14 +56,14 @@ def outcome(ok: bool, res: Any) -> dict[str, Any]:
     """{"ok": True} or {"ok": False, "error": class, "code": Binance code, "msg"}: what a call answered."""
     if ok:
         return {"ok": True}
-    return {"ok": False, "error": type(res).__name__, "code": clientid.code(res), "msg": str(res)[:300]}
+    return {"ok": False, "error": type(res).__name__, "code": errors.code(res), "msg": str(res)[:300]}
 
 
 def say(ok: bool, res: Any) -> str:
     """One phrase for a verdict: 'accepted' or 'OrderNotFound -2011'."""
     if ok:
         return "accepted"
-    c = clientid.code(res)
+    c = errors.code(res)
     return f"{type(res).__name__}{f' {c}' if c is not None else ''}"
 
 

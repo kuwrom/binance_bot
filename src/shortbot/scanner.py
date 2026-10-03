@@ -11,7 +11,7 @@ from . import indicators as ind
 from . import news
 from .exchange import Exchanges, to_symbol
 from .market import DataHub
-from .market.regime import market_regime  # noqa: F401  (re-exported: callers import it from here)
+from .market.regime import market_regime
 from .risk import FALLBACK_MAINT_MARGIN_PCT, max_leverage_for_stop
 from .setups import detect_all
 from .tape import classify

@@ -33,31 +33,13 @@ log = logging.getLogger("shortbot.errors")
 
 
 class OrderError(Exception):
-    """One outcome of an exchange call. `cause`: the original error; `code`: its Binance code, if the answer had one;
-    `sent` (docs/GATEWAY.md §6): None = unknown, it may have run; True = Binance answered, nothing ran; False = it
-    never left this process (ccxt's own checks: a definite type without a code). to_dict / from_dict: over a wire."""
+    """One outcome of an exchange call; `cause`: the original error."""
     unknown: ClassVar[bool] = False
     transient: ClassVar[bool] = False
 
     def __init__(self, cause: BaseException | None = None, msg: str | None = None):
         super().__init__(msg or (str(cause) if cause is not None else type(self).__name__))
         self.cause = cause
-        self.code = code(cause) if cause is not None else None
-        self.sent: bool | None = None if self.unknown else self.code is not None
-
-    @property
-    def retryable(self) -> bool:
-        return self.transient
-
-    def to_dict(self) -> dict:
-        return {"type": type(self).__name__, "code": self.code, "message": str(self), "sent": self.sent,
-                "unknown": self.unknown, "retryable": self.transient}
-
-    @staticmethod
-    def from_dict(d: dict) -> OrderError:
-        e = next((k for k in TYPES if k.__name__ == d.get("type")), Unexpected)(None, d.get("message"))
-        e.code, e.sent = d.get("code"), d.get("sent", e.sent)
-        return e
 
 
 class Gone(OrderError):
@@ -147,31 +129,23 @@ def code(e: BaseException | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def classify(e: BaseException, refusals: tuple[int, ...] = ()) -> type[OrderError]:
-    """The type of this error. `refusals`: codes the caller knows to be definite refusals for its request, beyond the
-    table (an unknown or unmapped code in it counts as Refused)."""
+def classify(e: BaseException) -> type[OrderError]:
+    """The type of this error."""
     if isinstance(e, OrderError):
         return next((k for k in type(e).__mro__ if k in TYPES), Unexpected)
     c = code(e)
-    if c in _CODES and (c not in refusals or not _CODES[c].unknown):
+    if c in _CODES:
         return _CODES[c]
-    if c in refusals:
-        return Refused
     for cls, kind in _CLASSES:
         if isinstance(e, cls):
             return kind
-    if c is None and "-1021" in str(e):   # stops.is_clock_drift's legacy match: a -1021 ccxt raised unparsed
+    if c is None and "-1021" in str(e):   # a -1021 ccxt raised without parsing the answer
         return ClockDrift
     if isinstance(e, ccxt.InvalidOrder) and c is None and "precision" in str(e):   # amount_to_precision, client side
         return Precision
     if isinstance(e, ccxt.ExchangeError) and type(e) is not ccxt.ExchangeError:
         return Refused
     return Unexpected
-
-
-def wrap(e: BaseException) -> OrderError:
-    """This error as its type (the gateway raises these), the original as `cause`."""
-    return e if isinstance(e, OrderError) else classify(e)(e)
 
 
 def transient(e: BaseException) -> bool:

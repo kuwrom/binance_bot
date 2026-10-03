@@ -77,17 +77,6 @@ def test_plan_is_frozen_at_registration_and_any_edit_is_a_new_hypothesis(monkeyp
                           for k in ("id", "version")])["plan"]["target_n"] == 30
 
 
-def test_versions_registered_before_26_get_a_default_plan_frozen_at_backfill():
-    d = sqlite3.connect(":memory:")
-    R.ensure(d)
-    d.execute("INSERT INTO patterns VALUES ('tape.x',1,'tape',NULL,'x',NULL,'d','x',?,'shadow',NULL,'fp',?,?,"
-              "'registered')", (SCAN_METRIC, REG, REG))
-    assert F.plan_of(d, "tape.x", 1) is None
-    assert R.card(d, "tape.x")["forward"]["status"] == "unplanned"
-    assert F.freeze_missing(d, "2026-03-01T00:00:00+00:00") == 1 and F.freeze_missing(d) == 0
-    assert F.plan_of(d, "tape.x", 1)["registered_at"] == "2026-03-01T00:00:00+00:00"   # the clock starts here
-
-
 # ------------------------------------------------------------------ the feed (G/H for the registry)
 def test_feed_scores_symbol_episodes_against_the_same_scans_unflagged_coins_after_costs(monkeypatch):
     j = Journal(":memory:")

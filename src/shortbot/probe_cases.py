@@ -9,7 +9,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid
+from . import errors
 from . import probe_kit as kit
 from .probe_kit import TRIG, Probe, algo_status, outcome, say
 
@@ -22,7 +22,7 @@ def _answer(ok: bool, res: Any) -> dict[str, Any]:
 
 
 def _not_found(ok: bool, res: Any, code: int) -> bool:
-    return not ok and isinstance(res, ccxt.OrderNotFound) and clientid.code(res) == code
+    return not ok and isinstance(res, ccxt.OrderNotFound) and errors.code(res) == code
 
 
 async def algo_unknown_cid(p: Probe) -> dict[str, Any]:

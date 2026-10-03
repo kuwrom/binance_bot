@@ -22,19 +22,3 @@ def test_dedup_renotifies_after_two_hours_or_a_score_jump():
     assert S.pick_alerts([cand("A", 50)], "caution", seen, 1200)                 # +10 since the last alert
     assert S.pick_alerts([cand("A", 50)], "caution", seen, 1200 + S.RENOTIFY_S)  # two hours later
 
-
-async def test_run_logs_a_both_direction_scan_and_returns_alerts(monkeypatch):
-    calls = {}
-
-    async def fake_regime(ex):
-        return {"verdict_for_shorts": "caution"}
-
-    async def fake_scan(ex, **kw):
-        calls.update(kw)
-        return {"candidates": [cand("A")], "logged_for_research": 22}
-    import shortbot.scanner as sc
-    monkeypatch.setattr(sc, "market_regime", fake_regime)
-    monkeypatch.setattr(sc, "scan_shorts", fake_scan)
-    out = await S.run(object(), "J", {}, now_s=0)
-    assert calls["direction"] == "both" and calls["journal"] == "J" and calls["regime"] == "caution"
-    assert out["logged"] == 22 and [a["symbol"] for a in out["alerts"]] == ["A"]

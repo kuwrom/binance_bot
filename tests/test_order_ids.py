@@ -5,7 +5,7 @@ entry stop resent into -4130) and r2 (full close raised although flat)."""
 import ccxt
 import pytest
 
-from shortbot import clientid
+from shortbot import clientid, errors
 from tests import fake_errors as err
 from tests.fakes import SYM
 from tests.test_entry_intents import on_send
@@ -35,11 +35,10 @@ def kinds(t):
 
 
 def test_codes_stop_refusals_and_refs():
-    assert clientid.code(err.one_close_position_stop()) == -4130 and clientid.code(err.unavailable("order", 1)) is None
-    for e in (err.one_close_position_stop(), err.switch_algo()):   # bare ExchangeError, a code errors.py knows (#37):
-        assert not clientid.send_unknown(e) and not clientid.send_unknown(e, clientid.STOP_REFUSALS)   # definite
-    assert not clientid.send_unknown(err.would_trigger(), clientid.STOP_REFUSALS)
-    assert clientid.send_unknown(err.status_unknown(), clientid.STOP_REFUSALS)
+    assert errors.code(err.one_close_position_stop()) == -4130 and errors.code(err.unavailable("order", 1)) is None
+    for e in (err.one_close_position_stop(), err.switch_algo(), err.would_trigger()):   # bare ExchangeError (#37)
+        assert not errors.classify(e).unknown   # a code errors.py knows: definite
+    assert errors.classify(err.status_unknown()).unknown
     assert clientid.tag("1000PEPE/USDT:USDT") == "1000PEPE" and clientid.tag("币安人生/USDT:USDT") == ""
     assert clientid.VALID.match(clientid.new("stop", clientid.tag("币安人生/USDT:USDT")))
 

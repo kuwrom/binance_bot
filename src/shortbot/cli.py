@@ -17,6 +17,7 @@ from .app import close_app, get_app
 from .cli_args import build_parser
 from .cli_brief import brief
 from .exchange import to_symbol
+from .market import regime
 from .entries import EntryDesk
 from .positioning import PositionOps
 from .redact import install_log_redaction
@@ -53,7 +54,7 @@ async def _run(args: argparse.Namespace) -> object:
     try:
         match args.cmd:
             case "regime":
-                return await scanner.market_regime(app.ex)
+                return await regime.market_regime(app.ex)
             case "scan":
                 return await scanner.scan_shorts(app.ex, min_change=args.min_change, top_n=args.top,
                                                  journal=app.journal if args.log else None,
@@ -183,11 +184,11 @@ async def _run(args: argparse.Namespace) -> object:
             case "add":
                 return await PositionOps(app.trader).add_to_winner(args.symbol, args.notional, args.stop, args.reason)
             case "budget":
-                reg = (await scanner.market_regime(app.ex))["verdict_for_shorts"]
+                reg = (await regime.market_regime(app.ex))["verdict_for_shorts"]
                 return await app.trader.budget(app.trader, to_symbol(args.symbol), reg, args.conviction, args.setup)
             case "governor":
                 from .risk_budget import governor_status
-                return await governor_status(app.trader, (await scanner.market_regime(app.ex))["verdict_for_shorts"])
+                return await governor_status(app.trader, (await regime.market_regime(app.ex))["verdict_for_shorts"])
             case "propose":
                 return await EntryDesk(app.trader).propose_group(json.loads(args.proposals), args.ttl_hours,
                                                                  not args.no_prearm, args.warmup_override)

@@ -204,9 +204,9 @@ class TieredScan:
     async def _regime(self) -> str:
         at, verdict = self._regime_at
         if verdict is None or time.monotonic() - at >= REGIME_TTL_S:   # wall-clock: cache TTL
-            from . import scanner
+            from .market import regime
             with weight.tagged(weight.RESEARCH):
-                verdict = (await scanner.market_regime(self.ex))["verdict_for_shorts"]
+                verdict = (await regime.market_regime(self.ex))["verdict_for_shorts"]
             self._regime_at = (time.monotonic(), verdict)   # wall-clock: cache TTL
         return verdict
 

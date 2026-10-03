@@ -76,7 +76,7 @@ def ccxt_raises(status: int, body: str, url: str = URL) -> Exception:
 def test_each_binance_code_maps_to_one_type_through_ccxts_own_handler(code, msg, kind):
     e = ccxt_raises(400, json.dumps({"code": code, "msg": msg}))
     assert E.classify(e) is kind, f"{type(e).__name__}: {e}"
-    assert E.code(e) == code and E.wrap(e).code == code and isinstance(E.wrap(e), kind)
+    assert E.code(e) == code
 
 
 @pytest.mark.parametrize("status, kind", [(429, E.RateLimited), (418, E.RateLimited), (503, E.OutcomeUnknown),
@@ -142,25 +142,10 @@ def test_flags_unknown_means_never_resend_and_transient_means_retry_unchanged():
     assert all(issubclass(k, E.OrderError) for k in E.TYPES) and len(E.TYPES) == 12
 
 
-def test_send_unknown_is_the_types_flag_and_refusals_still_add_codes():
+def test_definite_refusals_are_not_unknown_and_an_unmapped_code_is():
     for e in (err.one_close_position_stop(), err.switch_algo(), err.would_trigger(), err.margin_insufficient()):
-        assert not clientid.send_unknown(e)   # definite refusals in every context: nothing was placed
-    assert clientid.send_unknown(err.unmapped(-4999)) and not clientid.send_unknown(err.unmapped(-4999), (-4999,))
-    assert clientid.send_unknown(err.status_unknown(), clientid.STOP_REFUSALS)
-    assert clientid.code is E.code
-
-
-def test_sent_and_the_wire_form_for_the_gateway():
-    """docs/GATEWAY.md §6: sent is None when it may have run, True when Binance refused it, False if it never left."""
-    assert E.wrap(err.status_unknown()).sent is None and E.wrap(err.too_many_requests()).sent is None
-    assert E.wrap(err.margin_insufficient()).sent is True and E.wrap(err.one_close_position_stop()).sent is True
-    with pytest.raises(ccxt.InvalidOrder) as below_one_step:
-        FakeCcxt().amount_to_precision(SYM, 0.01)
-    assert E.wrap(below_one_step.value).sent is False
-    for e in (err.reduce_only_rejected(), err.status_unknown(), ValueError("x")):
-        w = E.wrap(e)
-        back = E.OrderError.from_dict(w.to_dict())
-        assert type(back) is type(w) and back.to_dict() == w.to_dict() and back.retryable == w.transient
+        assert not E.classify(e).unknown   # definite refusals in every context: nothing was placed
+    assert E.classify(err.unmapped(-4999)).unknown and E.classify(err.status_unknown()).unknown
 
 
 def test_describe_names_the_type_and_code():

@@ -154,16 +154,6 @@ def _summary(vals: list[dict[str, Any]], compact: bool = False) -> dict[str, Any
     return {k: v for k, v in out.items() if k not in COMPACT_DROP} if compact else out
 
 
-def _rows_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """The pre-2026-10-01 basis: every scan row counted, so n overstates the evidence. Kept for comparison."""
-    r24 = [r["short_ret_24h"] for r in rows]
-    adv = [r["max_adverse_24h"] for r in rows if r.get("max_adverse_24h") is not None]
-    return {"n": len(r24), "avg_short_ret_24h": round(statistics.mean(r24), 2),
-            "hit_rate_pct": round(sum(x > 0 for x in r24) / len(r24) * 100, 1),
-            "squeeze_rate_pct": round(sum(a > SQUEEZE_PCT for a in adv) / len(adv) * 100, 1) if adv else None,
-            "note": "row-based (every rescan counted): overstates n; compare, don't cite"}
-
-
 def label_mix(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Which label method the reported rows carry, so a half-relabelled dataset is visible."""
     legacy = [r for r in rows if r.get("label_v") is None]
@@ -281,7 +271,7 @@ def report(journal, min_n: int = 5) -> dict[str, Any]:
         "costs": {"round_trip_pct": COST_PCT, "funding": "estimated carry: scan-time rate held 24h (shorts collect "
                   "positive funding)", "field": "avg_net_ret_24h"},
         "inference": rs.inference_note(allx["days"]),
-        "all": allx, "all_rows": _rows_summary(rows),
+        "all": allx,
         "tradable": _summary([r for r in rows if r["tradable"]]),
         "vetoed": _summary([r for r in rows if not r["tradable"]]),
         "by_veto_reason": keep(by_veto), "by_setup": keep(by_setup), "by_score": keep(score_b),

@@ -87,7 +87,7 @@ class ManageFlow:
             else:   # the limits of "unknown" legs may still rest and fill: their pre-armed stops stay
                 own = tranches.own_entries(self.j, trade["id"]) if trade else []
                 await self._strip_stops(symbol, listed, own + legs.get("unfilled", []) + legs.get("filled", []))
-            gone = bool(order.get("rejected"))   # -2022 on a flat position (trading._flat_first): done, by the exchange
+            gone = bool(order.get("rejected"))   # -2022, already flat (trading_orders._flat_first): done by the exchange
             why = f"{reason} ({FLAT_FIRST})" if gone else reason
             res = await reconcile.finalize(self, trade, why, lesson) if trade else {"note": "not in journal"}
             return {"ok": True, "symbol": symbol, "closed_amount": 0.0 if gone else amount, "exit": exit_px,

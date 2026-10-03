@@ -30,7 +30,7 @@ from . import clientid, equity_marks, errors, reconcile, targets
 from .exchange import Exchanges, to_raw, to_symbol
 from .journal import Journal
 from .risk import AccountState
-from .stops import STOP_TYPES, is_protective_stop  # noqa: F401 (re-export)
+from .stops import is_protective_stop
 from .symlock import SymbolLocks, lock_dir_for
 from .trading_manage import ManageFlow
 from .trading_open import OpenFlow

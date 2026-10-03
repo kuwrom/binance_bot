@@ -11,6 +11,7 @@ from . import news, scanner, setups, targets_sync
 from .app import get_app
 from .entries import EntryDesk
 from .exchange import to_symbol
+from .market import regime
 from .mcp_server import tool
 from .plans import revise_plan, validate_plan
 from .positioning import PositionOps
@@ -20,7 +21,7 @@ from .positioning import PositionOps
 @tool
 async def market_regime() -> dict[str, Any]:
     """BTC trend, alt breadth, Fear & Greed -> 'favorable' / 'caution' / 'hostile' / 'unknown' (data missing)."""
-    return await scanner.market_regime(get_app().ex)
+    return await regime.market_regime(get_app().ex)
 
 
 @tool
@@ -30,7 +31,7 @@ async def scan_shorts(min_change_24h: float = 10.0, top_n: int = 10, direction: 
     signals, detected setups), vetoed coins with reasons, perps listed <30d. Every scored coin is logged as a
     research candidate and labelled with its real outcome 72h later."""
     app = get_app()
-    reg = await scanner.market_regime(app.ex)
+    reg = await regime.market_regime(app.ex)
     res = await scanner.scan_shorts(app.ex, min_change=min_change_24h, top_n=top_n, journal=app.journal,
                                     regime=reg["verdict_for_shorts"], direction=direction)
     return {"regime": reg["verdict_for_shorts"], **res}
@@ -153,7 +154,7 @@ async def risk_budget(symbol: str, conviction: str = "B", setup: str | None = No
     """Current dynamic risk budget for a new short: base × drawdown × BTC-vol × regime × correlation × conviction
     tilt × governor, capped by heat and by what is left under today's loss cap."""
     app = get_app()
-    reg = (await scanner.market_regime(app.ex))["verdict_for_shorts"]
+    reg = (await regime.market_regime(app.ex))["verdict_for_shorts"]
     return await app.trader.budget(app.trader, to_symbol(symbol), reg, conviction, setup)
 
 

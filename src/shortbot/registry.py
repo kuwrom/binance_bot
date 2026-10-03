@@ -121,9 +121,9 @@ def add_episodes(db, pid: str, rows: list[dict[str, Any]], version: int | None =
     return db.total_changes - before
 
 
-def add_trial(db, pid: str, params: dict[str, Any], source: str, stats: dict[str, Any]) -> None:
+def add_trial(pid: str, params: dict[str, Any], source: str, stats: dict[str, Any]) -> None:
     """A trial of pattern `pid` into the one trial register (#31, trial_register.py). The journal's pattern_trials
-    is legacy: migrated into the register once, never written again (`db` is kept for the callers' signature)."""
+    is legacy: migrated into the register once, never written again."""
     from . import trial_register as TR
     TR.record(TR.LEGACY_STUDY.get(source, source), [
         {"name": params.get("trial") or pid, "family": pid, "params": params, "n": stats.get("n"),

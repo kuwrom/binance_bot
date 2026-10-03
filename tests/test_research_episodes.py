@@ -59,7 +59,7 @@ def test_rescans_give_the_same_report_as_deduplicated_rows():
     for k in ("all", "tradable", "vetoed", "by_score", "by_setup", "by_veto_reason", "by_feature_tertile",
               "by_open_interest"):
         assert _strip_rows(a[k]) == _strip_rows(b[k]), k
-    assert b["all"]["rows"] == 21 * a["all"]["rows"] and b["all_rows"]["n"] == 21 * 48   # legacy block: inflated
+    assert b["all"]["rows"] == 21 * a["all"]["rows"]
 
 
 def test_day_clustering_widens_the_interval_and_the_scan_baseline_removes_the_day_shock():

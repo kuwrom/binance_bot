@@ -11,13 +11,12 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_gates, entry_intents, reconcile, stops, targets_sync
+from . import entry_gates, entry_intents, errors, reconcile, stops, targets_sync
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
 from .killswitch import ACTIVE, HALTED, REDUCING
 from .killswitch_ops import cancel_resting
 from .risk_budget import track_day_peak
-from .stops import is_clock_drift
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.guardian")
@@ -134,7 +133,7 @@ class PositionChecks:
     async def _position_failed(self, sym: str, e: Exception) -> None:
         """One symbol's failure stays out of the pass result, but a streak of them escalates (ONDO, -1021)."""
         escalate = self.pos_streak.fail(sym)
-        if is_clock_drift(e):
+        if errors.classify(e) is errors.ClockDrift:
             try:
                 await self.ex.resync_time()   # the lane-level resync never sees errors swallowed here
             except Exception:  # noqa: BLE001 - logged; the failure itself is alerted just below

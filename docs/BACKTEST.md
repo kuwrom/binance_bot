@@ -87,7 +87,7 @@ Every run writes `report.md`, `results.json`, `trades.json` and `provenance.json
   - Writers: backtest trials and split cells, hedge variants, trail5m exits, rungs, card tests, carry / funding / xs studies, lifecycle grid, `study patterns|laggard|ladder`, `registry seed`.
   - Reruns of a spec (study, family, params) append rows but count once. Placebo / random groups are recorded as controls and never counted.
   - `--no-save` runs record too: a look at the data is a trial.
-  - The journal's `pattern_trials` and the ladder's `trial_ledger` are legacy. Copy them in once with `python -m shortbot.trial_register migrate` (reads the journal only). After that `summary` shows the counts.
+  - The journal's `pattern_trials` and the ladder's `trial_ledger` are legacy: copied in once after #31 (the one-off migration was removed in #77). `python -m shortbot.trial_register summary` shows the counts.
   - A run reads the register as of a row id (`results.json` → `register.max_id`), and `rerun` pins it (`--trials-asof`).
   - The guardian and the MCP never need the file: a missing register reads as empty. `shortbot backup` copies it with the journal once it exists.
   - A test (`tests/test_register_studies.py`) fails when a new `backtest/*.py` entry point does not record its trials.

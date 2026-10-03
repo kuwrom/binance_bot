@@ -13,7 +13,6 @@ def candles(closes, vol=100.0):
 
 BTC = [100 * math.exp(0.01 * math.sin(i / 3)) for i in range(170)]
 BTC_R = log_returns(BTC)
-BTC_MV = {"1h": 0.0, "4h": 0.0, "24h": 0.0}
 
 
 def test_taxonomy():

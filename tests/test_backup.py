@@ -335,8 +335,9 @@ def test_default_backup_includes_the_trial_register_when_it_exists(tmp_path, mon
     with pytest.raises(SystemExit) as e:
         cli.main()                                   # no register yet: the journal only, not an error
     assert e.value.code == 0 and [c["name"][:9] for c in json.loads(capsys.readouterr().out)["copies"]] == ["shortbot-"]
-    TR.record("backtest", [{"name": "a", "params": {"trial": "a"}, "n": 3}],
-              db_path=tmp_path / "data" / "research" / "trials.db")
+    monkeypatch.setenv(TR.ENV, str(tmp_path / "data" / "research" / "trials.db"))
+    TR.record("backtest", [{"name": "a", "params": {"trial": "a"}, "n": 3}])
+    monkeypatch.delenv(TR.ENV)                       # the backup finds it at its default place
     monkeypatch.setenv("SHORTBOT_BACKUP_DIR", str(tmp_path / "backups2"))     # the same second: a fresh dir
     with pytest.raises(SystemExit) as e:
         cli.main()

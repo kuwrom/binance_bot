@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import scanner
+from .market import regime
 from .app import get_app
 from .mcp_server import tool
 
@@ -16,7 +16,7 @@ async def governor_status() -> dict[str, Any]:
     tiers, loss streak, give-back stop, plus the hot-hand test over closed trades. Check before sizing up."""
     from .risk_budget import governor_status as gs
     app = get_app()
-    return await gs(app.trader, (await scanner.market_regime(app.ex))["verdict_for_shorts"])
+    return await gs(app.trader, (await regime.market_regime(app.ex))["verdict_for_shorts"])
 
 
 @tool

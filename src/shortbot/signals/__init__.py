@@ -2,9 +2,9 @@
 
 from . import (  # noqa: F401  (importing registers the signals)
     controller, core, depth, events, hack, lifecycle, robust, sector, session, social, supply, tape)
-from .base import REGISTRY, Evaluation, SignalOut, evaluate, select, signal
+from .base import REGISTRY, Evaluation, evaluate
 
-__all__ = ["REGISTRY", "Evaluation", "SignalOut", "evaluate", "select", "signal"]
+__all__ = ["REGISTRY", "Evaluation", "evaluate"]   # via the package, so every plug-in above is registered
 
 
 def describe() -> list[dict]:

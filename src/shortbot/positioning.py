@@ -42,11 +42,11 @@ def _r_initial(trade: dict) -> float:
 
 def adds_done(j, trade: dict) -> int:
     """Adds already made on this trade: its `add` decisions, filled or of unknown outcome (an ambiguous send may have
-    filled, #9); a refused add logs `add_rejected`. Decisions carry no mode, and no trade id before #10: rows are
-    matched by symbol from the trade's opening on, and a trade id in the snapshot must be this trade's."""
+    filled, #9); a refused add logs `add_rejected`. Decisions carry no mode: rows are matched by symbol from the
+    trade's opening on, and by the trade id in the snapshot."""
     rows = j._rows("SELECT snapshot FROM decisions WHERE symbol=? AND action='add' AND ts >= ?",
                    (trade["symbol"], trade.get("opened_at") or ""))
-    return sum((json.loads(r["snapshot"] or "{}") or {}).get("trade_id") in (None, trade["id"]) for r in rows)
+    return sum((json.loads(r["snapshot"] or "{}") or {}).get("trade_id") == trade["id"] for r in rows)
 
 
 def chandelier_stop(c1h: list[list[float]], n: int = 22, k: float = 3.0) -> float | None:
@@ -123,7 +123,7 @@ class PositionOps:
             return {"ok": False, "error": f"no open journal-tracked position in {symbol}"}
         c1h = await tr.ex.public.fetch_ohlcv(symbol, "1h", limit=60)
         fr = await tr.ex.public.fetch_funding_rate(symbol)
-        from .scanner import market_regime
+        from .market.regime import market_regime
         budget = await tr.budget(tr, symbol, (await market_regime(tr.ex))["verdict_for_shorts"])
         f8 = fr.get("fundingRate")
         res = reassess(trade, pos, c1h, f8, budget["risk_usd"])
@@ -203,7 +203,7 @@ class PositionOps:
     async def _regime(self) -> str:
         """The market regime for the governor's daily cap, as a new trade's budget reads it; "unknown" (the smallest
         cap) when it can't be read."""
-        from .scanner import market_regime
+        from .market.regime import market_regime
         try:
             return (await market_regime(self.tr.ex))["verdict_for_shorts"]
         except Exception as e:  # noqa: BLE001 - unread: "unknown" sizes the daily cap down, never up

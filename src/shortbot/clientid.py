@@ -29,12 +29,7 @@ KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "a
          "bridge": "b",   # stops.py: the reduce-only stop that covers a stop swap
          "target": "t",   # targets.py: a plan target resting as a reduce-only limit, ref = the trade id
          "probe": "x"}    # probes.py: a demo exchange-behaviour probe's order (#55), never the desk's
-code = errors.code   # the Binance code in a ccxt error (moved to errors.py; kept here for its callers)
 VALID = re.compile(r"^[\.A-Z\:/a-z0-9_-]{1,36}$")
-# definite refusals of a closePosition stop, some raised by ccxt as a bare ExchangeError: one already rests on the side
-# (-4130), wrong endpoint (-4120), it would trigger at once (-2021). errors.py's table holds them for every request now;
-# kept for callers that name them.
-STOP_REFUSALS = (-4130, -4120, -2021)
 
 
 class Unknown(errors.OutcomeUnknown):
@@ -63,14 +58,6 @@ def tag(symbol: str) -> str:
 
 def ours(cid: Any) -> bool:
     return str(cid or "").startswith(PREFIX + "-")
-
-
-def send_unknown(e: BaseException, refusals: tuple[int, ...] = ()) -> bool:
-    """True when an order request may have executed although it raised (errors.py `unknown`): timeouts, transport
-    errors, HTTP 5xx and 429, -1000/-1006/-1007, a -1021 answered after the order executed (seen on cancels, ONDO #5),
-    an error code ccxt doesn't map. False for a definite refusal: a code or ccxt class errors.py knows as one (price
-    filter, min notional, margin, -4130...), or a code in `refusals`."""
-    return errors.classify(e, refusals).unknown
 
 
 async def lookup(t, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:

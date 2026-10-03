@@ -84,7 +84,7 @@ The research says this is where the edge is: events, flows and crowding (docs/st
 
 **Logging:** every tier-2 evaluation is logged as a research candidate, exactly as today. Tier-1 trigger counts are logged too, so the triggers themselves can be evaluated later.
 
-**Interim:** before tier 0/1 existed, `scan_job.run` every 5 min (EVERY_S = 300) was the safe REST version. The guardian now runs the tiered scan ("Wired (#72)"); `scan_job.run` stays for a one-off pass.
+**Interim:** before tier 0/1 existed, a REST scan every 5 min was the safe version. The guardian now runs the tiered scan ("Wired (#72)"); the REST scan was removed in #77.
 
 ## Weight budget: protective first
 One IP budget (2,400/min) is shared by:

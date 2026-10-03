@@ -17,8 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from . import audit, weight
-from .stops import is_clock_drift
+from . import audit, errors, weight
 
 log = logging.getLogger("shortbot.guardian")
 ESCALATE_AFTER_FAILS = 3
@@ -145,7 +144,8 @@ class Lane:
     async def _failed(self, job: Job, e: Exception) -> None:
         escalate = self.streak.fail(job.name)
         why = f"timed out after {job.timeout_s:g}s" if isinstance(e, TimeoutError) else f"{type(e).__name__}: {e}"
-        if is_clock_drift(e):   # the Mac's clock drifts after sleep (-1021): resync and retry next tick, no alert
+        # the Mac's clock drifts after sleep (-1021): resync and retry next tick, no alert
+        if errors.classify(e) is errors.ClockDrift:
             self.last[job.name] = 0.0
             log.warning("clock drift (-1021) in %s: resyncing time", job.name)
             try:

@@ -142,14 +142,14 @@ async def test_max_adds_counts_this_trades_adds_from_the_journal():
     assert (await ops.add_to_winner(SYM, 9, 0.95, "three"))["ok"] and fake.position == 130
 
 
-def test_adds_done_scopes_by_trade_and_counts_unknown_and_legacy_rows():
+def test_adds_done_scopes_by_trade_and_counts_unknown_rows():
     j = Journal(":memory:")
     old = j.create_trade(SYM, "pump_fade", "t", 1.05, 2, {}, {}, None)
     j.db.execute("UPDATE trades SET status='closed', opened_at='2020-01-01T00:00:00+00:00' WHERE id=?", (old,))
     j.db.execute("INSERT INTO decisions (ts, symbol, action, reasoning, snapshot) VALUES "
                  "('2020-01-02T00:00:00+00:00', ?, 'add', 'an earlier trade', NULL)", (SYM,))
     tid = j.create_trade(SYM, "pump_fade", "t", 1.05, 2, {}, {}, None)
-    j.log_decision("add", "legacy row: no trade id", SYM, snapshot={"add_qty": 5})
+    j.log_decision("add", "filled", SYM, snapshot={"trade_id": tid, "add_qty": 5})
     j.log_decision("add", "UNKNOWN: may have filled", SYM, snapshot={"trade_id": tid, "unknown": True})
     j.log_decision("add", "another trade (other mode)", SYM, snapshot={"trade_id": tid + 1})
     j.log_decision("add_rejected", "refused", SYM, snapshot={"trade_id": tid})

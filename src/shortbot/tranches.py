@@ -74,7 +74,7 @@ async def cancel_legs(trader, trade_id: int, reason: str) -> dict[str, list[dict
     """Called when a trade is closed: ITS resting legs must not open a fresh, planless position. Returns the legs by
     withdraw's outcome: unfilled (cancelled), filled (dead, but (partly) filled first: the entry poll adopts it) and
     unknown (the cancel failed: the limit may still rest, so its pre-armed stop must stay)."""
-    from .entries import withdraw
+    from .entries_cancel import withdraw
     got: dict[str, list[dict[str, Any]]] = {"unfilled": [], "filled": [], "unknown": []}
     for e in own_legs(trader.j, trade_id):
         async with trader.symbol_lock(e["symbol"], f"trade #{trade_id} closed: withdraw its legs"):

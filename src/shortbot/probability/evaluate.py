@@ -11,9 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ..research_stats import MIN_DAYS, clustered_wilson, days_of, episodes, inference_note, wilson
-
-__all__ = ["brier", "expectancy", "report", "wilson"]   # wilson: re-exported, it lives in research_stats
+from ..research_stats import MIN_DAYS, clustered_wilson, days_of, episodes, inference_note
 
 
 def brier(rows: list[dict], key: str) -> dict[str, Any] | None:

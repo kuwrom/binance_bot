@@ -40,11 +40,10 @@ import ccxt.async_support as ccxt
 from . import entries_fills as fills
 from . import errors, targets_sync
 from .entries_amend import EntryAmend
-from .entries_cancel import CANCEL_FAILS_ALERT, DEAD, EntryCancel, drop_prearm, withdraw  # noqa: F401 (re-export)
-from .entries_place import MIN_TTL_S, EntryPlacement  # noqa: F401 (MIN_TTL_S re-export)
+from .entries_cancel import CANCEL_FAILS_ALERT, DEAD, EntryCancel, drop_prearm, withdraw
+from .entries_place import EntryPlacement
 from .entry_gates import STAMPED
 from .entry_intents import HINTS, ON_BOOK, resolve
-from .stops import is_clock_drift
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.entries")
@@ -92,7 +91,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
     async def _regime(self) -> str:
         if self._regime_fn:
             return await self._regime_fn()
-        from .scanner import market_regime
+        from .market.regime import market_regime
         return (await market_regime(self.tr.ex))["verdict_for_shorts"]
 
     # ------------------------------------------------------------ storage
@@ -207,7 +206,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         per streak of POLL_FAILS_ALERT: a fill may be going unprotected or unjournalled."""
         log.warning("entry #%s poll failed: %s: %s", e["id"], type(x).__name__, x)
         try:
-            if is_clock_drift(x):   # the lane's own resync never sees an error isolated here
+            if errors.classify(x) is errors.ClockDrift:   # the lane's own resync never sees an error isolated here
                 await self.tr.ex.resync_time()
             n = self._poll_fails[e["id"]] = self._poll_fails.get(e["id"], 0) + 1
             naked = isinstance(x, fills.StopNotPlaced)

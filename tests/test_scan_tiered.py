@@ -13,6 +13,7 @@ from shortbot import scan_triggers as TR
 from shortbot import scanner, weight
 from shortbot.backtest.replay_world import logged_scans
 from shortbot.journal import Journal
+from shortbot.market import regime as R
 from shortbot.market import streams as S
 from shortbot.market.liquidations import LiquidationStore
 from shortbot.notify import Notifier
@@ -233,7 +234,7 @@ async def test_the_regime_check_is_research_class(monkeypatch):
     async def regime(ex):
         seen.append(weight.current())
         return {"verdict_for_shorts": "favorable"}
-    monkeypatch.setattr(scanner, "market_regime", regime)
+    monkeypatch.setattr(R, "market_regime", regime)
     ts = ST.TieredScan(None, Journal(":memory:"), None, Path("s.db"), None)
     assert await ts._regime() == "favorable" and await ts._regime() == "favorable"
     assert seen == [weight.RESEARCH]                          # cached for REGIME_TTL_S

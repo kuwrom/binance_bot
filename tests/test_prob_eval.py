@@ -1,6 +1,7 @@
 from shortbot.journal import Journal
-from shortbot.probability.evaluate import brier, expectancy, report, wilson
+from shortbot.probability.evaluate import brier, expectancy, report
 from shortbot.probability.labels import label_bracket, label_touch
+from shortbot.research_stats import wilson
 
 
 def c(h, l, close=None):

@@ -94,20 +94,6 @@ def plan_of(db, pid: str, version: int) -> dict[str, Any] | None:
             "spec_hash": r[1], "plan": json.loads(r[2])}
 
 
-def freeze_missing(db, at: str | None = None) -> int:
-    """Versions registered before #26 get their default plan, frozen now: their forward clock starts here."""
-    from .registry import _now
-    cur = db.execute("SELECT * FROM patterns p WHERE NOT EXISTS (SELECT 1 FROM pattern_plans q WHERE"
-                     " q.pattern_id=p.id AND q.version=p.version)")
-    cols = [c[0] for c in cur.description]
-    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    at = at or _now()
-    for p in rows:
-        freeze(db, p, p["version"], make_plan(p["id"], p["metric"]), at)
-    db.commit()
-    return len(rows)
-
-
 def family(db) -> dict[str, Any]:
     """M: forward tests registered so far (non-draft versions with a decidable plan, retired and superseded ones
     included). Exploratory trials (pattern_trials) are not in M: forward data is new to every one of them, and the
@@ -144,7 +130,7 @@ def _test(sample: list[dict[str, Any]], fam: dict[str, Any], alpha: float) -> di
 def forward(db, pid: str, version: int, fam: dict[str, Any] | None = None) -> dict[str, Any]:
     pl = plan_of(db, pid, version)
     if not pl:
-        return {"status": "unplanned", "note": "registered before #26: the next feed freezes a default plan"}
+        return {"status": "unplanned", "note": "no plan frozen for this version"}
     plan = pl["plan"]
     out = {"registered_at": pl["registered_at"], "spec_hash": pl["spec_hash"], "metric": plan["metric"]}
     if not plan.get("decidable"):
