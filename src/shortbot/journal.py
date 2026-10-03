@@ -10,7 +10,10 @@ period marks, research overrides) goes through `mode_key`.
 
 Audit trail (#24, audit.py): every decision, alert and session row is stamped with the actor, the Claude Code session,
 the code version and the mode (+ the journal session and trade id on decisions, the running intent on decisions and
-alerts). Decisions are append-only; so are intents (intents.py, the record of every write)."""
+alerts). Decisions are append-only; so are intents (intents.py, the record of every write).
+
+Writes on an event loop never wait for the write lock (#79, journal_writer.py): `await write(fn, *a)` and `post(fn, *a)`
+run fn(journal, *a) as one unit. Decisions and alerts are always posted: stamped at the call, written in order."""
 
 from __future__ import annotations
 
@@ -19,10 +22,11 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from . import audit, fill_report, intents
 from .journal_research import RESEARCH_SCHEMA, ResearchStore
+from .journal_writer import UnitConnection, Writer
 from .redact import redact
 from .sessions import session_bucket
 
@@ -71,6 +75,7 @@ AUDIT_COLUMNS: dict[str, dict[str, str]] = {
 AUDIT_ACTIONS = ("call", "claude_session")   # audit-only rows (call: a write, before intents): decisions() skips them
 JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit", "fill_refs")
 MODES = ("demo", "live")
+T = TypeVar("T")
 
 
 def now_iso() -> str:
@@ -118,11 +123,28 @@ class Journal(ResearchStore):
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=15)
+        self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=15, factory=UnitConnection)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")  # guardian + MCP server share this file
         self.db.executescript(SCHEMA + RESEARCH_SCHEMA + intents.SCHEMA)
         self._migrate()
+        self.w = Writer(self.db)
+
+    # ------------------------------------------------------------ units (journal_writer.py)
+    async def write(self, fn: Callable[..., T], *a: Any, **k: Any) -> T:
+        """fn(self, *a, **k) as one unit, its result once committed; an event loop never waits for the lock."""
+        return await self.w.write(fn, self, *a, **k)
+
+    def post(self, fn: Callable[..., T], *a: Any, **k: Any) -> T | None:
+        """fn(self, *a, **k) as one unit nobody waits for: now when the lock is free, else queued in order."""
+        return self.w.post(fn, self, *a, **k)
+
+    def run(self, fn: Callable[..., T], *a: Any, **k: Any) -> T:
+        """fn(self, *a, **k) as one unit, waiting for the lock (a caller off an event loop)."""
+        return self.w.run(fn, self, *a, **k)
+
+    async def flush(self) -> None:
+        await self.w.flush()
 
     def _migrate(self) -> None:
         for table, cols in {"trades": TRADE_COLUMNS, **AUDIT_COLUMNS}.items():
@@ -171,14 +193,16 @@ class Journal(ResearchStore):
         return self.session_id
 
     def log_decision(self, action: str, reasoning: str, symbol: str | None = None,
-                     snapshot: dict | None = None, session_id: int | None = None, trade_id: int | None = None) -> int:
-        """Stamped (audit.py); trade_id defaults to snapshot['trade_id']. Text is redacted like alerts."""
+                     snapshot: dict | None = None, session_id: int | None = None, trade_id: int | None = None
+                     ) -> int | None:
+        """Stamped (audit.py); trade_id defaults to snapshot['trade_id']. Text is redacted like alerts. Posted: its id,
+        or None while queued behind another process's write lock."""
         audit.count_decision()
         st = audit.stamp()
         if trade_id is None and isinstance(snapshot, dict) and type(snapshot.get("trade_id")) is int:
             trade_id = snapshot["trade_id"]
-        return self._insert(
-            "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot, actor, claude_session,"
+        return self.post(
+            Journal._insert, "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot, actor, claude_session,"
             " code_version, trade_id, mode, intent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (now_iso(), session_id if session_id is not None else self.session_of(st["claude_session"]), symbol,
              action, redact(reasoning),
@@ -308,10 +332,11 @@ class Journal(ResearchStore):
         return n
 
     # ------------------------------------------------------------ alerts / metrics
-    def log_alert(self, kind: str, message: str, symbol: str | None = None) -> int:
+    def log_alert(self, kind: str, message: str, symbol: str | None = None) -> int | None:
+        """Posted, like log_decision."""
         st = audit.stamp()
-        return self._insert(
-            "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode,"
+        return self.post(
+            Journal._insert, "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode,"
             " intent_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (now_iso(), symbol, kind, redact(message),   # no signed URL or token in a row
              st["actor"], self.session_of(st["claude_session"]), st["claude_session"], st["code_version"], self.mode,

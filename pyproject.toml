@@ -95,7 +95,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = [
     "shortbot.errors", "shortbot.commands", "shortbot.weight", "shortbot.symlock", "shortbot.exposure",
-    "shortbot.steps", "shortbot.trading_orders", "shortbot.stale_guard",
+    "shortbot.steps", "shortbot.trading_orders", "shortbot.stale_guard", "shortbot.journal_writer",
+    "shortbot.wal_holder",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
