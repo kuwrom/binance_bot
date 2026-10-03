@@ -1,0 +1,22 @@
+# HTTPS in front of the web console (docs/WEB.md). A bare IP gets a Let's Encrypt IP certificate: IP certificates
+# must use the 6-day "shortlived" profile (generally available since 2026-01-15), and Caddy renews them itself.
+# SHORTBOT_PUBLIC_IP comes from data/web.env; without it the site is localhost (Caddy's internal CA).
+# Browsers and curl send no SNI for an IP address (RFC 6066), so default_sni tells Caddy which certificate to
+# present; without it the handshake fails with "tlsv1 alert internal error".
+{
+	default_sni {$SHORTBOT_PUBLIC_IP:localhost}
+}
+
+{$SHORTBOT_PUBLIC_IP:localhost} {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+	encode gzip
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy 127.0.0.1:8080
+	log
+}

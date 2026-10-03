@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shortbot Desk</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/md.js" defer></script>
+  <script src="/static/render.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="card login-card">
+      <h1>Shortbot desk</h1>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit" class="primary">Log in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+
+  <div id="shell" hidden>
+    <header class="top">
+      <div class="brand">Shortbot <span id="mode" class="pill"></span> <span id="experiment" class="muted"></span></div>
+      <nav id="tabs">
+        <button data-tab="overview" class="tab active">Overview</button>
+        <button data-tab="alerts" class="tab">Alerts</button>
+        <button data-tab="console" class="tab">Commands</button>
+        <button data-tab="activity" class="tab">Journal</button>
+        <button data-tab="docs" class="tab">Docs</button>
+      </nav>
+      <button id="logout" class="ghost">Log out</button>
+    </header>
+
+    <main>
+      <section id="tab-overview" class="tab-page">
+        <div class="toolbar">
+          <button id="refresh" class="primary">Refresh</button>
+          <label class="check"><input type="checkbox" id="auto" checked> auto every 60 s</label>
+          <span id="updated" class="muted"></span>
+        </div>
+        <div id="ov-state" class="grid"></div>
+        <div id="ov-brief" class="card"></div>
+        <div id="ov-cards" class="grid wide"></div>
+      </section>
+
+      <section id="tab-alerts" class="tab-page" hidden>
+        <div class="toolbar">
+          <button id="alerts-refresh" class="primary">Refresh</button>
+          <label class="check"><input type="checkbox" id="alerts-urgent"> urgent only</label>
+          <label class="check"><input type="checkbox" id="alerts-new"> unacknowledged only</label>
+          <span id="alerts-count" class="muted"></span>
+        </div>
+        <div id="alerts-list" class="card"></div>
+      </section>
+
+      <section id="tab-console" class="tab-page console" hidden>
+        <aside class="cmd-list">
+          <input id="cmd-search" type="search" placeholder="Filter commands">
+          <div id="cmd-groups"></div>
+        </aside>
+        <div class="cmd-main">
+          <div id="cmd-form" class="card"><p class="muted">Pick a command. Writes are marked and ask before
+            they run; they go through the same checks, vetoes and audit trail as Claude's tools.</p></div>
+          <div id="cmd-result"></div>
+        </div>
+      </section>
+
+      <section id="tab-activity" class="tab-page" hidden>
+        <div class="toolbar">
+          <button data-preset="journal" class="primary">Trades &amp; learnings</button>
+          <button data-preset="audit">Audit (24 h)</button>
+          <button data-preset="research_report">Research report</button>
+          <button data-preset="calibration_report">Calibration</button>
+          <button data-preset="list_setups">Setups</button>
+          <button data-preset="governor_status">Governor</button>
+        </div>
+        <div id="activity-result"></div>
+      </section>
+
+      <section id="tab-docs" class="tab-page docs" hidden>
+        <aside><input id="doc-search" type="search" placeholder="Filter documents"><ul id="doc-list"></ul></aside>
+        <article id="doc-view" class="card md"><p class="muted">Pick a document.</p></article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
