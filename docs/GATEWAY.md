@@ -51,7 +51,7 @@ About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
 - `move_stop`: lock at :202.
 - `widen_stop`: `positioning.py:139`, lock at :144.
 - `add_to_winner`: lock at :218.
-- `update_plan`: `mcp_trade.py:120-141`, then `targets_sync.after`.
+- `update_plan`: `cmd_trade.py:146-167`, then `targets_sync.after`.
 - `propose_entries`: `entries_place.py`, lock at :203.
 - `amend_entry`: lock at :52.
 - `cancel_entry_group`: `entries_cancel.py:93`, then `_cancel_entry` with its lock at :67.

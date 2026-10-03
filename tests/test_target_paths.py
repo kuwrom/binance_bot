@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import ccxt
 
-from shortbot import entry_intents, killswitch as ks, killswitch_ops, mcp_trade, targets
+from shortbot import cmd_trade, entry_intents, killswitch as ks, killswitch_ops, targets
 from shortbot.config import RiskLimits
 from shortbot.entries import EntryDesk
 from shortbot.journal import Journal
@@ -74,10 +74,10 @@ async def test_a_full_close_cancels_the_targets_even_when_binance_leaves_them(tm
 async def test_update_plan_moves_or_withdraws_the_resting_targets(tmp_path, monkeypatch):
     g, fake, tid = await placed(tmp_path)
     s = session(g)
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: SimpleNamespace(journal=s.j, trader=s))
-    r = await mcp_trade.update_plan(SYM, {"targets": [{"price": 0.92, "fraction": 1.0}]}, "one target")
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: SimpleNamespace(journal=s.j, trader=s))
+    r = await cmd_trade.update_plan(SYM, {"targets": [{"price": 0.92, "fraction": 1.0}]}, "one target")
     assert r["ok"] and book(fake) == [(0.92, 100)], r
-    r = await mcp_trade.update_plan(SYM, {"auto": {"targets": False}}, "alerts only")
+    r = await cmd_trade.update_plan(SYM, {"auto": {"targets": False}}, "alerts only")
     assert r["ok"] and book(fake) == []
 
 

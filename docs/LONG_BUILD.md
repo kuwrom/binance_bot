@@ -179,7 +179,7 @@ No table has a side column: `trades` (journal.py:52-61) and `entries` (entries.p
 
 ### Kill switch
 - killswitch_ops.py:59-63 `flatten` skips non-shorts, and closes through `Trader.close`, which buys.
-- killswitch_ops.py:85 and mcp_kill.py:37: texts.
+- killswitch_ops.py:85 and cmd_kill.py:37: texts.
 - `halt` / `cancel_resting` and the state logic are already side-agnostic.
 
 ### Risk / governor / budget / ladder
@@ -236,13 +236,13 @@ No table has a side column: `trades` (journal.py:52-61) and `entries` (entries.p
 - journal_research.py:20 the `short_ret_*` columns.
 
 ### MCP / CLI
-- **mcp_trade.py**
+- **cmd_trade.py**
   - :82-99 `open_short` has no side.
   - :105 / :115 texts ("move DOWN only").
   - :131 `validate_plan`.
   - :156 the short verdict.
   - :168 / :175 `add_to_winner`, "ABOVE market" and `cancel_below`.
-- mcp_desk.py:19 and mcp_research.py:30-37 `short_bracket`.
+- cmd_desk.py:19 and cmd_research.py:30-37 `short_bracket`.
 - mcp_server.py:29-49 instructions.
 - The `shortbot` subcommands are generated from the same declarations (`commands.py`), so they need no separate change.
 

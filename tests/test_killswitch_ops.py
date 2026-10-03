@@ -189,9 +189,9 @@ async def test_brief_line_says_what_tripped_it_and_how_it_clears():
 
 
 async def test_cli_shows_and_trips_but_cannot_clear(monkeypatch):
-    from shortbot import commands, mcp_kill
+    from shortbot import cmd_kill, commands
     t, fake = trader()
-    monkeypatch.setattr(mcp_kill, "get_app", lambda: SimpleNamespace(trader=t, journal=t.j))
+    monkeypatch.setattr(cmd_kill, "get_app", lambda: SimpleNamespace(trader=t, journal=t.j))
     p = commands.build_parser()
 
     async def cli(*argv):

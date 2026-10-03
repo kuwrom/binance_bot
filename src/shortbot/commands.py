@@ -12,7 +12,7 @@ A command is an async body plus:
   a write whose subcommand has another shape (cli_form() generates the rest);
 - raw: a subcommand that runs without the app, the audit stamp or a weight class; its body takes the parsed namespace
   and returns the exit code (backup, hook-session).
-The declarations live in mcp_trade, mcp_research, mcp_book, mcp_desk, mcp_kill and cli_cmds; load() imports them in
+The declarations live in cmd_trade, cmd_research, cmd_book, cmd_desk, cmd_kill and cli_cmds; load() imports them in
 tools/list order. Nothing here imports the MCP SDK: the CLI builds its parser from these declarations, and importing the
 SDK costs ~0.3 s per CLI call (its MCPServer also reconfigures the root logger, #66). Bodies raise CommandError; the MCP
 wrapper turns it into a ToolError with the same message."""
@@ -27,7 +27,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-MODULES = ("mcp_trade", "mcp_research", "mcp_book", "mcp_desk", "mcp_kill", "cli_cmds")
+MODULES = ("cmd_trade", "cmd_research", "cmd_book", "cmd_desk", "cmd_kill", "cli_cmds")
 _EMPTY = inspect.Parameter.empty
 _UNSET: Any = object()
 

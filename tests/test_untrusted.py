@@ -72,13 +72,13 @@ def evil_feeds(monkeypatch):
 
 
 async def test_coin_news_and_announcements_wrap_every_third_party_string(evil_feeds):
-    from shortbot import mcp_trade
-    cn = await mcp_trade.coin_news("QNTUSDT")
+    from shortbot import cmd_trade
+    cn = await cmd_trade.coin_news("QNTUSDT")
     assert_only_wrapped(cn)
     a, h = cn["binance_announcements"][0], cn["headlines"][0]
     assert a["title"]["source"] == "binance_announcements" and h["title"]["source"] == "rss:CoinDesk"
     assert h["url"] == "" and "hacked" in h["bearish_keywords"]
-    la = await mcp_trade.latest_announcements(5)
+    la = await cmd_trade.latest_announcements(5)
     assert_only_wrapped(la)
     assert la[0]["catalog"] == "Delisting" and la[0]["url"].startswith("https://www.binance.com/")
 
@@ -113,13 +113,13 @@ async def test_guardian_matching_still_sees_the_headline(evil_feeds):
 
 
 async def test_journal_tool_wraps_alerts(monkeypatch):
-    from shortbot import mcp_research
+    from shortbot import cmd_research
     j = Journal(":memory:")
     j.log_alert("news_on_position", f"QNT {EVIL}\nhttps://x", "QNT/USDT:USDT")
     j.log_alert("binance_delisting", f"Binance Will Delist QNT {EVIL}")
     j.log_alert("stop_near", "Price within 1.2% of the stop (1.05).", "QNT/USDT:USDT")
-    monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(journal=j))
-    out = await mcp_research.journal(10)
+    monkeypatch.setattr(cmd_research, "get_app", lambda: SimpleNamespace(journal=j))
+    out = await cmd_research.journal(10)
     assert_only_wrapped(out)
     msgs = {a["kind"]: a["message"] for a in out["recent_alerts"]}
     assert msgs["stop_near"] == "Price within 1.2% of the stop (1.05)."

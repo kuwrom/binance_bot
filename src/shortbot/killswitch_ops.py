@@ -1,6 +1,6 @@
 """Kill-switch actions (state and gate: killswitch.py): halt = trip + withdraw the resting entries; flatten = HALTED +
 market-close every short reduce-only. Neither ever cancels a protective stop on an open position. The halt_trading /
-flatten_all tools and the `shortbot kill-switch` / `shortbot flatten` subcommands are declared in mcp_kill.
+flatten_all tools and the `shortbot kill-switch` / `shortbot flatten` subcommands are declared in cmd_kill.
 """
 
 from __future__ import annotations

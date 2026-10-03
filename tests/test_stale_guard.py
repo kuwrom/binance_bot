@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from shortbot import audit, mcp_desk, mcp_kill, mcp_research, mcp_trade, procs, provenance, stale_guard
+from shortbot import audit, cmd_desk, cmd_kill, cmd_research, cmd_trade, procs, provenance, stale_guard
 from shortbot.journal import Journal
 from shortbot.mcp_server import TOOLS, mcp
 
@@ -44,7 +44,7 @@ def _never(*a, **k):
 
 def _desk(monkeypatch, j, **trader):
     app = _app(j, trader=SimpleNamespace(**trader))
-    for mod in (mcp_trade, mcp_research, mcp_desk, mcp_kill):
+    for mod in (cmd_trade, cmd_research, cmd_desk, cmd_kill):
         monkeypatch.setattr(mod, "get_app", lambda: app)
     return app
 
@@ -94,7 +94,7 @@ async def test_a_write_runs_when_the_code_on_disk_matches(tmp_path, monkeypatch)
 async def test_flatten_all_is_refused_with_the_cli_fallback(tmp_path, monkeypatch):
     j = Journal(tmp_path / "j.db")
     _desk(monkeypatch, j)
-    monkeypatch.setattr(mcp_kill.killswitch_ops, "flatten", _never)
+    monkeypatch.setattr(cmd_kill.killswitch_ops, "flatten", _never)
     _disk_is(monkeypatch, NEW)
     res = await TOOLS["flatten_all"]("squeeze")
     assert res["ok"] is False and res["stale_code"] is True
@@ -110,7 +110,7 @@ async def test_halt_and_log_decision_still_run_on_stale_code_annotated(tmp_path,
     async def halt(tr, state, by, why):
         halted.append((state, why))
         return {"ok": True, "state": state}
-    monkeypatch.setattr(mcp_kill.killswitch_ops, "halt", halt)
+    monkeypatch.setattr(cmd_kill.killswitch_ops, "halt", halt)
     _disk_is(monkeypatch, NEW)
     res = await TOOLS["halt_trading"]("squeeze")
     assert res["ok"] is True and halted == [("HALTED", "squeeze")] and "stale code" in res["stale_code"]
@@ -173,7 +173,7 @@ async def test_a_read_that_crashes_on_stale_code_says_so(tmp_path, monkeypatch):
     async def regime(ex):
         return {"verdict_for_shorts": "neutral"}
     monkeypatch.setattr("shortbot.risk_budget.governor_status", gs)
-    monkeypatch.setattr(mcp_desk.regime, "market_regime", regime)
+    monkeypatch.setattr(cmd_desk.regime, "market_regime", regime)
     _disk_is(monkeypatch, NEW)
     with pytest.raises(ToolError) as e:
         await TOOLS["governor_status"]()

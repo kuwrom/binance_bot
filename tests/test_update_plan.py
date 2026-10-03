@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from shortbot import mcp_trade
+from shortbot import cmd_trade
 from shortbot.plans import revise_plan
 from tests.test_entry_amend import desk, one
 from tests.test_killswitch import prop
@@ -23,8 +23,8 @@ async def split_trade():
 
 async def test_update_plan_keeps_a_split_entry_trades_pins(monkeypatch):
     t, tr = await split_trade()
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: SimpleNamespace(journal=t.j))
-    r = await mcp_trade.update_plan(tr["symbol"], {"time_stop_hours": 30, "auto": {"time_stop": True}}, "longer hold")
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: SimpleNamespace(journal=t.j))
+    r = await cmd_trade.update_plan(tr["symbol"], {"time_stop_hours": 30, "auto": {"time_stop": True}}, "longer hold")
     assert r["ok"], r
     plan = t.j.get_trade(tr["id"])["plan"]
     assert plan["time_stop_hours"] == 30 and plan["auto"]["time_stop"] is True
@@ -34,8 +34,8 @@ async def test_update_plan_keeps_a_split_entry_trades_pins(monkeypatch):
 
 async def test_the_pins_are_not_editable(monkeypatch):
     t, tr = await split_trade()
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: SimpleNamespace(journal=t.j))
-    r = await mcp_trade.update_plan(tr["symbol"], {"r1_usdt": 999}, "bigger 1R")
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: SimpleNamespace(journal=t.j))
+    r = await cmd_trade.update_plan(tr["symbol"], {"r1_usdt": 999}, "bigger 1R")
     assert not r["ok"] and "pinned" in r["plan_errors"][0]
     assert t.j.get_trade(tr["id"])["plan"]["r1_usdt"] == tr["plan"]["r1_usdt"]
 

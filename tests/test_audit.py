@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from shortbot import audit, cli, mcp_research, mcp_trade, procs
+from shortbot import audit, cli, cmd_research, cmd_trade, procs
 from shortbot.guardian_loop import Job, Lane
 from shortbot.journal import Journal
 from shortbot.mcp_server import TOOLS
@@ -104,7 +104,7 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S")
     audit.set_process("mcp")
     jm = Journal(db)
-    monkeypatch.setattr(mcp_research, "get_app", lambda: _app(jm))
+    monkeypatch.setattr(cmd_research, "get_app", lambda: _app(jm))
     sid = (await TOOLS["start_session"]("audit test"))["session_id"]
     await TOOLS["log_decision"]("watch", "lower high forming", "QNT/USDT:USDT")
     await TOOLS["add_learning"]("pumps fade", "trades 1-3", ["trade:1"], "statistical")
@@ -117,7 +117,7 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
         return None
     monkeypatch.setattr(cli, "close_app", no_close)
     await cli._audited(_ns("log", action="skip", reasoning="too thin", symbol="ABC"))
-    monkeypatch.setattr(mcp_research, "get_app", lambda: _app(jc))   # the CLI runs the same declared bodies
+    monkeypatch.setattr(cmd_research, "get_app", lambda: _app(jc))   # the CLI runs the same declared bodies
     await cli._audited(_ns("learn", statement="s", evidence="e", setup=None, status="hypothesis",
                            confidence="low", provenance=["trade:2"], kind="statistical", n=None, days=None,
                            sample=None, review_by=None))
@@ -151,13 +151,13 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
 
 async def test_a_failed_tool_call_is_logged(tmp_path, monkeypatch):
     j = Journal(tmp_path / "j.db")
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: _app(j))
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: _app(j))
     with pytest.raises(ToolError, match="no open journal trade"):
         await TOOLS["update_plan"]("QNT", {"time_stop_hours": 30}, "longer hold")
 
     async def boom(*a):
         raise RuntimeError("exchange down")
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: _app(j, trader=SimpleNamespace(move_stop=boom)))
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: _app(j, trader=SimpleNamespace(move_stop=boom)))
     with pytest.raises(ToolError, match="RuntimeError: exchange down"):
         await TOOLS["move_stop"]("QNT", 1.2, "trail")
     plan_call, stop_call = j.decisions(calls=True)[::-1]
@@ -178,7 +178,7 @@ async def test_refused_and_read_tool_calls(tmp_path, monkeypatch):
     async def positions():
         return []
     tr = SimpleNamespace(move_stop=refuse, positions=positions)
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: _app(j, trader=tr))
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: _app(j, trader=tr))
     await TOOLS["move_stop"]("QNT", 1.2, "see https://x?timestamp=1&signature=abc")
     await TOOLS["positions"]()   # a read: no row
     (row,) = j.decisions(calls=True)
@@ -194,8 +194,8 @@ async def test_the_writes_are_the_logged_tools():
     writes = {c.name for c in commands.REGISTRY if c.name and c.write}
     assert writes < names and {"open_short", "close_position", "set_risk_params"} <= writes
     assert not {"positions", "log_decision", "scan_shorts"} & writes   # log_decision's own row is the record
-    from shortbot import mcp_book, mcp_desk, mcp_kill
-    for mod in (mcp_trade, mcp_research, mcp_desk, mcp_kill, mcp_book):   # the call row finds the journal through it
+    from shortbot import cmd_book, cmd_desk, cmd_kill
+    for mod in (cmd_trade, cmd_research, cmd_desk, cmd_kill, cmd_book):   # the call row finds the journal through it
         assert callable(getattr(mod, "get_app", None)), mod.__name__
 
 

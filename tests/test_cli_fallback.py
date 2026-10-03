@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from shortbot import audit, cli, mcp_research, mcp_trade, stale_guard
+from shortbot import audit, cli, cmd_research, cmd_trade, stale_guard
 from shortbot.commands import build_parser
 from shortbot.config import ResearchBounds, RiskLimits, Settings
 from shortbot.journal import Journal
@@ -77,7 +77,7 @@ async def test_a_refusal_names_the_cli_command(monkeypatch):
 
 def test_flatten_and_kill_switch_are_cli_commands():
     subs = _subparsers()
-    assert {"flatten", "kill-switch"} <= set(subs)   # declared in mcp_kill
+    assert {"flatten", "kill-switch"} <= set(subs)   # declared in cmd_kill
 
 
 def test_the_fallback_commands_are_logged_writes():
@@ -128,10 +128,10 @@ async def _both(tmp_path, monkeypatch, seed, mcp_call, argv):
         seed(a)
     before = _effect(apps["mcp"].journal)
     assert before == _effect(apps["cli"].journal)
-    for mod in (mcp_trade, mcp_research):
+    for mod in (cmd_trade, cmd_research):
         monkeypatch.setattr(mod, "get_app", lambda: apps["mcp"])
     res_mcp = await mcp_call()
-    for mod in (mcp_trade, mcp_research, cli):
+    for mod in (cmd_trade, cmd_research, cli):
         monkeypatch.setattr(mod, "get_app", lambda *a, **k: apps["cli"])
 
     async def no_close():

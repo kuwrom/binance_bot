@@ -150,7 +150,7 @@ async def test_scan_from_the_cli_labels_its_research_rows_with_the_regime(monkey
     """One body: `scan --log` passes the regime to the research rows as scan_shorts does (they were unlabelled)."""
     from types import SimpleNamespace
 
-    from shortbot import mcp_trade
+    from shortbot import cmd_trade
     seen = {}
 
     async def market_regime(ex):
@@ -159,9 +159,9 @@ async def test_scan_from_the_cli_labels_its_research_rows_with_the_regime(monkey
     async def scan(ex, **kw):
         seen.update(kw)
         return {"candidates": []}
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: SimpleNamespace(ex=None, journal="J"))
-    monkeypatch.setattr(mcp_trade, "regime", SimpleNamespace(market_regime=market_regime))
-    monkeypatch.setattr(mcp_trade, "scanner", SimpleNamespace(scan_shorts=scan))
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: SimpleNamespace(ex=None, journal="J"))
+    monkeypatch.setattr(cmd_trade, "regime", SimpleNamespace(market_regime=market_regime))
+    monkeypatch.setattr(cmd_trade, "scanner", SimpleNamespace(scan_shorts=scan))
     cmd, kw = _parse(["scan", "--log"])
     assert await cmd.body(**kw) == {"regime": "caution", "candidates": []}
     assert (seen["regime"], seen["journal"]) == ("caution", "J")
@@ -174,7 +174,7 @@ async def test_one_body_keeps_who_acted_and_normalises_symbols(tmp_path, monkeyp
     log_decision / `log` share one: both store the ccxt symbol (MCP stored what it was given) and answer ok."""
     from types import SimpleNamespace
 
-    from shortbot import audit, cli, killswitch_ops, mcp_kill, mcp_research
+    from shortbot import audit, cli, cmd_kill, cmd_research, killswitch_ops
     from shortbot.journal import Journal
     monkeypatch.setattr(audit, "_proc", {"kind": None, "claude_session": None})
     seen = []
@@ -185,7 +185,7 @@ async def test_one_body_keeps_who_acted_and_normalises_symbols(tmp_path, monkeyp
     j = Journal(tmp_path / "j.db")
     app = SimpleNamespace(trader=None, journal=j, settings=SimpleNamespace(mode="demo"))
     monkeypatch.setattr(killswitch_ops, "flatten", flatten)
-    for mod in (mcp_kill, mcp_research, cli):
+    for mod in (cmd_kill, cmd_research, cli):
         monkeypatch.setattr(mod, "get_app", lambda *a, **k: app)
 
     async def no_close():
@@ -193,7 +193,7 @@ async def test_one_body_keeps_who_acted_and_normalises_symbols(tmp_path, monkeyp
     monkeypatch.setattr(cli, "close_app", no_close)
     await TOOLS["flatten_all"]("squeeze")
     await cli._audited(build_parser().parse_args(["flatten", "--reason", "squeeze"]))
-    assert seen == [mcp_kill.MCP_BY, killswitch_ops.CLI_BY]
+    assert seen == [cmd_kill.MCP_BY, killswitch_ops.CLI_BY]
     mcp_res = await TOOLS["log_decision"]("watch", "lower high", "QNT")
     cli_res = await cli._audited(build_parser().parse_args(["log", "skip", "too thin", "--symbol", "qntusdt"]))
     assert mcp_res["ok"] and cli_res["ok"]

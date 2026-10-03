@@ -98,15 +98,15 @@ def test_routine_kinds():
 
 
 async def test_brief_is_read_only_and_start_session_acknowledges(monkeypatch):
-    from shortbot import mcp_research
+    from shortbot import cmd_research
     a = app()
     a.journal.log_alert("stop_near", "near", SYM)
     a.journal.log_alert("forced_close", "could not restore", SYM)
     first = alerts_section(await brief(a))
     assert alerts_section(await brief(a)) == first and "2 unacknowledged" in first[0]   # compact/resume: same
-    monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(
+    monkeypatch.setattr(cmd_research, "get_app", lambda: SimpleNamespace(
         journal=a.journal, settings=a.settings, ex=SimpleNamespace(experiment=None)))
-    res = await mcp_research.start_session("test")
+    res = await cmd_research.start_session("test")
     ack = res["alerts_acknowledged"]
     assert ack["count"] == 2 and ack["by_kind"] == {"stop_near": 1, "forced_close": 1}
     assert [u["kind"] for u in ack["urgent"]] == ["forced_close"]
@@ -163,18 +163,18 @@ async def test_brief_shows_backup_health():
 
 
 async def test_learning_provenance_is_stored_merged_and_flagged_in_the_brief(monkeypatch):
-    from shortbot import mcp_research
+    from shortbot import cmd_research
     a = app()
     j = a.journal
     news_alert = j.log_alert("news_on_position", f"QNT {EVIL}", SYM)
-    monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(journal=j))
-    own = (await mcp_research.add_learning("fades after lower highs", "trades 3,7", ["trade:3", "trade:7"],
+    monkeypatch.setattr(cmd_research, "get_app", lambda: SimpleNamespace(journal=j))
+    own = (await cmd_research.add_learning("fades after lower highs", "trades 3,7", ["trade:3", "trade:7"],
                                                 "statistical"))
-    news = (await mcp_research.add_learning("delistings dump", "QNT headline", ["coin_news:QNT"], "statistical"))
-    via_alert = (await mcp_research.add_learning("headline says so", "alert", [f"alert:{news_alert}"], "process"))
+    news = (await cmd_research.add_learning("delistings dump", "QNT headline", ["coin_news:QNT"], "statistical"))
+    via_alert = (await cmd_research.add_learning("headline says so", "alert", [f"alert:{news_alert}"], "process"))
     with pytest.raises(Exception, match="provenance"):
-        await mcp_research.add_learning("no source", "trust me", [], "process")
-    await mcp_research.update_learning(own["learning_id"], evidence="research_report n=40",
+        await cmd_research.add_learning("no source", "trust me", [], "process")
+    await cmd_research.update_learning(own["learning_id"], evidence="research_report n=40",
                                        provenance=["research_report"])
     rows = {r["id"]: r for r in j.learnings()}
     assert rows[own["learning_id"]]["provenance"] == ["trade:3", "trade:7", "research_report"]

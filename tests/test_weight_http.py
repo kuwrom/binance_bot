@@ -159,7 +159,7 @@ async def test_guardian_lanes_tag_their_jobs_and_record_a_budget_wait(clock, dem
 
 
 async def test_mcp_tools_run_under_their_class(monkeypatch):
-    from shortbot import mcp_server, mcp_trade
+    from shortbot import cmd_trade, mcp_server
     TOOLS = mcp_server.TOOLS
     seen = []
 
@@ -167,9 +167,9 @@ async def test_mcp_tools_run_under_their_class(monkeypatch):
         seen.append(weight.current())
         return {"verdict_for_shorts": "favorable"}
     app = SimpleNamespace(ex=None, journal=None, trader=SimpleNamespace(move_stop=record))
-    monkeypatch.setattr(mcp_trade, "get_app", lambda: app)
-    monkeypatch.setattr(mcp_trade, "regime", SimpleNamespace(market_regime=record))
-    monkeypatch.setattr(mcp_trade, "scanner", SimpleNamespace(scan_shorts=record, coin_snapshot=record))
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: app)
+    monkeypatch.setattr(cmd_trade, "regime", SimpleNamespace(market_regime=record))
+    monkeypatch.setattr(cmd_trade, "scanner", SimpleNamespace(scan_shorts=record, coin_snapshot=record))
     await TOOLS["scan_shorts"]()
     await TOOLS["coin_snapshot"]("BTC")
     await TOOLS["move_stop"]("BTC", 1.0, "test")

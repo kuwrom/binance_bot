@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from shortbot import learnings_view as lv
-from shortbot import mcp_research
+from shortbot import cmd_research
 from shortbot.cli_brief import brief
 from shortbot.journal import Journal
 from shortbot.research import report
@@ -66,29 +66,29 @@ def test_old_database_gains_the_fields_and_old_rows_read_back_empty(tmp_path):
 
 async def test_add_learning_tool_requires_a_kind_and_stores_the_sample(monkeypatch):
     j = Journal(":memory:")
-    monkeypatch.setattr(mcp_research, "get_app", lambda: SimpleNamespace(journal=j))
+    monkeypatch.setattr(cmd_research, "get_app", lambda: SimpleNamespace(journal=j))
     with pytest.raises(Exception, match="kind"):
-        await mcp_research.add_learning("x", "e", ["trade:1"])
+        await cmd_research.add_learning("x", "e", ["trade:1"])
     with pytest.raises(Exception, match="kind"):
-        await mcp_research.add_learning("x", "e", ["trade:1"], "anecdote")
-    await mcp_research.add_learning("pumps fade in Asia", "research_report by_session", ["research_report"],
+        await cmd_research.add_learning("x", "e", ["trade:1"], "anecdote")
+    await cmd_research.add_learning("pumps fade in Asia", "research_report by_session", ["research_report"],
                                     "statistical", n=41, days=12, sample="research_report:2026-10-02",
                                     review_by="2026-10-20")
     row = j.learnings()[0]
     assert tuple(row[k] for k in FIELDS) == ("statistical", 41, 12, "research_report:2026-10-02", "2026-10-20")
     lid = row["id"]
-    await mcp_research.update_learning(lid, n=55, sample="registry:lib.asia_fade")
+    await cmd_research.update_learning(lid, n=55, sample="registry:lib.asia_fade")
     row = j.learnings()[0]
     assert (row["n"], row["days"], row["sample"]) == (55, 12, "registry:lib.asia_fade")
-    seen = (await mcp_research.journal())["learnings"][0]
+    seen = (await cmd_research.journal())["learnings"][0]
     assert seen["audit"]["kind"] == "statistical" and seen["audit"]["inferred"] == []
 
 
 async def test_cli_learn_takes_the_same_fields(monkeypatch):
-    from shortbot import cli, mcp_research
+    from shortbot import cli, cmd_research
     from shortbot.commands import build_parser
     j = Journal(":memory:")
-    monkeypatch.setattr(mcp_research, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
+    monkeypatch.setattr(cmd_research, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
 
     async def no_close():
         return None
