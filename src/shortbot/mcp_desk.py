@@ -1,16 +1,17 @@
-"""Desk-state MCP tools (read-only): risk governor, session clock, cold-desk warm-up. Registered on the
-shared server by importing this module from mcp_server."""
+"""Desk-state commands (commands.py: MCP tools and `shortbot` subcommands): risk governor, session clock, cold-desk
+warm-up, market map, coin profile and read, the position ladder."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .market import regime
 from .app import get_app
-from .mcp_server import tool
+from .commands import Arg, command
+from .market import regime
+from .weight import RESEARCH
 
 
-@tool
+@command(cli="governor", help="account breakers: daily/weekly cap, drawdown, streak, give-back")
 async def governor_status() -> dict[str, Any]:
     """Account breakers (docs/RISK_GOVERNANCE.md): daily cap (balance x regime x BTC vol), weekly cap, drawdown
     tiers, loss streak, give-back stop, plus the hot-hand test over closed trades. Check before sizing up."""
@@ -19,7 +20,7 @@ async def governor_status() -> dict[str, Any]:
     return await gs(app.trader, (await regime.market_regime(app.ex))["verdict_for_shorts"])
 
 
-@tool
+@command(cli="clock", help="UTC session, funding, US open, macro calendar, cold/warm desk")
 async def session_clock() -> dict[str, Any]:
     """UTC session, minutes to funding / day and week close / US open, soft volatility warnings, scheduled macro
     events (48h) and whether the desk is COLD (idle >= 6h or first session of the UTC day: warm up first)."""
@@ -28,7 +29,7 @@ async def session_clock() -> dict[str, Any]:
     return desk_clock(app.settings, app.journal)
 
 
-@tool
+@command(write=True)
 async def warmup_start(symbols: list[str] | None = None) -> dict[str, Any]:
     """Cold-desk warm-up, step 1: t0 snapshot (price, mark/index/basis, funding + interval, OI, spread, depth
     ±1%, 1m vol, BTC 15m) of the candidates (default: pending limit entries + top 5 gainers). Study the tape for
@@ -38,7 +39,7 @@ async def warmup_start(symbols: list[str] | None = None) -> dict[str, Any]:
     return await WarmUp(app.ex, app.journal).start(symbols)
 
 
-@tool
+@command()
 async def warmup_check() -> dict[str, Any]:
     """Cold-desk warm-up, step 2 (>= 15 min after start): t+15 snapshot and a verdict per coin (persisted, or
     dropped with reasons). Completing it warms the desk; both snapshots are kept for the persistence study."""
@@ -47,7 +48,8 @@ async def warmup_check() -> dict[str, Any]:
     return await WarmUp(app.ex, app.journal).check()
 
 
-@tool
+@command(cli="map", weight=RESEARCH, help="market map: regime, breadth, sectors vs BTC, rotation, vetoes", args=(
+    Arg("fresh", "--fresh", "rebuild now instead of using the guardian's cached map"),))
 async def market_map(fresh: bool = False) -> str:
     """The whole tape at once: regime, breadth, dispersion, BTC/ETH, and every sector ranked by its move net of BTC
     (median returns, breadth, volume surge, funding tilt, leader/laggard, rotation in/out), plus market pauses and
@@ -58,7 +60,8 @@ async def market_map(fresh: bool = False) -> str:
     return render(m)
 
 
-@tool
+@command(cli="profile", help="per-coin behaviour: levels, sessions, context, our trades (shrunk)",
+         args=(Arg("symbol"),))
 async def coin_profile(symbol: str) -> dict[str, Any]:
     """Per-coin behaviour: how it acts at round numbers / 24h highs (sweep study), where its moves and volume happen
     by session (30d), sector/beta context, our past trades on it. Coin numbers are shrunk toward the all-coin value
@@ -68,7 +71,8 @@ async def coin_profile(symbol: str) -> dict[str, Any]:
     return await build_profile(app.ex, app.journal, symbol)
 
 
-@tool
+@command(cli="read", help="what game is this coin playing: lifecycle x tape x controller -> playbook",
+         args=(Arg("symbol"),))
 async def read_coin(symbol: str) -> dict[str, Any]:
     """What game is this coin playing right now and how do we profit? Lifecycle stage (new listing, pumping,
     post-pump, bleeding, unlock ahead, delisting risk) x the game on the tape x controller label (thin float,
@@ -79,7 +83,7 @@ async def read_coin(symbol: str) -> dict[str, Any]:
     return await rc(app.ex, app.journal, symbol)
 
 
-@tool
+@command()
 async def position_ladder(symbol: str) -> dict[str, Any]:
     """3-level ladder for an open short (docs/LADDER.md): T1-T3 with no-edge p0 and edge-adjusted odds, EV in R
     net of costs, the state score (squeeze / tape / breadth / time parts) and the exposure the rule would hold.

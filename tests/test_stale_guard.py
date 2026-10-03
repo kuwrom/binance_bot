@@ -10,7 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from shortbot import audit, mcp_desk, mcp_kill, mcp_research, mcp_trade, procs, provenance, stale_guard
 from shortbot.journal import Journal
-from shortbot.mcp_server import mcp
+from shortbot.mcp_server import TOOLS, mcp
 
 NEW = "f" * 64
 
@@ -59,7 +59,7 @@ async def test_a_write_is_refused_on_stale_code_and_nothing_is_sent(tmp_path, mo
     j = Journal(tmp_path / "j.db")
     _desk(monkeypatch, j, open_short=_never, move_stop=_never)
     _disk_is(monkeypatch, NEW)
-    res = await mcp_trade.open_short("QNT", 1.2, "pump_fade", "turned")
+    res = await TOOLS["open_short"]("QNT", 1.2, "pump_fade", "turned")
     assert res["ok"] is False and res["stale_code"] is True
     old = procs.code_version()[:12]
     assert res["error"] == (f"stale code: this MCP server started on {old}, the code on disk is {NEW[:12]}; ask the "
@@ -67,7 +67,7 @@ async def test_a_write_is_refused_on_stale_code_and_nothing_is_sent(tmp_path, mo
                             "process on the code on disk): `.venv/bin/shortbot open SYMBOL --stop STOP_PRICE --setup "
                             "SETUP --thesis THESIS [--plan JSON] [--notional USDT] [--leverage N] [--conviction C] "
                             "[--veto-override REASON] [--budget-override REASON]`. Nothing was sent.")
-    res = await mcp_trade.move_stop("QNT", 1.1, "trail")
+    res = await TOOLS["move_stop"]("QNT", 1.1, "trail")
     assert res["stale_code"] is True
     rows = _call_rows(j)
     assert [(r["name"], r["outcome"], r["actor"]) for r in rows] == [
@@ -84,7 +84,7 @@ async def test_a_write_runs_when_the_code_on_disk_matches(tmp_path, monkeypatch)
         sent.append(a)
         return {"ok": True, "stop": a[1]}
     _desk(monkeypatch, j, move_stop=move_stop)
-    res = await mcp_trade.move_stop("QNT", 1.1, "trail")
+    res = await TOOLS["move_stop"]("QNT", 1.1, "trail")
     assert res == {"ok": True, "stop": 1.1} and sent == [("QNT", 1.1, "trail")]
     (row,) = _call_rows(j)
     assert row["outcome"] == "ok"
@@ -95,7 +95,7 @@ async def test_flatten_all_is_refused_with_the_cli_fallback(tmp_path, monkeypatc
     _desk(monkeypatch, j)
     monkeypatch.setattr(mcp_kill.killswitch_ops, "flatten", _never)
     _disk_is(monkeypatch, NEW)
-    res = await mcp_kill.flatten_all("squeeze")
+    res = await TOOLS["flatten_all"]("squeeze")
     assert res["ok"] is False and res["stale_code"] is True
     assert "shortbot flatten --reason" in res["error"] and "Nothing was sent" in res["error"]
 
@@ -111,9 +111,9 @@ async def test_halt_and_log_decision_still_run_on_stale_code_annotated(tmp_path,
         return {"ok": True, "state": state}
     monkeypatch.setattr(mcp_kill.killswitch_ops, "halt", halt)
     _disk_is(monkeypatch, NEW)
-    res = await mcp_kill.halt_trading("squeeze")
+    res = await TOOLS["halt_trading"]("squeeze")
     assert res["ok"] is True and halted == [("HALTED", "squeeze")] and "stale code" in res["stale_code"]
-    res = await mcp_research.log_decision("watch", "lower high forming", "QNT/USDT:USDT")
+    res = await TOOLS["log_decision"]("watch", "lower high forming", "QNT/USDT:USDT")
     assert res["ok"] is True and "stale code" in res["stale_code"]
     assert [d["action"] for d in j.decisions()] == ["watch"]
 
@@ -127,7 +127,7 @@ async def test_a_dict_read_runs_with_a_warning(tmp_path, monkeypatch):
         return acct
     _desk(monkeypatch, j, account=account)
     _disk_is(monkeypatch, NEW)
-    res = await mcp_trade.account()
+    res = await TOOLS["account"]()
     assert res["equity"] == 100.0
     assert res["stale_code"].startswith(f"stale code: this MCP server started on {procs.code_version()[:12]}, the code "
                                         f"on disk is {NEW[:12]}")
@@ -158,7 +158,7 @@ async def test_reads_are_untouched_when_current(tmp_path, monkeypatch):
     async def positions():
         return [{"symbol": "QNT/USDT:USDT"}]
     _desk(monkeypatch, j, positions=positions)
-    assert await mcp_trade.positions() == [{"symbol": "QNT/USDT:USDT"}]
+    assert await TOOLS["positions"]() == [{"symbol": "QNT/USDT:USDT"}]
 
 
 async def test_a_read_that_crashes_on_stale_code_says_so(tmp_path, monkeypatch):
@@ -175,7 +175,7 @@ async def test_a_read_that_crashes_on_stale_code_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_desk.regime, "market_regime", regime)
     _disk_is(monkeypatch, NEW)
     with pytest.raises(ToolError) as e:
-        await mcp_desk.governor_status()
+        await TOOLS["governor_status"]()
     msg = str(e.value)
     assert msg.startswith(f"stale code: this MCP server started on {procs.code_version()[:12]}")
     assert "KeyError: 'equity_peak'" in msg and "governor_status" in msg and "/mcp" in msg
@@ -186,7 +186,7 @@ async def test_a_package_dir_that_is_gone_is_stale(tmp_path, monkeypatch):
     j = Journal(tmp_path / "j.db")
     _desk(monkeypatch, j, move_stop=_never)
     monkeypatch.setattr(provenance, "PKG", tmp_path / "gone")
-    res = await mcp_trade.move_stop("QNT", 1.1, "trail")
+    res = await TOOLS["move_stop"]("QNT", 1.1, "trail")
     assert res["stale_code"] is True and f"its code directory {tmp_path / 'gone'} is gone" in res["error"]
 
 
@@ -214,10 +214,10 @@ async def test_a_failed_hash_refuses_writes_and_lets_reads_run(tmp_path, monkeyp
         return {"equity": 100.0}
     _desk(monkeypatch, j, move_stop=_never, account=account)
     hashed = _disk_is(monkeypatch, PermissionError("denied: shortbot/x.py"))
-    res = await mcp_trade.move_stop("QNT", 1.1, "trail")
+    res = await TOOLS["move_stop"]("QNT", 1.1, "trail")
     assert res["ok"] is False and res["code_check_failed"] is True and "stale_code" not in res
     assert "PermissionError: denied: shortbot/x.py" in res["error"] and "Nothing was sent" in res["error"]
-    assert await mcp_trade.account() == {"equity": 100.0}   # fail open for reads, no warning
+    assert await TOOLS["account"]() == {"equity": 100.0}   # fail open for reads, no warning
     (row,) = _call_rows(j)
     assert row["outcome"] == "refused"
     assert len(hashed) == 2   # a failure is not cached: the next call retries

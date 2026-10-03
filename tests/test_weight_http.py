@@ -160,8 +160,7 @@ async def test_guardian_lanes_tag_their_jobs_and_record_a_budget_wait(clock, dem
 
 async def test_mcp_tools_run_under_their_class(monkeypatch):
     from shortbot import mcp_server, mcp_trade
-    names = {t.name for t in await mcp_server.mcp.list_tools()}
-    assert mcp_server.PROTECTIVE_TOOLS <= names and mcp_server.RESEARCH_TOOLS <= names
+    TOOLS = mcp_server.TOOLS
     seen = []
 
     async def record(*a, **k):
@@ -171,9 +170,9 @@ async def test_mcp_tools_run_under_their_class(monkeypatch):
     monkeypatch.setattr(mcp_trade, "get_app", lambda: app)
     monkeypatch.setattr(mcp_trade, "regime", SimpleNamespace(market_regime=record))
     monkeypatch.setattr(mcp_trade, "scanner", SimpleNamespace(scan_shorts=record, coin_snapshot=record))
-    await mcp_trade.scan_shorts()
-    await mcp_trade.coin_snapshot("BTC")
-    await mcp_trade.move_stop("BTC", 1.0, "test")
+    await TOOLS["scan_shorts"]()
+    await TOOLS["coin_snapshot"]("BTC")
+    await TOOLS["move_stop"]("BTC", 1.0, "test")
     assert seen == [RESEARCH, RESEARCH, DESK, PROTECTIVE]
 
 

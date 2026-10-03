@@ -1,20 +1,21 @@
-"""Research and journal MCP tools: review chart, bracket odds and calibration, unlocks, signal plug-ins, research risk
-params, decisions, learnings, research report and sessions. Registered on the shared server by importing this module
-from mcp_server."""
+"""Research and journal commands (commands.py: each one is an MCP tool and a `shortbot` subcommand): review chart,
+bracket odds and calibration, unlocks, signal plug-ins, research risk params, decisions, learnings, research report and
+sessions."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.mcpserver.exceptions import ToolError
-
 from . import alerts_view, learnings_view, research
 from .app import get_app
+from .commands import Arg, CommandError, command
 from .entries import EntryDesk
-from .mcp_server import tool
+from .exchange import to_symbol
+from .weight import PROTECTIVE
 
 
-@tool
+@command(cli="chart", help="render a PNG (candles, levels, sweeps, liquidations, OI, CVD)", args=(
+    Arg("symbol"), Arg("tf", "--tf", choices=("5m", "15m", "1h", "4h")), Arg("bars", "--bars")))
 async def chart(symbol: str, tf: str = "15m", bars: int = 150) -> dict[str, Any]:
     """Render a review chart PNG (candles, VWAP ±2σ, liquidity levels, position/entries, failed-sweep marker,
     liquidations, OI, CVD) and return its path + the tape state. Read the PNG to look at it."""
@@ -23,7 +24,11 @@ async def chart(symbol: str, tf: str = "15m", bars: int = 150) -> dict[str, Any]
     return await render(app.ex, symbol, tf, bars, trader=app.trader, entries=EntryDesk(app.trader).pending())
 
 
-@tool
+@command(cli="prob", help="no-edge odds for a short bracket (closed form + fat-tail MC); logged", args=(
+    Arg("symbol"), Arg("stop", "--stop"), Arg("targets", "--target", type=float, nargs="+"), Arg("hours", "--hours"),
+    Arg("entry", "--entry", "limit entry price (default: current price)"),
+    Arg("fill_hours", "--fill-hours", "TTL for fill odds when entry is above the market"),
+    Arg("analyst_p", "--analyst-p", "your own P(target first), logged for calibration"), Arg("setup", "--setup")))
 async def probability(symbol: str, stop: float, targets: list[float], hours: float = 24.0, entry: float | None = None,
                       fill_hours: float | None = None, analyst_p: float | None = None,
                       setup: str = "manual") -> dict[str, Any]:
@@ -38,7 +43,7 @@ async def probability(symbol: str, stop: float, targets: list[float], hours: flo
         context={"setup": setup})
 
 
-@tool
+@command(cli="calibration", help="calibration (Brier) + measured edge by setup/tape/regime")
 async def calibration_report() -> dict[str, Any]:
     """Brier calibration of the model and the analyst, and the MEASURED edge (observed P(target first) − no-edge
     baseline, with 95% CI) by setup, tape state, regime and source. Sizing may use p only after the gate in
@@ -47,7 +52,7 @@ async def calibration_report() -> dict[str, Any]:
     return prob_report(get_app().journal)
 
 
-@tool
+@command(write=True)
 async def add_unlock(base: str, date: str, recipient: str, source: str, pct_supply: float | None = None,
                      notes: str = "") -> dict[str, Any]:
     """Record a token unlock (strategy #1: supply-shock shorts). recipient: team|investor|cliff|ecosystem|community|
@@ -57,14 +62,14 @@ async def add_unlock(base: str, date: str, recipient: str, source: str, pct_supp
         base, date, pct_supply, recipient, source, notes)}
 
 
-@tool
+@command(cli="unlocks", help="upcoming recorded unlocks", args=(Arg("base", "--base"), Arg("days", "--days")))
 async def upcoming_unlocks(base: str | None = None, days: float = 60) -> list[dict[str, Any]]:
     """Recorded unlocks in the next `days` (and the past 7): days_to_unlock, % supply, recipient, source."""
     from .market.events import EventStore
     return EventStore(get_app().settings.db_path).upcoming(base, days=days)
 
 
-@tool
+@command(cli="signals", help="list registered signal plug-ins")
 async def list_signals() -> list[dict[str, Any]]:
     """Registered signal plug-ins (name, group, doc). Features of all of them are logged for research."""
     from .signals import describe
@@ -72,13 +77,13 @@ async def list_signals() -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------------------ research params
-@tool
+@command(cli="params")
 async def risk_params() -> dict[str, Any]:
     """Effective risk limits, fixed .env baseline, AI overrides, research bounds and active experiment."""
     return _params().describe()
 
 
-@tool
+@command(write=True, weight=PROTECTIVE)
 async def set_risk_params(changes: dict[str, float], reasoning: str, experiment: str) -> dict[str, Any]:
     """Research: change risk limits within the human-set bounds; tell the human. Tunable: max_leverage,
     max_position_notional, max_total_notional, max_positions, risk_per_trade_pct, daily_loss_limit_pct,
@@ -89,7 +94,7 @@ async def set_risk_params(changes: dict[str, float], reasoning: str, experiment:
     return _params().set(changes, reasoning, experiment)
 
 
-@tool
+@command(write=True)
 async def reset_risk_params(reasoning: str) -> dict[str, Any]:
     """Drop all research overrides and return to the .env baseline (always allowed: it only reduces risk)."""
     return _params().reset(reasoning)
@@ -98,18 +103,20 @@ async def reset_risk_params(reasoning: str) -> dict[str, Any]:
 def _params():
     p = get_app().params
     if p is None:
-        raise ToolError("research params unavailable in this process")
+        raise CommandError("research params unavailable in this process")
     return p
 
 
 # ------------------------------------------------------------------ journal / learning
-@tool
+@command(cli="log", help="journal a decision (hold, skip, watch, note, session_summary)",
+         args=(Arg("action"), Arg("reasoning"), Arg("symbol", "--symbol")))
 async def log_decision(action: str, reasoning: str, symbol: str | None = None) -> dict[str, Any]:
     """Record a non-order decision (skip, watch, hold, note, session_summary) with reasoning."""
-    return {"ok": True, "decision_id": get_app().journal.log_decision(action, reasoning, symbol)}
+    sym = to_symbol(symbol) if symbol else None
+    return {"ok": True, "decision_id": get_app().journal.log_decision(action, reasoning, sym)}
 
 
-@tool
+@command(cli="journal", args=(Arg("limit", "--limit"),))
 async def journal(limit: int = 20) -> dict[str, Any]:
     """Stats (by setup/experiment: win rate, avg R, MAE/MFE), open trades, recent trades/decisions/alerts,
     and active learnings (each with an `audit`: kind, n, days, review date, flags; '?' fields are inferred).
@@ -121,7 +128,7 @@ async def journal(limit: int = 20) -> dict[str, Any]:
             "learnings": learnings_view.annotate(j, j.learnings())}
 
 
-@tool
+@command(write=True)
 async def add_learning(statement: str, evidence: str, provenance: list[str], kind: str, setup: str | None = None,
                        status: str = "hypothesis", confidence: str = "low", n: float | None = None,
                        days: int | None = None, sample: str | None = None,
@@ -136,13 +143,13 @@ async def add_learning(statement: str, evidence: str, provenance: list[str], kin
     "registry:lib.x", "data/research/<dir>"). review_by (YYYY-MM-DD; default: 14 days for a hypothesis, 30 for a
     supported statistical learning): the brief resurfaces it after that date. n < 30 is flagged as an anecdote."""
     if not provenance:
-        raise ToolError("provenance is required: name where the evidence came from, e.g. ['trade:12']")
+        raise CommandError("provenance is required: name where the evidence came from, e.g. ['trade:12']")
     return {"ok": True, "learning_id": get_app().journal.add_learning(
         statement, evidence, setup, status, confidence, provenance, kind=kind, n=n, days=days, sample=sample,
         review_by=review_by)}
 
 
-@tool
+@command(write=True)
 async def update_learning(learning_id: int, status: str | None = None, evidence: str | None = None,
                           confidence: str | None = None, provenance: list[str] | None = None, kind: str | None = None,
                           n: float | None = None, days: int | None = None, sample: str | None = None,
@@ -155,7 +162,7 @@ async def update_learning(learning_id: int, status: str | None = None, evidence:
     return {"ok": True}
 
 
-@tool
+@command(cli="research", args=(Arg("min_n", "--min-n", "smallest group reported"),))
 async def research_report(min_n: int = 5) -> dict[str, Any]:
     """What predicted drops? Labelled scan candidates grouped by tradable/vetoed, veto reason, setup, score bucket
     and feature tertiles: avg 24h short return, hit rate, squeeze rate. `learnings`: statistical learnings with their
@@ -166,7 +173,7 @@ async def research_report(min_n: int = 5) -> dict[str, Any]:
     return {**research.report(j, min_n), "forward": summary(j.db)}
 
 
-@tool
+@command(write=True)
 async def start_session(notes: str = "") -> dict[str, Any]:
     """Start a trading session in the journal: call it FIRST, once per session. Acknowledges the alerts the brief listed
     as unacknowledged and returns them (count by kind + the urgent ones), so none is acknowledged unseen. Every row

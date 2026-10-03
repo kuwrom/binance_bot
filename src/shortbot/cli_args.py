@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import allocator, backup, killswitch_ops, probes
+from . import backup, commands, killswitch_ops, probes
 from .journal_research import LEARNING_KINDS
 from .tilts import TIERS
 
@@ -13,18 +13,6 @@ from .tilts import TIERS
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="shortbot")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("regime")
-    s = sub.add_parser("scan")
-    s.add_argument("--min-change", type=float, default=10.0)
-    s.add_argument("--top", type=int, default=10)
-    s.add_argument("--log", action="store_true", help="log candidates for research")
-    s.add_argument("--direction", choices=("gainers", "losers", "both", "now"), default="gainers",
-                   help="now = biggest 4h movers (needs --log for the market-map cache)")
-    for name in ("snapshot", "news"):
-        sub.add_parser(name).add_argument("symbol")
-    for name in ("account", "positions", "params", "setups", "research", "brief"):
-        sub.add_parser(name)
-    sub.add_parser("journal").add_argument("--limit", type=int, default=20)
     o = sub.add_parser("open", help="open a short (all risk checks apply)")
     o.add_argument("symbol")
     o.add_argument("--stop", type=float, required=True)
@@ -46,13 +34,6 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--of-original", action="store_true", help="fraction = share of the ORIGINAL size gone by the end")
     killswitch_ops.add_cli(sub)
     probes.add_cli(sub)
-    allocator.add_cli(sub)
-    sub.add_parser("reassess", help="re-plan a position from its current state").add_argument("symbol")
-    bu = sub.add_parser("budget", help="current dynamic risk budget for a new short")
-    bu.add_argument("symbol")
-    bu.add_argument("--conviction", choices=TIERS, default="B")
-    bu.add_argument("--setup")
-    sub.add_parser("governor", help="account breakers: daily/weekly cap, drawdown, streak, give-back")
     w = sub.add_parser("widen-stop", help="widen once, with automatic size cut to keep <= 1R")
     w.add_argument("symbol")
     w.add_argument("price", type=float)
@@ -87,8 +68,6 @@ def build_parser() -> argparse.ArgumentParser:
     le.add_argument("--sample", help="where the sample lives: research_report:2026-10-02, registry:lib.x, data/...")
     le.add_argument("--review-by", help="YYYY-MM-DD the brief resurfaces it (default: 14 days for a hypothesis, 30 "
                     "for a supported statistical learning)")
-    sub.add_parser("map", help="market map: regime, breadth, sectors vs BTC, rotation, vetoes").add_argument(
-        "--fresh", action="store_true", help="rebuild now instead of using the guardian's cached map")
     sw = sub.add_parser("sweeps", help="level-sweep study: how far price pokes past round numbers / 24h highs")
     sw.add_argument("action", choices=("run", "report"))
     sw.add_argument("--days", type=float, default=3)
@@ -110,18 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
     ld.add_argument("--enable", action="store_true", help="opt this trade into the live ladder (pins 1R, full size)")
     ld.add_argument("--apply", action="store_true", help="execute the decision: cut / add (<= 1R) / stop re-level")
     ld.add_argument("--dry-run", action="store_true", help="show what --apply would do, without orders")
-    sub.add_parser("read", help="what game is this coin playing: lifecycle x tape x controller -> playbook").add_argument(
-        "symbol")
-    sub.add_parser("profile", help="per-coin behaviour: levels, sessions, context, our trades (shrunk)").add_argument(
-        "symbol")
-    sub.add_parser("clock", help="UTC session, funding, US open, macro calendar, cold/warm desk")
     ma = sub.add_parser("macro-add", help="record a scheduled macro event (source required)")
     ma.add_argument("name")
     ma.add_argument("--when", required=True, help="ISO time WITH offset, e.g. 2026-09-30T08:30:00-04:00")
     ma.add_argument("--kind", required=True, choices=("tier1", "tier2", "fomc", "maintenance"))
     ma.add_argument("--source", required=True)
     sub.add_parser("macro-refresh", help="pull BLS + ForexFactory + FOMC dates into the macro calendar")
-    sub.add_parser("entries", help="pending limit entries")
     cg = sub.add_parser("cancel-group")
     cg.add_argument("group_id")
     cg.add_argument("--reason", required=True)
@@ -129,21 +102,6 @@ def build_parser() -> argparse.ArgumentParser:
     am.add_argument("entry_id", type=int)
     am.add_argument("price", type=float)
     am.add_argument("--reason", required=True)
-    ch = sub.add_parser("chart", help="render a PNG (candles, levels, sweeps, liquidations, OI, CVD)")
-    ch.add_argument("symbol")
-    ch.add_argument("--tf", default="15m", choices=("5m", "15m", "1h", "4h"))
-    ch.add_argument("--bars", type=int, default=150)
-    sub.add_parser("signals", help="list registered signal plug-ins")
-    pb = sub.add_parser("prob", help="no-edge odds for a short bracket (closed form + fat-tail MC); logged")
-    pb.add_argument("symbol")
-    pb.add_argument("--stop", type=float, required=True)
-    pb.add_argument("--target", type=float, nargs="+", required=True)
-    pb.add_argument("--hours", type=float, default=24.0)
-    pb.add_argument("--entry", type=float, help="limit entry price (default: current price)")
-    pb.add_argument("--fill-hours", type=float, help="TTL for fill odds when entry is above the market")
-    pb.add_argument("--analyst-p", type=float, help="your own P(target first), logged for calibration")
-    pb.add_argument("--setup", default="manual")
-    sub.add_parser("calibration", help="calibration (Brier) + measured edge by setup/tape/regime")
     ua = sub.add_parser("unlock-add", help="record a token unlock (source required)")
     ua.add_argument("base")
     ua.add_argument("--date", required=True, help="ISO date/time, UTC (e.g. 2026-10-20 or 2026-10-20T12:00)")
@@ -151,13 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
     ua.add_argument("--recipient", required=True, choices=("team", "investor", "cliff", "ecosystem", "community", "other"))
     ua.add_argument("--source", required=True, help="URL or document the date came from")
     ua.add_argument("--notes", default="")
-    ul = sub.add_parser("unlocks", help="upcoming recorded unlocks")
-    ul.add_argument("--base")
-    ul.add_argument("--days", type=float, default=60)
-    lg = sub.add_parser("log", help="journal a decision (hold, skip, watch, note, session_summary)")
-    lg.add_argument("action")
-    lg.add_argument("reasoning")
-    lg.add_argument("--symbol")
     m = sub.add_parser("move-stop", help="tighten a stop (down only)")
     m.add_argument("symbol")
     m.add_argument("price", type=float)
@@ -170,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--action", help="one action, e.g. call, rejected, open")
     au.add_argument("--limit", type=int, default=50)
     sub.add_parser("hook-session", help="SessionStart hook: record the Claude session's model (reads hook JSON on stdin)")
+    sub.add_parser("brief")
+    for cmd in commands.load():
+        if cmd.cli:
+            commands.add_arguments(sub.add_parser(cmd.cli, **({"help": cmd.help} if cmd.help else {})), cmd)
     return p
 
 

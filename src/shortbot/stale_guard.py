@@ -115,10 +115,10 @@ def why(v: Verdict) -> str:
         f"{started}, the code on disk is {v.disk[:12]}"
 
 
-async def refuse(name: str, v: Verdict) -> dict[str, Any]:
-    """What a write gets instead of running, on stale or unverifiable code: the way out, the CLI form included."""
+async def refuse(name: str, v: Verdict, form: str | None) -> dict[str, Any]:
+    """What a write gets instead of running, on stale or unverifiable code: the way out, its CLI `form` included."""
     out = RECONNECT + (f", or run the same action through the CLI (a fresh process on the code on disk): "
-                       f"`{SHORTBOT} {CLI[name]}`" if name in CLI else "") + ". Nothing was sent."
+                       f"`{SHORTBOT} {form}`" if form else "") + ". Nothing was sent."
     if v.error:
         return {"ok": False, "code_check_failed": True,
                 "error": f"could not compare this MCP server's code with the code on disk ({v.error}), so {name} was "

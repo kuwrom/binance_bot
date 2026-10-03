@@ -12,20 +12,17 @@ import json
 import logging
 import sys
 
-from . import allocator, audit, audit_view, backup, killswitch_ops, news, research, scanner, setups, weight
+from . import audit, audit_view, backup, commands, killswitch_ops, weight
 from .app import close_app, get_app
 from .cli_args import build_parser
 from .cli_brief import brief
 from .exchange import to_symbol
-from .market import regime
 from .entries import EntryDesk
 from .positioning import PositionOps
 from .redact import install_log_redaction
 
 # Commands that leave no `call` row: they change nothing (or journal their own row, like `log`). Any other is logged.
-READS = frozenset({"regime", "scan", "snapshot", "news", "account", "positions", "params", "setups", "research",
-                   "journal", "brief", "map", "study", "read", "profile", "clock", "entries", "chart", "prob",
-                   "unlocks", "calibration", "signals", "budget", "governor", "reassess", "book-plan", "log", "audit"})
+READS = frozenset({"brief", "study", "audit"})
 
 
 
@@ -50,32 +47,15 @@ async def _study(app, args) -> dict:
     return {**res, "trial_register_rows": TR.record(args.name, rows(res))}
 
 async def _run(args: argparse.Namespace) -> object:
+    if args.cmd in commands._BY_CLI:   # migrated (#36 step 1)
+        cmd = commands.by_cli(args.cmd)
+        try:
+            return await cmd.body(**cmd.cli_kwargs(args))
+        finally:
+            await close_app()
     app = get_app()
     try:
         match args.cmd:
-            case "regime":
-                return await regime.market_regime(app.ex)
-            case "scan":
-                return await scanner.scan_shorts(app.ex, min_change=args.min_change, top_n=args.top,
-                                                 journal=app.journal if args.log else None,
-                                                 direction=args.direction)
-            case "snapshot":
-                return await scanner.coin_snapshot(app.ex, args.symbol)
-            case "news":
-                return await news.coin_news(args.symbol.upper())
-            case "account":
-                return await app.trader.account()
-            case "positions":
-                return await app.trader.positions()
-            case "params":
-                return app.params.describe()
-            case "setups":
-                return setups.describe()
-            case "research":
-                return research.report(app.journal)
-            case "journal":
-                return {"stats": app.journal.stats(), "trades": app.journal.trades(args.limit),
-                        "decisions": app.journal.decisions(limit=args.limit), "learnings": app.journal.learnings()}
             case "brief":
                 return await brief(app)
             case "learn":
@@ -83,10 +63,6 @@ async def _run(args: argparse.Namespace) -> object:
                     args.statement, args.evidence, args.setup, args.status, args.confidence,
                     args.provenance or ["cli"], kind=args.kind, n=args.n, days=args.days, sample=args.sample,
                     review_by=args.review_by)}
-            case "map":
-                from .market.market_map import build_map, cached, render
-                m = (None if args.fresh else cached(app.journal, 900)) or await build_map(app.ex, app.journal)
-                return render(m)
             case "sweeps":
                 from . import sweeps
                 if args.action == "run":
@@ -122,15 +98,6 @@ async def _run(args: argparse.Namespace) -> object:
                         return {"error": "usage: shortbot registry status ID --status S --reason R"}
                     return R.set_status(app.journal.db, args.arg, args.status, args.reason or "")
                 return {"tree": R.tree(app.journal.db), "decay_alarms": R.decay_alarms(app.journal.db)}
-            case "read":
-                from .read import read_coin
-                return await read_coin(app.ex, app.journal, args.symbol)
-            case "profile":
-                from .profile import build_profile
-                return await build_profile(app.ex, app.journal, args.symbol)
-            case "clock":
-                from .warmup import desk_clock
-                return desk_clock(app.settings, app.journal)
             case "warmup":
                 from .warmup import WarmUp
                 wu = WarmUp(app.ex, app.journal)
@@ -153,8 +120,6 @@ async def _run(args: argparse.Namespace) -> object:
             case "close":
                 return await app.trader.close(args.symbol, args.reason, args.lesson, args.fraction,
                                               args.expect_contracts, args.of_original)
-            case "book-plan":
-                return await allocator.run_cli(app, args)
             case "kill-switch" | "flatten":
                 return await killswitch_ops.run_cli(app, args)
             case "probe":
@@ -177,53 +142,22 @@ async def _run(args: argparse.Namespace) -> object:
                     review_by=args.review_by)
             case "start-session":
                 return await tool_body("mcp_research", "start_session")(args.notes)
-            case "reassess":
-                return await PositionOps(app.trader).reassess(args.symbol)
             case "widen-stop":
                 return await PositionOps(app.trader).widen_stop(args.symbol, args.price, args.reason)
             case "add":
                 return await PositionOps(app.trader).add_to_winner(args.symbol, args.notional, args.stop, args.reason)
-            case "budget":
-                reg = (await regime.market_regime(app.ex))["verdict_for_shorts"]
-                return await app.trader.budget(app.trader, to_symbol(args.symbol), reg, args.conviction, args.setup)
-            case "governor":
-                from .risk_budget import governor_status
-                return await governor_status(app.trader, (await regime.market_regime(app.ex))["verdict_for_shorts"])
             case "propose":
                 return await EntryDesk(app.trader).propose_group(json.loads(args.proposals), args.ttl_hours,
                                                                  not args.no_prearm, args.warmup_override)
-            case "entries":
-                return EntryDesk(app.trader).pending(all_orders=True)
             case "cancel-group":
                 return await EntryDesk(app.trader).cancel_group(args.group_id, args.reason)
             case "amend":
                 return await EntryDesk(app.trader).amend(args.entry_id, args.price, args.reason)
-            case "chart":
-                from .charts import render
-                return await render(app.ex, args.symbol, args.tf, args.bars, trader=app.trader,
-                                    entries=EntryDesk(app.trader).pending())
-            case "prob":
-                from .probability import ProbabilityEngine
-                return await ProbabilityEngine(app.ex, app.journal).short_bracket(
-                    args.symbol, args.stop, args.target, args.hours, entry=args.entry, fill_hours=args.fill_hours,
-                    log_source="manual", analyst_p=args.analyst_p, context={"setup": args.setup})
             case "unlock-add":
                 from .market.events import EventStore
                 uid = EventStore(app.settings.db_path).add_unlock(args.base, args.date, args.pct, args.recipient,
                                                                   args.source, args.notes)
                 return {"ok": True, "unlock_id": uid}
-            case "unlocks":
-                from .market.events import EventStore
-                return EventStore(app.settings.db_path).upcoming(args.base, days=args.days)
-            case "calibration":
-                from .probability.evaluate import report as prob_report
-                return prob_report(app.journal)
-            case "signals":
-                from .signals import describe
-                return describe()
-            case "log":
-                sym = to_symbol(args.symbol) if args.symbol else None
-                return {"decision_id": app.journal.log_decision(args.action, args.reasoning, sym)}
             case "audit":
                 return audit_view.report(app.journal, args.since, args.actor, args.action, args.limit)
     finally:
@@ -241,20 +175,21 @@ def tool_body(module: str, name: str):
     finally:
         root.handlers[:] = handlers
         root.setLevel(level)
-    return getattr(mod, name).__wrapped__
+    return getattr(mod, name)
 
 
 # Exchange weight classes (#70, weight.py), as for the MCP tools: order / close / stop / amend paths never wait for
 # budget, scans and studies yield to them, every other command is a desk read (untagged).
 PROTECTIVE_CMDS = frozenset({"open", "close", "move-stop", "widen-stop", "add", "propose", "cancel-group", "amend",
                              "update-plan", "set-params", "probe"})
-RESEARCH_CMDS = frozenset({"scan", "map", "sweeps", "study", "book-plan"})
+RESEARCH_CMDS = frozenset({"sweeps", "study"})
 
 
 async def _audited(args: argparse.Namespace) -> object:
-    with audit.acting(f"cli:{args.cmd}"), weight.tagged(weight.pick(args.cmd, PROTECTIVE_CMDS, RESEARCH_CMDS),
-                                                        wait_s=weight.ENTRY_WAIT_S):
-        if args.cmd in READS:
+    cmd = commands._BY_CLI.get(args.cmd)
+    cls = cmd.weight if cmd else weight.pick(args.cmd, PROTECTIVE_CMDS, RESEARCH_CMDS)
+    with audit.acting(f"cli:{args.cmd}"), weight.tagged(cls, wait_s=weight.ENTRY_WAIT_S):
+        if (not cmd.write) if cmd else args.cmd in READS:
             return await _run(args)
         j = get_app().journal   # the singleton _run uses; close_app leaves its journal open
         return await audit.called(lambda: j, args.cmd, {k: v for k, v in vars(args).items() if k != "cmd"},

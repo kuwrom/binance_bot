@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from shortbot import audit, cli, mcp_research, mcp_trade, procs
 from shortbot.guardian_loop import Job, Lane
 from shortbot.journal import Journal
+from shortbot.mcp_server import TOOLS
 
 OLD_SCHEMA = """
 CREATE TABLE sessions (id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, mode TEXT NOT NULL, notes TEXT);
@@ -104,9 +105,9 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
     audit.set_process("mcp")
     jm = Journal(db)
     monkeypatch.setattr(mcp_research, "get_app", lambda: _app(jm))
-    sid = (await mcp_research.start_session("audit test"))["session_id"]
-    await mcp_research.log_decision("watch", "lower high forming", "QNT/USDT:USDT")
-    await mcp_research.add_learning("pumps fade", "trades 1-3", ["trade:1"], "statistical")
+    sid = (await TOOLS["start_session"]("audit test"))["session_id"]
+    await TOOLS["log_decision"]("watch", "lower high forming", "QNT/USDT:USDT")
+    await TOOLS["add_learning"]("pumps fade", "trades 1-3", ["trade:1"], "statistical")
     # a CLI command the same Claude session runs through Bash: another process, another Journal
     audit.set_process("cli")
     jc = Journal(db)
@@ -151,13 +152,13 @@ async def test_a_failed_tool_call_is_logged(tmp_path, monkeypatch):
     j = Journal(tmp_path / "j.db")
     monkeypatch.setattr(mcp_trade, "get_app", lambda: _app(j))
     with pytest.raises(ToolError, match="no open journal trade"):
-        await mcp_trade.update_plan("QNT", {"time_stop_hours": 30}, "longer hold")
+        await TOOLS["update_plan"]("QNT", {"time_stop_hours": 30}, "longer hold")
 
     async def boom(*a):
         raise RuntimeError("exchange down")
     monkeypatch.setattr(mcp_trade, "get_app", lambda: _app(j, trader=SimpleNamespace(move_stop=boom)))
     with pytest.raises(ToolError, match="RuntimeError: exchange down"):
-        await mcp_trade.move_stop("QNT", 1.2, "trail")
+        await TOOLS["move_stop"]("QNT", 1.2, "trail")
     plan_call, stop_call = j.decisions(calls=True)[::-1]
     assert (plan_call["action"], plan_call["actor"], plan_call["symbol"]) == ("call", "mcp:update_plan", "QNT/USDT:USDT")
     assert json.loads(plan_call["snapshot"])["outcome"] == "error" and "no open journal trade" in plan_call["reasoning"]
@@ -177,18 +178,21 @@ async def test_refused_and_read_tool_calls(tmp_path, monkeypatch):
         return []
     tr = SimpleNamespace(move_stop=refuse, positions=positions)
     monkeypatch.setattr(mcp_trade, "get_app", lambda: _app(j, trader=tr))
-    await mcp_trade.move_stop("QNT", 1.2, "see https://x?timestamp=1&signature=abc")
-    await mcp_trade.positions()   # a read: no row
+    await TOOLS["move_stop"]("QNT", 1.2, "see https://x?timestamp=1&signature=abc")
+    await TOOLS["positions"]()   # a read: no row
     (row,) = j.decisions(calls=True)
     snap = json.loads(row["snapshot"])
     assert snap["outcome"] == "refused" and "no open position" in row["reasoning"]
     assert snap["args"]["reason"] == "see https://x?timestamp=<redacted>&signature=<redacted>"
 
 
-async def test_every_unlogged_tool_exists():
-    from shortbot.mcp_server import UNLOGGED, mcp
+async def test_the_writes_are_the_logged_tools():
+    from shortbot import commands
+    from shortbot.mcp_server import mcp
     names = {t.name for t in await mcp.list_tools()}
-    assert UNLOGGED <= names and {"open_short", "close_position", "set_risk_params"} <= names - UNLOGGED
+    writes = {c.name for c in commands.REGISTRY if c.name and c.write}
+    assert writes < names and {"open_short", "close_position", "set_risk_params"} <= writes
+    assert not {"positions", "log_decision", "scan_shorts"} & writes   # log_decision's own row is the record
     from shortbot import mcp_book, mcp_desk, mcp_kill
     for mod in (mcp_trade, mcp_research, mcp_desk, mcp_kill, mcp_book):   # the call row finds the journal through it
         assert callable(getattr(mod, "get_app", None)), mod.__name__

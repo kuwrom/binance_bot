@@ -15,7 +15,8 @@ from shortbot import audit, cli, mcp_research, mcp_trade, provenance, stale_guar
 from shortbot.cli_args import build_parser
 from shortbot.config import ResearchBounds, RiskLimits, Settings
 from shortbot.journal import Journal
-from shortbot.mcp_server import UNLOGGED, mcp
+from shortbot import commands
+from shortbot.mcp_server import TOOLS
 from shortbot.params import ResearchParams
 
 NEW = "f" * 64
@@ -38,9 +39,8 @@ def _subparsers():
 # ------------------------------------------------------------ the map
 async def test_every_state_changing_tool_has_a_cli_form():
     """A new write tool without a CLI form fails here: a stale server's agent would have no way to act."""
-    names = {t.name for t in await mcp.list_tools()}
-    writes = names - (UNLOGGED - {"log_decision"})
-    assert set(stale_guard.CLI) == writes
+    writes = {c.name for c in commands.REGISTRY if c.name and c.write}
+    assert set(stale_guard.CLI) - {"log_decision"} == writes
 
 
 def test_each_cli_form_is_a_real_command_with_its_required_flags():
@@ -58,11 +58,11 @@ def test_each_cli_form_is_a_real_command_with_its_required_flags():
 async def test_a_refusal_names_the_cli_command(monkeypatch):
     monkeypatch.setattr(stale_guard, "_disk", lambda: NEW)
     for tool, form in stale_guard.CLI.items():
-        stale = await stale_guard.refuse(tool, stale_guard.Verdict(NEW))
-        unverified = await stale_guard.refuse(tool, stale_guard.Verdict(error="OSError: gone"))
+        stale = await stale_guard.refuse(tool, stale_guard.Verdict(NEW), form)
+        unverified = await stale_guard.refuse(tool, stale_guard.Verdict(error="OSError: gone"), form)
         for res in (stale, unverified):
             assert f"`.venv/bin/shortbot {form}`" in res["error"] and res["error"].endswith("Nothing was sent.")
-    res = await mcp_trade.move_stop("QNT", 1.1, "trail")   # end to end: a refused write
+    res = await TOOLS["move_stop"]("QNT", 1.1, "trail")   # end to end: a refused write
     assert "run the same action through the CLI" in res["error"]
     assert "`.venv/bin/shortbot move-stop SYMBOL NEW_STOP --reason REASON`" in res["error"]
 
@@ -146,7 +146,7 @@ def _open_trade(app):
 async def test_update_plan_parity(tmp_path, monkeypatch):
     changes = {"time_stop_hours": 30, "auto": {"time_stop": True}}
     res_mcp, res_cli, calls = await _both(
-        tmp_path, monkeypatch, _open_trade, lambda: mcp_trade.update_plan("QNT", changes, "longer hold"),
+        tmp_path, monkeypatch, _open_trade, lambda: TOOLS["update_plan"]("QNT", changes, "longer hold"),
         ["update-plan", "QNT", "--changes", json.dumps(changes), "--reason", "longer hold"])
     assert res_mcp["ok"] and res_mcp == res_cli
     assert calls == {"mcp": [("mcp:update_plan", "ok")], "cli": [("cli:update-plan", "ok")]}
@@ -155,7 +155,7 @@ async def test_update_plan_parity(tmp_path, monkeypatch):
 async def test_set_and_reset_params_parity(tmp_path, monkeypatch):
     res_mcp, res_cli, calls = await _both(
         tmp_path, monkeypatch, lambda a: None,
-        lambda: mcp_research.set_risk_params({"max_leverage": 5, "max_positions": 4}, "tight-stop fades", "lev5"),
+        lambda: TOOLS["set_risk_params"]({"max_leverage": 5, "max_positions": 4}, "tight-stop fades", "lev5"),
         ["set-params", "max_leverage=5", "max_positions=4", "--experiment", "lev5", "--reason", "tight-stop fades"])
     assert res_mcp["changed"]["max_leverage"]["to"] == 5 and _norm(res_mcp) == _norm(res_cli)
     assert calls == {"mcp": [("mcp:set_risk_params", "ok")], "cli": [("cli:set-params", "ok")]}
@@ -163,7 +163,7 @@ async def test_set_and_reset_params_parity(tmp_path, monkeypatch):
     def lev5(a):
         a.params.set({"max_leverage": 5}, "tight-stop fades", "lev5")
     res_mcp, res_cli, calls = await _both(
-        tmp_path / "reset", monkeypatch, lev5, lambda: mcp_research.reset_risk_params("back to baseline"),
+        tmp_path / "reset", monkeypatch, lev5, lambda: TOOLS["reset_risk_params"]("back to baseline"),
         ["reset-params", "--reason", "back to baseline"])
     assert _norm(res_mcp) == _norm(res_cli)
     assert calls["cli"] == [("cli:reset-params", "ok")]
@@ -179,7 +179,7 @@ async def test_update_learning_parity(tmp_path, monkeypatch):
         a.journal.add_learning("pumps fade", "trades 1-3", None, "hypothesis", "low", ["trade:1"], kind="statistical")
     res_mcp, res_cli, calls = await _both(
         tmp_path, monkeypatch, learning,
-        lambda: mcp_research.update_learning(1, status="supported", evidence="trades 4-9", confidence="medium",
+        lambda: TOOLS["update_learning"](1, status="supported", evidence="trades 4-9", confidence="medium",
                                              provenance=["trade:9", "research_report"], n=31, days=12),
         ["update-learning", "1", "--status", "supported", "--evidence", "trades 4-9", "--confidence", "medium",
          "--provenance", "trade:9", "--provenance", "research_report", "--n", "31", "--days", "12"])
@@ -191,7 +191,7 @@ async def test_start_session_parity(tmp_path, monkeypatch):
     def alerts(a):
         a.journal.log_alert("stop_near", "QNT near stop", "QNT/USDT:USDT")
     res_mcp, res_cli, calls = await _both(
-        tmp_path, monkeypatch, alerts, lambda: mcp_research.start_session("morning"),
+        tmp_path, monkeypatch, alerts, lambda: TOOLS["start_session"]("morning"),
         ["start-session", "--notes", "morning"])
     assert res_mcp == res_cli and res_mcp["alerts_acknowledged"]["count"] == 1
     assert calls["cli"] == [("cli:start-session", "ok")]
@@ -201,7 +201,7 @@ def test_the_cli_keeps_its_own_logging_when_it_loads_a_tool_body():
     """Importing the MCP modules runs MCPServer's logging.basicConfig (stderr, INFO); a CLI process keeps its own
     root logger (no handlers: lastResort with redaction, #66). A fresh interpreter, as `shortbot` is."""
     code = ("import logging; from shortbot import cli; fn = cli.tool_body('mcp_trade', 'update_plan'); "
-            "from shortbot import mcp_trade; assert fn is mcp_trade.update_plan.__wrapped__; "
+            "from shortbot import mcp_trade; assert fn is mcp_trade.update_plan; "
             "print(logging.root.handlers, logging.root.level)")
     env = {**os.environ, "PYTHONPATH": str(provenance.PKG.parent)}
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60)

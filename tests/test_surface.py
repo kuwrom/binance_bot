@@ -1,5 +1,6 @@
-"""The agent-facing surface: every MCP tool (name, approval meta, parameters), the server instructions and every CLI
-subcommand with its arguments. A refactor must leave tests/surface.json untouched; an intended change regenerates it:
+"""The agent-facing surface: every MCP tool (name, approval meta, parameters), the server instructions, every CLI
+subcommand with its arguments, and how each command is classified (commands.py: read / write, #70 weight class, #68
+stale exemption). A refactor must leave tests/surface.json untouched; an intended change regenerates it:
 SNAPSHOT_UPDATE=1 .venv/bin/pytest -q tests/test_surface.py"""
 
 import argparse
@@ -51,17 +52,24 @@ async def _mcp() -> dict:
     return {"name": mcp.name, "instructions": INSTRUCTIONS, "tools": tools}
 
 
+def _commands() -> dict:
+    from shortbot import commands
+    return {c.name or c.cli: {"mcp": c.name, "cli": c.cli, "write": c.write, "weight": c.weight,
+                              "stale_exempt": c.stale_exempt, "raw": c.raw} for c in commands.load()}
+
+
 def _dump(surface: dict) -> str:
     """One line per tool / subcommand so a diff shows exactly what moved."""
     def block(d: dict) -> str:
         return "{\n" + ",\n".join(f"    {json.dumps(k)}: {json.dumps(v, default=str)}" for k, v in sorted(d.items())) + "\n  }"
     m = surface["mcp"]
     return ("{\n  \"mcp_name\": " + json.dumps(m["name"]) + ",\n  \"instructions\": " + json.dumps(m["instructions"])
-            + ",\n  \"tools\": " + block(m["tools"]) + ",\n  \"cli\": " + block(surface["cli"]) + "\n}\n")
+            + ",\n  \"tools\": " + block(m["tools"]) + ",\n  \"cli\": " + block(surface["cli"])
+            + ",\n  \"commands\": " + block(surface["commands"]) + "\n}\n")
 
 
 async def test_mcp_tools_and_cli_subcommands_match_the_snapshot(monkeypatch):
-    surface = {"mcp": await _mcp(), "cli": _cli(_cli_parser(monkeypatch))}
+    surface = {"mcp": await _mcp(), "cli": _cli(_cli_parser(monkeypatch)), "commands": _commands()}
     now = _dump(surface)
     if os.environ.get("SNAPSHOT_UPDATE"):
         SNAPSHOT.write_text(now)
@@ -69,7 +77,7 @@ async def test_mcp_tools_and_cli_subcommands_match_the_snapshot(monkeypatch):
     got = json.loads(now)
     for key in ("mcp_name", "instructions"):
         assert got[key] == want[key], key
-    for key in ("tools", "cli"):
+    for key in ("tools", "cli", "commands"):
         assert sorted(got[key]) == sorted(want[key]), f"{key}: names differ"
         for name in want[key]:
             assert got[key][name] == want[key][name], f"{key}/{name} changed"
