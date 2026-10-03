@@ -135,7 +135,7 @@ async def _settle(tr, symbol: str, on_book: dict) -> None:
 async def _cancel(tr, symbol: str, o: dict, row: dict | None, why: str) -> bool:
     """Cancel one target; journal its fills and why it left. False when the cancel is in doubt (it may still rest)."""
     try:
-        resp = await tr.t.cancel_order(o["id"], symbol)
+        resp = await tr.cancel(symbol, o["id"])
     except ccxt.OrderNotFound:   # filled or gone meanwhile: what Binance says now decides
         resp = None
     except Exception as e:  # noqa: BLE001 - in doubt: the next listing decides
@@ -162,8 +162,7 @@ async def _place(tr, symbol: str, trade: dict, w: dict) -> None:
     rid = targets.add(tr.j, trade["id"], symbol, w["target"], w["price"], w["qty"], cid)
     row = targets.rows(tr.j, "id=?", (rid,))[0]
     try:
-        o = await tr.t.create_order(symbol, "limit", "buy", w["qty"], w["price"],
-                                    {"reduceOnly": True, "timeInForce": "GTC", "clientOrderId": cid})
+        o = await tr.place_reduce_limit(symbol, w["qty"], w["price"], cid)
     except Exception as e:  # noqa: BLE001 - classified: refused is journalled and told, unknown found by its id
         kind = errors.classify(e)
         if not kind.unknown:

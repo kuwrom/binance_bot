@@ -69,7 +69,7 @@ async def _cancel(tr, symbol: str, ids) -> set[str]:
     doubt = set()
     for i in ids:
         try:
-            await tr.t.cancel_order(i, symbol, params=TRIG)
+            await tr.cancel(symbol, i, trigger=True)
         except Exception as e:  # noqa: BLE001 - Gone is done; anything else: the listing decides what still rests
             kind = errors.classify(e)
             if kind is errors.Gone:   # -2011: triggered or cancelled already
@@ -84,11 +84,9 @@ async def _bridge(tr, symbol: str, stop: float, contracts: float) -> dict:
     """Step 1: a reduce-only STOP_MARKET for `contracts`, confirmed resting (its ack, or found by its client id after an
     ambiguous answer). Raises a refusal as is, or clientid.Unknown (a late landing is swept by the next change)."""
     from .trading import _sleep
-    t, cid = tr.t, clientid.new("bridge", clientid.tag(symbol))
+    cid = clientid.new("bridge", clientid.tag(symbol))
     try:
-        o = await t.create_order(symbol, "STOP_MARKET", "buy", float(t.amount_to_precision(symbol, contracts)), None,
-                                 {"triggerPrice": float(t.price_to_precision(symbol, stop)), "reduceOnly": True,
-                                  "workingType": "MARK_PRICE", "clientOrderId": cid})
+        o = await tr.place_reduce_stop(symbol, float(tr.t.amount_to_precision(symbol, contracts)), stop, cid)
         if o.get("status") in (None, "open"):
             return o
         raise ccxt.InvalidOrder(f"bridge stop {cid} answered {o.get('status')}")
@@ -99,7 +97,7 @@ async def _bridge(tr, symbol: str, stop: float, contracts: float) -> dict:
         if kind is errors.ClockDrift:
             await tr.ex.resync_time()
         await _sleep(1)
-        if found := await tr._find_stop(symbol, cid):
+        if found := await tr.find_stop(symbol, cid):
             return found
         raise clientid.Unknown(cid, e) from e
 
@@ -128,7 +126,7 @@ async def _first(tr, symbol: str, stop: float) -> dict[str, Any]:
     """No closePosition stop rests: place one, then sweep leftover bridges. A refusal is decided by the listing: a
     closePosition stop listed rests already (-4130, with or without its code)."""
     try:
-        placed = await tr._place_stop(symbol, stop, tries=3)
+        placed = await tr.place_close_stop(symbol, stop, tries=3)
     except Exception as e:  # noqa: BLE001 - classified; anything not settled here is re-raised
         if errors.classify(e) is errors.WouldTrigger:
             return await _crossed(tr, symbol, stop, set())
@@ -157,7 +155,7 @@ async def _swap(tr, symbol: str, ids: set[str], cur: float, new_stop: float, con
     for _ in range(2):   # a second round only while an old stop is still listed (its cancel never ran)
         doubt = await _cancel(tr, symbol, ids)
         try:
-            placed = await tr._place_stop(symbol, new_stop, tries=3)
+            placed = await tr.place_close_stop(symbol, new_stop, tries=3)
             break
         except Exception as e:  # noqa: BLE001 - the listing decides, not the code (-4130 is undocumented now)
             err = e
@@ -197,7 +195,7 @@ async def _settle(tr, symbol: str, levels: list[float], stale: set[str], placed:
     why = "no level to restore"
     for px in levels if not (close or placed) else []:
         try:
-            close, got = [await tr._place_stop(symbol, px, tries=2)], "restored"
+            close, got = [await tr.place_close_stop(symbol, px, tries=2)], "restored"
             break
         except Exception as e:  # noqa: BLE001 - the next level is tried; none left: _naked alerts with this why
             why = f"{e}"
@@ -243,7 +241,7 @@ async def _crossed(tr, symbol: str, stop: float, stale: set[str]) -> dict[str, A
     """Price is already at or past the stop being set: close now, as the stop would have."""
     pos = await tr.position(symbol)
     if pos:
-        await tr._market_close(symbol, float(pos["contracts"]))
+        await tr.close_market(symbol, float(pos["contracts"]))
     await strip_flat(tr, symbol)
     await tr.alert("stop_hit_on_move", f"price crossed {stop} during the move; closed", symbol, True)
     return {"ok": True, "closed": True, "reason": "price crossed the new stop while moving it"}

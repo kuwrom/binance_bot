@@ -226,7 +226,7 @@ class PositionOps:
         if cut > 0:
             await targets_sync.pull_safe(tr, symbol, "widen: before its size cut")   # #65: none fills with the cut
             try:
-                got = await tr._market_close(symbol, cut, whole=False)   # never re-sent blind (#9)
+                got = await tr.close_market(symbol, cut, whole=False)   # never re-sent blind (#9)
                 err = None
             except Exception as e:  # noqa: BLE001 - incl. clientid.Unknown: the position decides below
                 got, err = {}, e
@@ -307,14 +307,14 @@ class PositionOps:
             return blocked
         cid = clientid.new("add", trade["id"])
         try:
-            o = await tr._market_sell(symbol, add_qty, cid)
+            o = await tr.open_market(symbol, add_qty, cid)
         except clientid.Unknown as e:   # it may have run: never re-sent (#9); logged as a size change
             msg = f"add of {add_qty}: {e}. Not re-sent: re-read the position before adding again"
             tr.j.log_decision("add", f"UNKNOWN: {reason}", symbol, snapshot={   # counts as an add (adds_done)
                 "trade_id": trade["id"], "add_qty": add_qty, "client_id": cid, "unknown": True, "new_stop": new_stop})
             await tr.alert("add_unknown", msg, symbol, True)
             return {"ok": False, "unknown": True, "client_id": cid, "error": msg}
-        except Exception as e:  # noqa: BLE001 - a definite refusal (_market_sell raises no other); tighter stop stays
+        except Exception as e:  # noqa: BLE001 - a definite refusal (open_market raises no other); tighter stop stays
             return {"ok": False, "error": f"add refused: {errors.describe(e)}"}
         if o.get("filled") is not None and not float(o["filled"]):
             return {"ok": False, "error": f"add order {o.get('status')}: nothing filled"}

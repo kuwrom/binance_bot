@@ -269,12 +269,12 @@ async def _drop_prearm(desk, e: dict[str, Any], exit_orders: list[str]) -> bool:
     only) is entry_intents' to find and cancel, now that the row is no longer pending."""
     if not e.get("prearm_id"):
         return False
-    t, sym = desk.tr.t, e["symbol"]
+    tr, sym = desk.tr, e["symbol"]
     try:
-        a = await t.fetch_order(e["prearm_id"], sym, params={"trigger": True})
+        a = await tr.t.fetch_order(e["prearm_id"], sym, params={"trigger": True})
     except Exception:  # noqa: BLE001 - unreadable: cancel it anyway, the exit stays unlabelled
         a = {}
     if a.get("status") in (None, "open"):
-        async with desk.tr.symbol_lock(sym, f"entry #{e['id']}: drop the pre-arm of a round trip"):
-            await drop_prearm(t, sym, e["prearm_id"], desk.tr.alert, f"entry #{e['id']} filled and closed again")
+        async with tr.symbol_lock(sym, f"entry #{e['id']}: drop the pre-arm of a round trip"):
+            await drop_prearm(tr, sym, e["prearm_id"], tr.alert, f"entry #{e['id']} filled and closed again")
     return str((a.get("info") or {}).get("actualOrderId") or "") in exit_orders

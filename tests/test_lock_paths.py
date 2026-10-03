@@ -71,7 +71,7 @@ async def test_cancel_legs_holds_no_write_transaction_across_an_exchange_call(mo
     t.j.db.commit()
     seen = []
 
-    async def withdraw(_t, e, alert=None):
+    async def withdraw(_tr, e, alert=None):
         seen.append(t.j.db.in_transaction)   # an open write here would span this (network) await
         return "unfilled"
     monkeypatch.setattr("shortbot.entries_cancel.withdraw", withdraw)

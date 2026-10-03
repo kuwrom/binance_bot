@@ -136,7 +136,7 @@ class NoLock:
 
 async def test_the_audit_flags_risk_and_account_config_sent_outside_the_account_lock(order_lock_audit, monkeypatch):
     monkeypatch.setattr(Trader, "account_lock", lambda self, *a, **k: NoLock())
-    d, t, fake = desk(hedged=True)   # hedge mode: _prepare switches the account to one-way first
+    d, t, fake = desk(hedged=True)   # hedge mode: prepare switches the account to one-way first
     assert (await open_sym(t))["ok"]
     assert (await d.propose_group([prop(1.04, symbol=SYM2)]))["ok"]
     got = sorted({b.split(" via ")[0] for b in order_lock_audit})

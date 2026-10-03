@@ -56,7 +56,7 @@ async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:
     why = f"flatten all: {reason.strip()}"
     st = await halt(tr, HALTED, by, why, cause="flatten")
     closed, failed = [], []
-    for p in await tr._raw_positions():
+    for p in await tr.raw_positions():
         sym = p["symbol"]
         if p.get("side") != "short":
             failed.append({"symbol": sym, "error": f"{p.get('side')} position: not a short, close it manually"})
@@ -66,7 +66,7 @@ async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001 - one failure must not stop the others
             r = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         (closed if r.get("ok") else failed).append({**r, "symbol": sym})
-    left = [p["symbol"] for p in await tr._raw_positions()]
+    left = [p["symbol"] for p in await tr.raw_positions()]
     if failed or left:
         await ks.notify(tr.j, tr.ex.settings, "flatten_incomplete", f"still open: {left}; failures: {failed}. "
                         "Stops are untouched; close these by hand.", urgent=True)

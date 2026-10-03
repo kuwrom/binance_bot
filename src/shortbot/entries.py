@@ -195,7 +195,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         keeps any order with a fill for 90 days (Query-Order doc), so it expired unfilled. Its pre-armed stop goes."""
         if e.get("prearm_id"):
             async with self.tr.symbol_lock(e["symbol"], f"entry #{e['id']}: drop a forgotten entry's pre-arm"):
-                await drop_prearm(self.tr.t, e["symbol"], e["prearm_id"], self.tr.alert,
+                await drop_prearm(self.tr, e["symbol"], e["prearm_id"], self.tr.alert,
                                   f"entry #{e['id']} expired unfilled")
         why = "order forgotten by Binance (-2013) past its GTD: it expired unfilled"
         return {"entry_id": e["id"], "event": "expired", "why": why} if self._settle(
@@ -247,8 +247,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             if not now:
                 return {"entry_id": e["id"], "event": "resolved_elsewhere"}
             e = now[0]
-            rest = await withdraw(tr.t, {**e, "prearm_id": None}) if o.get("status") == "open" else "filled"
-            pos = await tr._verified_position(sym)
+            rest = await withdraw(tr, {**e, "prearm_id": None}) if o.get("status") == "open" else "filled"
+            pos = await tr.verified_position(sym)
             try:
                 cps = await self._protect(e) if pos else []
             except fills.StopNotPlaced as x:   # -4509 on a flat position: closed again before its stop landed
@@ -276,11 +276,11 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         cps = await tr.stop_orders(sym, close_position_only=True)
         if not cps:
             try:
-                await tr._place_stop(sym, e["stop_price"], tries=3)
+                await tr.place_close_stop(sym, e["stop_price"], tries=3)
             except Exception as x:  # noqa: BLE001 - re-raised typed: the poll alerts at once, the pre-arm stays
                 raise fills.StopNotPlaced(e, x) from x
         if e["prearm_id"]:   # the whole-position stop rests: the pre-arm goes (one left behind: drop_prearm tells)
-            await drop_prearm(tr.t, sym, e["prearm_id"], tr.alert, f"entry #{e['id']} filled, its stop is on")
+            await drop_prearm(tr, sym, e["prearm_id"], tr.alert, f"entry #{e['id']} filled, its stop is on")
         return cps
 
     async def _rest_unknown(self, e: dict) -> dict[str, Any]:

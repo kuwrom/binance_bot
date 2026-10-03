@@ -85,7 +85,7 @@ def multi_assets(resp: Any) -> bool:
 
 
 def position_findings(p: dict) -> list[tuple[str, str]]:
-    """(alert kind, message) per margin breach of one ccxt position row (Trader._raw_positions). margin_check_error:
+    """(alert kind, message) per margin breach of one ccxt position row (Trader.raw_positions). margin_check_error:
     a field it needs can't be read, so that check did not run."""
     info = p.get("info") or {}
     mode = p.get("marginMode")

@@ -301,7 +301,7 @@ async def test_stop_pass_skips_alert_feeds_and_watch_covers_each_short():
     async def three():
         return [{"symbol": "A/USDT:USDT", "side": "short"}, {"symbol": "B/USDT:USDT", "side": "short"},
                 {"symbol": "C/USDT:USDT", "side": "long"}]
-    g.app.trader._raw_positions = three
+    g.app.trader.raw_positions = three
     await g.watch_positions()
     assert seen == [("squeeze", "A/USDT:USDT"), ("squeeze", "B/USDT:USDT"), ("news", "B/USDT:USDT")]
     assert "position_watch_error" in kinds(g) and "position_check_error" not in kinds(g)

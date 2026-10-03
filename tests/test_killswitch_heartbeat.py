@@ -221,7 +221,7 @@ async def test_the_dns_outage_replayed():
     async def dns(*a, **k):
         raise ccxt.ExchangeNotAvailable("binanceusdm GET https://demo-fapi.binance.com/fapi/v3/positionRisk "
                                         "[Errno 8] nodename nor servname provided, or not known")
-    g.app.trader._raw_positions = dns
+    g.app.trader.raw_positions = dns
     for _ in range(17):
         await protective_tick(g)
     assert beat(g) == before and "guardian_failing:positions" in kinds(g)
@@ -230,7 +230,7 @@ async def test_the_dns_outage_replayed():
     assert (await ks.gate(tr, "open_short"))["kill_switch"] == ACTIVE and ks.read(g.j)["state"] == ACTIVE
     g.j.set(ks.HEARTBEAT_KEY, str(before - 1800))       # 30 min after
     assert (await ks.gate(tr, "open_short"))["kill_switch"] == HALTED
-    del g.app.trader._raw_positions                     # DNS back
+    del g.app.trader.raw_positions                     # DNS back
     for _ in range(3):
         await protective_tick(g)
     assert ks.read(g.j)["state"] == ACTIVE and "kill_switch_clear" in kinds(g)

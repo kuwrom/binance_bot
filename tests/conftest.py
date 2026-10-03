@@ -46,6 +46,13 @@ _WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_or
            "set_margin_mode": 1, "set_leverage": 1, "set_position_mode": None}
 
 
+# Trader's send primitives (#36 step 0) and withdraw(): their callers hold the locks, so a test may drive them directly
+PRIMITIVES = {"trading.prepare", "trading.place_close_stop", "trading_orders.close_market",
+              "trading_orders.open_market", "trading_orders.cancel", "trading_orders.place_limit",
+              "trading_orders.edit_limit", "trading_orders.place_reduce_stop", "trading_orders.place_reduce_limit",
+              "entries_cancel.withdraw"}
+
+
 def _adds_risk(name: str, a: tuple, k: dict) -> bool:
     """An order that opens or adds to a short: a SELL that isn't reduce-only (market entry, limit entry, add)."""
     params = (a[5] if len(a) > 5 else k.get("params")) or {}
@@ -54,7 +61,7 @@ def _adds_risk(name: str, a: tuple, k: dict) -> bool:
 
 def _origin(frame) -> str | None:
     """The outermost shortbot function on the call chain that reached the exchange (test frames are skipped). None
-    when a test drove a private primitive (`_place_stop`, `_market_close`...) directly: no sequence to lock."""
+    when a test drove a primitive (PRIMITIVES) or a private helper directly: no sequence to lock."""
     outer = None
     while frame:
         f = frame.f_code.co_filename
@@ -64,9 +71,10 @@ def _origin(frame) -> str | None:
         elif not f.startswith(_TESTS):
             break
         frame = frame.f_back
-    if outer is None or outer.f_code.co_name.startswith("_") or outer.f_code.co_name == "withdraw":
-        return None   # withdraw() is a primitive too: its callers hold the lock
-    return f"{Path(outer.f_code.co_filename).stem}.{outer.f_code.co_name}"
+    if outer is None or outer.f_code.co_name.startswith("_"):
+        return None
+    origin = f"{Path(outer.f_code.co_filename).stem}.{outer.f_code.co_name}"
+    return None if origin in PRIMITIVES else origin
 
 
 @pytest.fixture(autouse=True)

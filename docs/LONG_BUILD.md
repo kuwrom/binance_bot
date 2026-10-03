@@ -79,9 +79,9 @@ No table has a side column: `trades` (journal.py:52-61) and `entries` (entries.p
 
 ### Exchange / trading
 - **trading.py**
-  - :262 `_place_stop` sends `STOP_MARKET` with side `buy` and closePosition.
-  - trading_orders.py:39 `_market_close` is a reduce-only `buy`.
-  - trading_orders.py:110 `_market_sell` opens and adds.
+  - :262 `place_close_stop` sends `STOP_MARKET` with side `buy` and closePosition.
+  - trading_orders.py:39 `close_market` is a reduce-only `buy`.
+  - trading_orders.py:110 `open_market` opens and adds.
   - :160-166 `stop_orders` uses the buy-only `is_protective_stop`.
   - :184 picks the tightest stop with `min`.
   - :189 / :192 PnL and stop-distance signs assume a short.
@@ -175,7 +175,7 @@ No table has a side column: `trades` (journal.py:52-61) and `entries` (entries.p
   - :153-163 `widen_stop`.
   - :226-236 `add_to_winner`.
   - :248 risk.
-  - :261 adds by `_market_sell`.
+  - :261 adds by `open_market`.
 
 ### Kill switch
 - killswitch_ops.py:59-63 `flatten` skips non-shorts, and closes through `Trader.close`, which buys.

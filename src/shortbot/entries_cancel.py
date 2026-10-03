@@ -23,13 +23,13 @@ CANCEL_FAILS_ALERT = 3   # sibling-retry cancels failed in a row before a human 
 LIVE = ("pending", "placing", "unknown")   # the desk's rows that are or may be on the book (RESTING)
 
 
-async def drop_prearm(t, symbol: str, prearm_id: Any, alert=None, why: str = "") -> bool:
+async def drop_prearm(tr, symbol: str, prearm_id: Any, alert=None, why: str = "") -> bool:
     """Cancel an entry's pre-armed stop. True when it is off the book: cancelled now, or Gone (-2011: triggered or
     cancelled before). Anything else leaves it maybe resting, a reduce-only BUY stop that would cut the next short on
     the symbol: told (`alert`: Trader.alert's shape), and the orphan sweep (orphans.py) cancels it once its entry is
     final. Callers hold the symbol lock."""
     try:
-        await t.cancel_order(prearm_id, symbol, params={"trigger": True})
+        await tr.cancel(symbol, prearm_id, trigger=True)
         return True
     except Exception as e:  # noqa: BLE001 - classified: Gone is done; anything else is told below
         if errors.classify(e) is errors.Gone:
@@ -42,7 +42,7 @@ async def drop_prearm(t, symbol: str, prearm_id: Any, alert=None, why: str = "")
         return False
 
 
-async def withdraw(t, e: dict[str, Any], alert=None) -> str:
+async def withdraw(tr, e: dict[str, Any], alert=None) -> str:
     """Cancel a pending entry's limit FIRST, then decide from what actually filled:
     - "unfilled": the limit is dead with nothing filled, so its pre-armed stop is cancelled too
     - "filled": it (partly) filled before the cancel landed: the stop and the pending row stay, the poll adopts it
@@ -52,14 +52,14 @@ async def withdraw(t, e: dict[str, Any], alert=None) -> str:
     A row with no order id (a send of unknown outcome) is first looked up by its client id (entry_intents.located).
     `alert`: told when the pre-armed stop of an unfilled limit can't be cancelled (drop_prearm)."""
     if not e.get("order_id"):
-        e = await located(t, e)
+        e = await located(tr.t, e)
         if isinstance(e, str):
             return e
     try:
-        o = await t.cancel_order(e["order_id"], e["symbol"]) or {}
+        o = await tr.cancel(e["symbol"], e["order_id"]) or {}
     except ccxt.OrderNotFound:
         try:
-            o = await t.fetch_order(e["order_id"], e["symbol"])
+            o = await tr.t.fetch_order(e["order_id"], e["symbol"])
         except Exception:  # noqa: BLE001 - unread: "unknown", the caller retries next pass (and streak-alerts)
             return "unknown"
         if not float(o.get("filled") or 0) and o.get("status") not in DEAD:
@@ -69,7 +69,7 @@ async def withdraw(t, e: dict[str, Any], alert=None) -> str:
     if float(o.get("filled") or 0) > 0:
         return "filled"
     if e.get("prearm_id"):
-        await drop_prearm(t, e["symbol"], e["prearm_id"], alert, f"entry #{e.get('id')} withdrawn unfilled")
+        await drop_prearm(tr, e["symbol"], e["prearm_id"], alert, f"entry #{e.get('id')} withdrawn unfilled")
     return "unfilled"
 
 
@@ -96,7 +96,7 @@ class EntryCancel:
                 if isinstance(found, str):
                     return found
                 e = found
-            got = await withdraw(self.tr.t, e, self.tr.alert)
+            got = await withdraw(self.tr, e, self.tr.alert)
             if got == "unfilled":
                 self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
         return got

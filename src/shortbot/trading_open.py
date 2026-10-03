@@ -158,7 +158,7 @@ class OpenFlow:
                             "settles it within ~3 min"}
                 if resting := _resting(self.j, symbol):   # under the lock: placement inserts its row under it too
                     return _beside(symbol, resting)
-                await self._prepare(symbol, leverage)
+                await self.prepare(symbol, leverage)
                 features = {**checks.get("features", {}), "regime": checks.get("regime"), "budget": budget,
                             "vetoes_overridden": blockers or None, "veto_override": veto_why if blockers else None,
                             "budget_overridden": over_budget, "budget_override": budget_why if over_budget else None,
@@ -187,7 +187,7 @@ class OpenFlow:
                      leverage: int, lim, equity: float) -> dict:
         from .trading import DEAD, _f, _sleep
         try:
-            order = await self._market_sell(symbol, amount, cid)
+            order = await self.open_market(symbol, amount, cid)
         except clientid.Unknown as e:
             try:
                 held = await self.position(symbol)   # flat before the send (checked under this lock): ours, if any
@@ -196,7 +196,7 @@ class OpenFlow:
             if not held:
                 return await self._entry_unknown(tid, cid, symbol, e)
             order = {}
-        except Exception as e:  # noqa: BLE001 - a definite refusal (_market_sell raises no other): nothing ran
+        except Exception as e:  # noqa: BLE001 - a definite refusal (open_market raises no other): nothing ran
             why = errors.describe(e)   # InsufficientMargin, MarketClosed, Precision...: what to change
             self.j.abort_trade(tid, f"entry order refused: {why}")
             return {"ok": False, "error": f"entry order refused, no position: {why}"}
@@ -215,12 +215,12 @@ class OpenFlow:
             if fill and stop_price <= max(fill, mark):
                 raise ValueError(f"price {max(fill, mark)} already at/above stop {stop_price}")
             try:
-                stop = await self._place_stop(symbol, stop_price)   # always, even when the position couldn't be read
+                stop = await self.place_close_stop(symbol, stop_price)   # always, even when the position is unreadable
             except Exception as e:  # noqa: BLE001 - a stale closePosition stop is swapped out (#14), else re-raised
                 stop = await stops.replace_stale(self, symbol, stop_price, size or amount, e)
         except Exception as e:  # noqa: BLE001
             try:
-                await self._market_close(symbol, size or amount)
+                await self.close_market(symbol, size or amount)
                 await _sleep(1)
                 res = await reconcile.finalize(self, {**self.j.get_trade(tid), "status": "open"},
                                                f"aborted: stop placement failed ({e})")

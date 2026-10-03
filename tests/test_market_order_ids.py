@@ -75,8 +75,8 @@ async def test_a_close_settled_by_its_client_id_journals_the_order_found(monkeyp
 async def test_a_guardian_close_and_an_add_are_journalled_on_the_symbols_trade(monkeypatch):
     t, fake = setup(monkeypatch)
     tid = await short(t)
-    add = await t._market_sell(SYM, 10, "sb-a1-feedbeef")        # positioning.add_to_winner's send
-    close = await t._market_close(SYM, fake.position)            # the guardian's forced close, stops._crossed...
+    add = await t.open_market(SYM, 10, "sb-a1-feedbeef")        # positioning.add_to_winner's send
+    close = await t.close_market(SYM, fake.position)            # the guardian's forced close, stops._crossed...
     ids = order_ids.read(t.j, tid)
     assert ids["entry"][str(add["id"])] == "sb-a1-feedbeef" and str(close["id"]) in ids["exit"]
 

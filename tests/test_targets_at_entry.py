@@ -62,7 +62,7 @@ async def test_a_sync_failure_whose_alert_fails_too_still_returns_ok(tmp_path, m
     async def alert(kind, msg, symbol=None, urgent=False):
         if kind == "target_sync_error":
             raise ConnectionError("telegram down")
-    g.app.trader._alert = alert
+    g.app.trader.set_alert(alert)
     r = await g.app.trader.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100, plan=PLAN)
     assert r["ok"] and list(fake.stops.values()) == [1.05] and "error" in r["resting_targets"], r
 

@@ -202,7 +202,7 @@ class EntryPlacement:
             if (jt := tr.j.active_trade(sym)) and jt["status"] == "opening":   # a fill would make a second trade
                 raise ValueError(f"trade #{jt['id']}'s market entry on {sym} is unresolved (it may still fill): no "
                                  "limit entry beside it; the guardian settles it within ~3 min")
-            await tr._prepare(sym, lev)   # leverage + isolated margin: only on a flat symbol, after the risk check
+            await tr.prepare(sym, lev)   # leverage + isolated margin: only on a flat symbol, after the risk check
             # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
             cid = clientid.new("entry", gid)
             sized = stamps(budget.get("multipliers"))   # the multipliers it was sized under: entry_gates resize (#66)
@@ -220,8 +220,7 @@ class EntryPlacement:
                  self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__), json.dumps(overrides) if overrides else None,
                  *sized.values()))
             try:
-                order = await tr.t.create_order(sym, "limit", "sell", amount, px, {
-                    "timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
+                order = await tr.place_limit(sym, amount, px, expires_ms, cid)
             except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
                 unsure = errors.classify(e).unknown
                 self._settle(eid, "placing", status="unknown" if unsure else "rejected", reason=errors.describe(e))
@@ -253,16 +252,14 @@ class EntryPlacement:
         """Reduce-only stop resting from the first fill instant, journalled like its limit: client id first, then the
         send. A lost answer leaves it unresolved (prearm_cid set, prearm_id NULL) for entry_intents. Never raises: the
         limit already rests and is tracked, and the 5 s fill poll still protects."""
-        t, cid = self.tr.t, clientid.new("prearm", eid)
+        cid = clientid.new("prearm", eid)
         try:
             self._update(eid, prearm_cid=cid)
         except sqlite3.Error:
             return None   # no intent journalled: don't send
         o, refused = None, False
         try:
-            o = await t.create_order(sym, "STOP_MARKET", "buy", amount, None, {
-                "triggerPrice": float(t.price_to_precision(sym, stop)), "reduceOnly": True,
-                "workingType": "MARK_PRICE", "clientOrderId": cid})
+            o = await self.tr.place_reduce_stop(sym, amount, stop, cid)
         except Exception as e:  # noqa: BLE001 - refused: nothing rests; unknown: entry_intents finds it by its id
             refused = not errors.classify(e).unknown
             log.warning("pre-arm of entry #%s %s: %s", eid, "refused" if refused else "unknown", errors.describe(e))

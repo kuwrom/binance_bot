@@ -39,7 +39,7 @@ class WatchChecks:
     async def watch_positions(self) -> None:
         if not self.ex.trade:
             return
-        rows = [p for p in await self.app.trader._raw_positions() if p.get("side") == "short"]
+        rows = [p for p in await self.app.trader.raw_positions() if p.get("side") == "short"]
         shorts = [p["symbol"] for p in rows]
         adl = await self.adl_read() if rows else ({}, [], None)   # one read for every short (guardian_margin.py)
         for p, sym in zip(rows, shorts):

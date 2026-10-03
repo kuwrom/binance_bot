@@ -61,7 +61,7 @@ class EntryAmend:
                                                   "amended meanwhile): re-read pending_entries"}
                 if lower and (blocked := killswitch.state_refusal(self.j, "amend (lower limit)")):
                     return blocked
-                await t.edit_order(e["order_id"], sym, "limit", "sell", e["amount"], px)
+                await self.tr.edit_limit(sym, e["order_id"], e["amount"], px)
                 self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}",   # lowered: re-sized
                              **(stamps(snap.get("budget_multipliers")) if lower else {}))
         self.j.log_decision("amend_entry", reason, sym, snapshot=snap)

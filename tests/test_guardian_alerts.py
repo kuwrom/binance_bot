@@ -208,7 +208,7 @@ async def test_a_closed_short_leaves_the_watch_streak():
 
     async def none():
         return []
-    g.app.trader._raw_positions = none
+    g.app.trader.raw_positions = none
     await g.watch_positions()
     assert not g.watch_streak.fails
 

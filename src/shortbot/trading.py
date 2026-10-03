@@ -12,7 +12,11 @@ exchange-side stop-market (closePosition, mark price). Safety properties:
   portfolio checks through the send, so two sessions can't both spend the last slot (#74)
 
 This module: account, positions and the stop primitives. The flows are mixed in from trading_open.py (open_short)
-and trading_manage.py (close, move_stop, ensure_stop); the market order primitives from trading_orders.py.
+and trading_manage.py (close, move_stop, ensure_stop); the order primitives from trading_orders.py.
+
+Public interface (#36 gateway step 0): other modules call only Trader's public methods, and send every exchange write
+through its primitives (prepare, place_close_stop here; the rest in trading_orders.py), never through `t` directly
+(test_trader_public.py). Reads may use `t`.
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ STOP_PARAMS = {"closePosition": True, "workingType": "MARK_PRICE"}
 DEAD = ("canceled", "expired", "rejected")   # final: an order found unfilled in one of these never fills
 Alert = Callable[[str, str, str | None, bool], Awaitable[Any]]
 Prechecks = Callable[[Exchanges, str, dict], Awaitable[dict[str, Any]]]
-ISOLATED_OK_KEY = "isolated_ok:"   # kv (per mode): when this desk last saw the symbol isolated (_prepare)
+ISOLATED_OK_KEY = "isolated_ok:"   # kv (per mode): when this desk last saw the symbol isolated (prepare)
 ISOLATED_TRUST_S = 86400            # how long that confirmation stands in for an unreadable symbolConfig
 
 
@@ -91,14 +95,21 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
     def t(self) -> ccxt.binanceusdm:
         return self.ex.require_trade()
 
+    def set_alert(self, alert: Alert | None) -> None:
+        """Where alert() goes from now on: the guardian's Notifier (as_trader_alert); None: the journal only."""
+        self._alert = alert
+
     async def alert(self, kind: str, msg: str, symbol: str | None = None, urgent: bool = False) -> None:
+        """Tell a human (the alert sink set at construction or by set_alert), else journal it."""
         if self._alert:
             await self._alert(kind, msg, symbol, urgent)
         else:
             self.j.log_alert(kind, msg, symbol)
 
     # ---------------------------------------------------------------- account / positions
-    async def _raw_positions(self) -> list[dict]:
+    async def raw_positions(self) -> list[dict]:
+        """The open positions as ccxt rows (contracts > 0), unjoined with the journal (positions() joins them). A perp
+        listed after the markets loaded is reloaded first, so its row is keyed by its unified symbol."""
         rows = await self._fetch_positions()
         unknown = [p["symbol"] for p in rows if p.get("symbol") not in (self.t.markets or {})]
         if unknown:   # a perp listed after our markets loaded: ccxt keys its position by the raw id until a reload
@@ -121,7 +132,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         await self.ex.trade_markets()
         bal = await self.t.fetch_balance()
         info = bal.get("info", {})
-        pos = positions if positions is not None else await self._raw_positions()
+        pos = positions if positions is not None else await self.raw_positions()
         unreal = sum(_f(p.get("unrealizedPnl")) for p in pos)
         equity = round(_f(info.get("totalMarginBalance"), _f(bal.get("total", {}).get("USDT"))), 2)
         return {"mode": self.ex.settings.mode, "equity": equity, "wallet": round(_f(info.get("totalWalletBalance")), 2),
@@ -154,7 +165,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
                 "degraded": per["degraded"], "equity_peak": round(peak, 2)}
 
     async def account_state(self) -> AccountState:
-        pos = await self._raw_positions()
+        pos = await self.raw_positions()
         acct = await self.account(pos)
         return AccountState(equity=acct["equity"], open_symbols=tuple(p["symbol"] for p in pos),
                             total_open_notional=sum(abs(_f(p.get("notional"))) for p in pos),
@@ -170,14 +181,14 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
                     (o.get("info") or {}).get("closePosition", "")).lower() == "true")]
 
     async def position(self, symbol: str) -> dict | None:
-        return next((p for p in await self._raw_positions() if p["symbol"] == symbol), None)
+        return next((p for p in await self.raw_positions() if p["symbol"] == symbol), None)
 
     async def positions(self) -> list[dict]:
         """Live positions + the stop actually on the exchange + the journal trade and its plan. A symbol whose stops
         can't be read is listed with UNPROTECTED "unknown" and the error: it never costs the other rows. `leverage`:
         positionRisk v3 has none, so the journal's."""
         out = []
-        for p in await self._raw_positions():
+        for p in await self.raw_positions():
             sym, err = p["symbol"], None
             try:
                 stops = await self.stop_orders(sym)
@@ -203,7 +214,9 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         return out
 
     # ---------------------------------------------------------------- primitives
-    async def _prepare(self, symbol: str, leverage: int) -> None:
+    async def prepare(self, symbol: str, leverage: int) -> None:
+        """Before an entry: one-way mode (once per process), isolated margin confirmed, then `leverage`. Raises when
+        the symbol can't be confirmed isolated (#64): nothing may be sent then."""
         if not self._one_way_ok:
             mode = await self.t.fetch_position_mode(symbol)
             if mode.get("hedged"):
@@ -227,7 +240,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
     async def _confirm_isolated(self, symbol: str, e: Exception) -> None:
         """-4047/-4067: open orders block a margin-type change. Demo answers -4067 whenever an order rests, even when
         nothing would change (MOVR split entry, 2026-10-01), but an order resting on a CROSSED symbol (not ours: ours
-        all went through _prepare) looks the same. GET /fapi/v1/symbolConfig (weight 5) decides: ISOLATED proceeds,
+        all went through prepare) looks the same. GET /fapi/v1/symbolConfig (weight 5) decides: ISOLATED proceeds,
         anything else refuses before an order is sent. Unreadable: proceeds only when this desk saw the symbol isolated
         within ISOLATED_TRUST_S (a split entry's earlier leg), else refuses (#64)."""
         raw = to_raw(symbol)
@@ -251,7 +264,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         raise RuntimeError(f"margin type of {symbol} can't be confirmed isolated: open orders block the switch ({e}) "
                            f"and symbolConfig is unreadable ({why}). No entry")
 
-    async def _place_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict:
+    async def place_close_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict:
         """ONE closePosition stop at stop_price, under one client id (clientAlgoId) for all its sends. Returns the stop as
         acked, or as found by that id after an ambiguous answer (errors.py `unknown`: timeout, 5xx, 429, -1007,
         -1021). A definite refusal raises at once (StopExists -4130: a closePosition stop already rests; WouldTrigger
@@ -272,14 +285,14 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
                     await self.ex.resync_time()
                 if unknown:
                     await _sleep(1)
-                if (unknown or doubt) and (found := await self._find_stop(symbol, cid)):
+                if (unknown or doubt) and (found := await self.find_stop(symbol, cid)):
                     return found
                 if not unknown or i == tries - 1:
                     raise
                 doubt = True
         raise RuntimeError("unreachable")
 
-    async def _find_stop(self, symbol: str, cid: str) -> dict | None:
+    async def find_stop(self, symbol: str, cid: str) -> dict | None:
         """The conditional order sent under `cid`: by its client id (Query Algo Order), else among the open conditional
         orders (a verified shape; the lookup's not-found answer is not, #55). None when neither shows it."""
         try:
@@ -294,7 +307,9 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         except Exception:  # noqa: BLE001 - not seen: the caller decides
             return None
 
-    async def _verified_position(self, symbol: str, tries: int = 4) -> dict | None:
+    async def verified_position(self, symbol: str, tries: int = 4) -> dict | None:
+        """The symbol's position, read up to `tries` times 0.5 s apart (a fill can lag the position endpoint); None
+        when it still reads flat."""
         for _ in range(tries):
             p = await self.position(symbol)
             if p:

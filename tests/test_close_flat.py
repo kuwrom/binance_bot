@@ -1,5 +1,5 @@
 """A close that meets a position already flat (#37): the stop (or a target) fired between our read and our reduce-only
-order, and Binance answers -2022 ReduceOnly rejected. Done, not failed: each of the seven callers of _market_close
+order, and Binance answers -2022 ReduceOnly rejected. Done, not failed: each of the seven callers of close_market
 treats it as the flat path does - no retry loop, no "market close failed", no NAKED alert - and the trade is journalled
 closed (at once, or by reconcile like any exchange-side close)."""
 
@@ -51,7 +51,7 @@ async def test_market_close_returns_flat_on_reduce_only_rejected_without_retryin
     t, fake = await opened()
     stop_fires_first(fake)
     async with t.symbol_lock(SYM):
-        o = await t._market_close(SYM, 100)
+        o = await t.close_market(SYM, 100)
     assert o["flat"] and o["filled"] == 0 and o["id"] is None and "ReduceOnlyRejected -2022" in o["rejected"]
     assert len(closes(fake)) == 1 and fake.position == 0
 
@@ -147,7 +147,7 @@ async def test_not_flat_after_minus_2022_is_still_a_refusal():
     fake.refuse = [errors_reduce_only() for _ in range(3)]
     async with t.symbol_lock(SYM):
         try:
-            await t._market_close(SYM, 100)
+            await t.close_market(SYM, 100)
             raise AssertionError("expected the refusal")
         except RuntimeError as e:
             assert "market close failed after 3 tries" in str(e)
@@ -224,5 +224,5 @@ async def test_minus_2022_after_a_lost_answer_is_the_unknown_flat_answer():
         return None
     t._close_outcome = still_in_doubt
     async with t.symbol_lock(SYM):
-        o = await t._market_close(SYM, 100)
+        o = await t.close_market(SYM, 100)
     assert o["flat"] and o["filled"] is None and "rejected" not in o and len(closes(fake)) == 2

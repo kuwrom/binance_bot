@@ -86,7 +86,7 @@ Uplift grows roughly linearly with size (30 / 50 / 70%). The 6/12/20% rungs fill
 - **Position** (protective positions pass, after the stops):
   - crossed (ccxt: isolatedMargin "0") sends urgent `margin_not_isolated`;
   - unreadable fields send urgent `margin_check_error`.
-- **`_prepare`:** -4047/-4067 (open orders block the switch; demo answers -4067 whenever an order rests) no longer counts as proof of isolated.
+- **`prepare`:** -4047/-4067 (open orders block the switch; demo answers -4067 whenever an order rests) no longer counts as proof of isolated.
   - `GET /fapi/v1/symbolConfig` decides: ISOLATED proceeds, CROSSED refuses before any order.
   - Unreadable: proceeds only when this desk confirmed the symbol isolated within 24 h (kv `isolated_ok:<symbol>`, a split entry's earlier leg), else refuses.
 - **Margin buffer:**

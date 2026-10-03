@@ -184,12 +184,12 @@ async def test_a_send_that_never_landed_waits_out_the_grace_then_is_placed_again
 async def test_an_empty_positions_answer_alone_never_pulls_the_targets(tmp_path):
     g, fake, tid = await desk(tmp_path)
     await g.check_positions()
-    tr, real, calls = g.app.trader, g.app.trader._raw_positions, []
+    tr, real, calls = g.app.trader, g.app.trader.raw_positions, []
 
     async def glitch():
         calls.append(1)
         return [] if len(calls) == 1 else await real()
-    tr._raw_positions = glitch
+    tr.raw_positions = glitch
     await g.check_positions()
     assert [(p, q) for p, q, _ in resting(fake)] == [(0.95, 50), (0.9, 50)]
     assert [r["status"] for r in targets.rows(g.j)] == ["resting", "resting"]

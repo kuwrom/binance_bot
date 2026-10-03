@@ -1,7 +1,7 @@
 # Order gateway (task #36, design, 2026-10-02)
 One process owns every exchange write. The MCP servers, the CLI and the guardian submit **intents** to it. It runs them one at a time per symbol, journals each one before acting, resolves unknown outcomes by client id, and answers with a typed result. It replaces the per-symbol flock (#21) as the serialiser, works when the desk runs on AWS Tokyo, gives `Trader` a public interface, and makes one command registry the source of both the MCP tools and the CLI.
 
-Status: design only, nothing built. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
+Status: step 0 built (public `Trader`, §1.2); the rest is design. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
 
 ## Recommendation in one screen
 - **Where:** its own small process, `shortbot-gateway`, on the desk host (the host with the journal and the guardian). The guardian becomes its first client. Not inside the guardian, and not a library with a leader lock (§2).
@@ -20,16 +20,26 @@ Status: design only, nothing built. Surveyed on master e45da38 (768181f changes 
 
 Each process has its own ccxt client (`exchange.py:104-150`) and its own weight-guard state ("the state is per process", SCANNING.md).
 
-### 1.2 Raw exchange writes: 20 sites in 10 files
-| group | sites |
-|---|---|
-| open risk (3) | `trading_orders.py:110` market SELL (`_market_sell`: open, add) · `entries_place.py:229` GTD limit SELL · `entries_amend.py:59` `edit_order` |
-| stops (3 creates) | `trading.py:262` closePosition STOP_MARKET (`_place_stop`) · `stops.py:96` reduce-only bridge · `entries_place.py:270` reduce-only pre-arm |
-| stop cancels (2) | `stops.py:80` (`_cancel`: old stop, bridges, strip) · `trading_manage.py:133` (`_strip_stops` once flat) |
-| closes (1) | `trading_orders.py:39` reduce-only market BUY (`_market_close`). Used by close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry and flatten |
-| targets (2) | `targets_sync.py:161` reduce-only GTC BUY limit · `targets_sync.py:134` cancel |
-| entry and pre-arm cancels (6) | `entries_cancel.py:38` limit, `:52` pre-arm · `entries.py:199` forgotten entry's pre-arm, `:281` pre-arm once the stop rests · `entries_fills.py:280` round trip · `entry_intents.py:184` dead entry's pre-arm |
-| account config (3) | `trading.py:206` `set_position_mode`, `:209` `set_margin_mode`, `:218` `set_leverage` (all in `_prepare`). The lock audit covers them since #74 (`set_position_mode` under the account lock) |
+### 1.2 Exchange writes: 9 `Trader` primitives (step 0)
+The survey found 20 raw write sites in 10 files. Step 0 put each behind a public `Trader` primitive. Every other module writes only through these, and inside `trading*.py` only they send (`tests/test_trader_public.py`). Each resting-order primitive sends one request and returns ccxt's answer or raises its error unchanged; journalling, classification and resolution by client id stay with the caller.
+
+| primitive (module) | sends | callers |
+|---|---|---|
+| `open_market` (trading_orders) | market SELL, client id, settled by id | open, add (`positioning.py`) |
+| `place_limit` (trading_orders) | GTD limit SELL | `entries_place.py` |
+| `edit_limit` (trading_orders) | `edit_order` on an entry limit | `entries_amend.py` |
+| `place_close_stop` (trading) | closePosition STOP_MARKET, found by id | open, `_cover` (trading_manage), `stops.py`, `entries.py` (fill) |
+| `place_reduce_stop` (trading_orders) | reduce-only STOP_MARKET | `stops.py` bridge, `entries_place.py` pre-arm |
+| `cancel` (trading_orders) | `cancel_order`, conditional with `trigger=True` | `stops.py`, `_strip_stops`, `orphans.py`, `entries_cancel.py` (`withdraw`, `drop_prearm`), `entry_intents.py`, `targets_sync.py` |
+| `close_market` (trading_orders) | reduce-only market BUY, settled by id | close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry, flatten |
+| `place_reduce_limit` (trading_orders) | reduce-only GTC limit BUY (target) | `targets_sync.py` |
+| `prepare` (trading) | `set_position_mode`, `set_margin_mode`, `set_leverage` | open, `entries_place.py`. The lock audit covers them since #74 (`set_position_mode` under the account lock) |
+
+**Raw writes that remain: the probes only.** `probe_kit.py`, `probe_cases.py`, `probes.py` and `probe_stream.py` call ccxt directly: test orders, `countdownCancelAll` and the listen key. Two reasons keep them raw for now:
+- they exist to record Binance's raw answer to each case (#55), which the desk's primitives would classify or retry away;
+- they are demo-only by construction, and the lock audit already exempts them from the account lock.
+
+Where a probe acts like the desk (a minimum short, a close), it goes through `open_market`, `close_market` and `prepare`. Step 7's enforcement must let them through: a probe context, alongside break-glass.
 
 ### 1.3 The flows that reach them
 About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
@@ -64,17 +74,12 @@ About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
 - `entry_reconcile` (60 s): `entry_intents.py:125/139/183/275`.
 - `tranches.cancel_legs` (:80) on a full close.
 
-**Private `Trader` methods called from 10 other modules (18 call sites).** This is the debt behind a public interface:
-- `_place_stop`: stops.py:137,163,203 and entries.py:276.
-- `_market_close`: positioning.py:188, stops.py:249 and guardian_positions.py:230.
-- `_market_sell`: positioning.py:262.
-- `_prepare`: entries_place.py:211.
-- `_raw_positions`: guardian_watch.py:42, guardian_positions.py:51, entry_intents.py:237, killswitch_ops.py:59,69 and reconcile.py:112.
-- `_verified_position`: entries.py:253.
-- `_find_stop`: stops.py:108.
-- `_alert`: assigned at guardian.py:74.
+**Private `Trader` methods called from other modules: resolved by step 0.** The survey found 18 call sites in 10 modules, plus 6 in the probes. Each now has a public name:
+- `_place_stop` → `place_close_stop`, `_market_close` → `close_market`, `_market_sell` → `open_market`;
+- `_prepare` → `prepare`, `_raw_positions` → `raw_positions`, `_verified_position` → `verified_position`, `_find_stop` → `find_stop`;
+- the guardian's assignment to `_alert` → `set_alert(fn)`.
 
-Eight non-Trader modules also write through `tr.t` directly. LONG_BUILD.md counts about 60 order, stop, close and flatten sites among its ~150 short-only assumptions, all on these paths.
+No aliases are left. `tests/test_trader_public.py` fails if a module outside `trading*.py` touches a private `Trader` member. Tests are exempt.
 
 **MCP/CLI duplication.** There are 47 MCP tools and 123 argparse arguments. Six parallel name tables must agree:
 - `mcp_server.UNLOGGED` and `PROTECTIVE_TOOLS`/`RESEARCH_TOOLS` (:39-49);
@@ -302,7 +307,7 @@ The gateway needs these types. Each has a stable `code`, a tri-state `sent` (Fal
   - the opening side, and the closing side;
   - a closePosition stop's side, and "tighter" as min or max;
   - the signed stop distance, and the side of liquidation.
-- **One module of primitives.** The 20 raw sites become 9 primitives in `gateway/orders.py`, each taking a `Side`:
+- **One module of primitives.** Step 0's 9 `Trader` primitives (§1.2) move to `gateway/orders.py`, each taking a `Side`:
   - `open_market`, `place_limit`, `edit_limit`;
   - `cancel`, `place_close_stop`, `place_reduce_stop` (bridge, pre-arm);
   - `close_market`, `place_reduce_limit` (target), `prepare`.
@@ -316,7 +321,7 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 
 | # | step | flock | tests | size |
 |---|---|---|---|---|
-| 0 | **Public `Trader`.** Public names for the 8 privates used elsewhere (`place_close_stop`, `close_market`, `open_market`, `prepare`, `raw_positions`, `verified_position`, `find_stop`, `set_alert`), callers moved; no other change. After #37 merges (same files) | as today | existing suite; a test that no module outside trading* calls a `Trader._` name | ~250 |
+| 0 | **Public `Trader`** (done). Public names for the 8 privates used elsewhere (`place_close_stop`, `close_market`, `open_market`, `prepare`, `raw_positions`, `verified_position`, `find_stop`, `set_alert`); 5 more primitives (`cancel`, `place_limit`, `edit_limit`, `place_reduce_stop`, `place_reduce_limit`) carry the raw `tr.t` writes of 8 modules; callers moved, wire and results unchanged. Probes stay raw (§1.2) | as today | existing suite; `test_trader_public.py`: no `Trader._` name outside trading*, no raw write outside the primitives and probes | ~300 |
 | 1 | **Command registry:** one `Command` per write (name, CLI name, typed args, human approval, weight class, logged, stale-exempt) generates the MCP tool and the argparse subcommand; the six tables and `stale_guard.CLI` are derived | as today | every write tool has a CLI form with the same args (extends test_cli_fallback); generated tools match today's names and metadata | ~400 |
 | 2 | **Intents in-process:** intent dataclasses, `Gateway` protocol, `LocalGateway` running today's flows; MCP, CLI, guardian, killswitch_ops and ladder_apply call `submit()`; `intents` + `intent_orders` tables (write-ahead, idempotent ids) | as today | resubmitting an id runs once; each intent kind maps to today's result dict | ~500 |
 | 3 | **Typed results + generic resolver** for market sends of unknown outcome (gap 3), on #37's types | as today | fakes: a close/add that times out is resolved by client id; nothing is re-sent | ~250 |

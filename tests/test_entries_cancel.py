@@ -26,7 +26,7 @@ def recorder(t):
 
     async def notify(kind, msg, symbol, urgent):
         sent.append((kind, msg, symbol, urgent))
-    t._alert = notify
+    t.set_alert(notify)
     return sent
 
 

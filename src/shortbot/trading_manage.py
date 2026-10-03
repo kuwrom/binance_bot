@@ -65,7 +65,7 @@ class ManageFlow:
                 res = await self._close_part(symbol, trade, pos, size, amount, reason, lesson)
                 await targets_sync.after(self, symbol, "partial close")
                 return res
-            order = await self._market_close(symbol, amount)
+            order = await self.close_market(symbol, amount)
             fill_quality.record(self, trade and trade["id"], "exit", "market", order)   # mainnet ref, background (#35)
             exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
             legs = await tranches.cancel_legs(self, trade["id"], "trade closed") if trade else {}
@@ -99,7 +99,7 @@ class ManageFlow:
         what was asked (a market order can expire part-filled). The trade's stops stay as they are."""
         from .trading import _f
         try:
-            order = await self._market_close(symbol, amount, whole=False)
+            order = await self.close_market(symbol, amount, whole=False)
         except clientid.Unknown as e:
             msg = f"partial close of {amount:g}: {e}. Not re-sent: re-read the position before closing again"
             await self.alert("close_unknown", msg, symbol, True)
@@ -140,7 +140,7 @@ class ManageFlow:
             if not (_whole(o) or is_bridge(o) or str(o.get("id")) in ids or o.get("clientOrderId") in cids):
                 continue   # another group's pre-armed stop: its limit may still fill
             try:
-                await self.t.cancel_order(o["id"], symbol, params=TRIG)
+                await self.cancel(symbol, o["id"], trigger=True)
             except ccxt.OrderNotFound:
                 pass   # gone meanwhile (a closePosition stop leaves with its position)
             except Exception as e:  # noqa: BLE001 - flat: an orphan stop is harmless now, but noted
@@ -193,7 +193,7 @@ class ManageFlow:
         try:
             if not stop:
                 raise ValueError("no journal stop for this position")
-            await self._place_stop(symbol, stop, tries=3)
+            await self.place_close_stop(symbol, stop, tries=3)
             return f"closePosition stop placed at {stop:g}"
         except Exception as e:  # noqa: BLE001 - StopExists: covered; flat: done; anything else is a NAKED alert
             kind = errors.classify(e)
@@ -301,7 +301,7 @@ class ManageFlow:
     async def _close_past(self, symbol: str, pos: dict, jt: dict, reason: str) -> None:
         """Price is already past the stop this short needs: close it now, as that stop would have (then journal it)."""
         from .trading import _f, _sleep
-        await self._market_close(symbol, _f(pos["contracts"]))
+        await self.close_market(symbol, _f(pos["contracts"]))
         if jt:
             await _sleep(1)
             await reconcile.finalize(self, jt, reason)

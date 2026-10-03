@@ -47,7 +47,7 @@ class PositionChecks:
             await self.ex.resync_time()
             self._last_resync = time.time()
         t0, verified = time.time(), True   # protection is verified as of this read, not of the pass's end
-        live = await tr._raw_positions()
+        live = await tr.raw_positions()
         await self._targets(targets_sync.settle_flat(tr, live))   # their fills first: a target exit reads as one (#65)
         try:   # journalling closed trades must never cost the stop checks below
             closed = await reconcile.reconcile(tr, live)
@@ -225,7 +225,7 @@ class PositionChecks:
                 async with tr.symbol_lock(sym, "guardian: forced close (no stop)"):
                     pos = await tr.position(sym)   # still due? another process may have protected or closed it
                     covered = bool(pos) and bool(await tr.stop_orders(sym, close_position_only=True))
-                    if pos and not covered and (await tr._market_close(sym, float(pos["contracts"]))).get("rejected"):
+                    if pos and not covered and (await tr.close_market(sym, float(pos["contracts"]))).get("rejected"):
                         pos = None   # -2022: flat before the close landed (closed elsewhere first)
                 self.stop_fails.pop(sym, None)
                 await self.n.send("forced_close", f"Could not restore a stop {n}x ({e}); " + (

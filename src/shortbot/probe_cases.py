@@ -42,7 +42,7 @@ async def algo_unknown_cid(p: Probe) -> dict[str, Any]:
 
 async def trigger_listing_cid(p: Probe) -> dict[str, Any]:
     """8: does fetch_open_orders(sym, {'trigger': True}) carry our clientOrderId on a conditional order, and does the
-    lookup by clientAlgoId find it (Trader._find_stop relies on both)?"""
+    lookup by clientAlgoId find it (Trader.find_stop relies on both)?"""
     await p.setup()
     ok, o, cid = await p.stop("reduce-only stop +10% (pre-arm shape)", p.px(10), close=False, qty=p.qty)
     if not ok:

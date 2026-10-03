@@ -165,15 +165,15 @@ class Probe:
             raise ProbeError(no["error"])
 
     async def prepare(self) -> None:
-        await self.need(f"prepare: one-way, isolated, {LEVERAGE}x", self.tr._prepare, self.sym, LEVERAGE)
+        await self.need(f"prepare: one-way, isolated, {LEVERAGE}x", self.tr.prepare, self.sym, LEVERAGE)
 
     async def open_short(self) -> float:
-        """A minimum short through the desk's own primitive (_market_sell: the client id settles an ambiguous answer),
+        """A minimum short through the desk's own primitive (open_market: the client id settles an ambiguous answer),
         then at once a closePosition safety stop at +SAFETY_PCT. Without one resting the probe stops (cleanup closes)."""
         self.still_active()
         await self.prepare()
-        await self.need("open: market SELL (desk _market_sell)", self.tr._market_sell, self.sym, self.qty, self.cid())
-        pos = await self.tr._verified_position(self.sym)
+        await self.need("open: market SELL (desk open_market)", self.tr.open_market, self.sym, self.qty, self.cid())
+        pos = await self.tr.verified_position(self.sym)
         if not pos:
             raise ProbeError("the short isn't visible after its fill")
         ok, s, _ = await self.stop(f"safety stop: closePosition +{SAFETY_PCT:g}%", self.px(SAFETY_PCT))

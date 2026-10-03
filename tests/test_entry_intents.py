@@ -264,13 +264,13 @@ async def test_withdraw_finds_a_row_without_an_order_id_by_its_client_id():
     d, t, fake = desk()
     fake.ack_lost = 1                                               # it rests; the row has no order id
     a = row(d, (await d.propose_group([prop(1.04)]))["unknown"][0]["entry_id"])
-    assert await withdraw(fake, a) == "unfilled" and open_limits(fake) == []      # found by client id, cancelled
+    assert await withdraw(t, a) == "unfilled" and open_limits(fake) == []      # found by client id, cancelled
     fake.add_symbol("ZK/USDT:USDT", 1.035)
     fake.ack_lost_unsent = 1                                        # it never ran
     b = row(d, (await d.propose_group([prop(1.06, stop=1.12, symbol="ZK/USDT:USDT")]))["unknown"][0]["entry_id"])
-    assert await withdraw(fake, b) == "unknown"                     # may still be in flight
+    assert await withdraw(t, b) == "unknown"                     # may still be in flight
     age(d, b["id"])
-    assert await withdraw(fake, row(d, b["id"])) == "unfilled"      # never reached the book
+    assert await withdraw(t, row(d, b["id"])) == "unfilled"      # never reached the book
 
 
 async def test_placed_orders_are_reported_even_if_the_decision_log_or_alert_fails():
@@ -281,7 +281,8 @@ async def test_placed_orders_are_reported_even_if_the_decision_log_or_alert_fail
 
     async def down(*a):
         raise RuntimeError("telegram down")
-    t.j.log_decision, t._alert = locked, down
+    t.j.log_decision = locked
+    t.set_alert(down)
     r = await d.propose_group([prop(1.04)])
     assert r["ok"] and len(r["placed"]) == 1 and r["rejected"] == [] and len(r["warnings"]) == 2
 

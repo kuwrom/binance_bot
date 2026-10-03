@@ -150,7 +150,7 @@ async def test_definite_stop_refusals_raise_at_once_without_a_lookup(code):
         px = 0.99
     fake.fail_stop = int(code == "-4045")
     with pytest.raises(ccxt.BaseError, match=code):
-        await t._place_stop(SYM, px, tries=3)
+        await t.place_close_stop(SYM, px, tries=3)
     assert seen == [] and len(sends(fake, "STOP_MARKET")) == n + 1
 
 

@@ -170,7 +170,7 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
     failure never stops the others (it alerts)."""
     j = trader.j
     rows = j.open_trades(include_opening=True)
-    live = live_positions if live_positions is not None else await trader._raw_positions()
+    live = live_positions if live_positions is not None else await trader.raw_positions()
     empty = not live and any(r["status"] == "open" for r in rows)   # proves nothing on its own (module doc)
     if not empty and j.get(EMPTY_KEY):
         j.set(EMPTY_KEY, "")

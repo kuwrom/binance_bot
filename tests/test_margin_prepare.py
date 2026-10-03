@@ -1,4 +1,4 @@
-"""#64: an entry never opens on a symbol it can't confirm isolated (Trader._prepare), and a short Binance closed itself
+"""#64: an entry never opens on a symbol it can't confirm isolated (Trader.prepare), and a short Binance closed itself
 (ADL, liquidation) is journalled as such (reconcile, GET /fapi/v1/forceOrders)."""
 
 import time
@@ -24,14 +24,14 @@ async def entry(t):
     return await t.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100)
 
 
-# ------------------------------------------------------------ _prepare
+# ------------------------------------------------------------ prepare
 async def test_a_confirmed_isolated_symbol_is_remembered():
     _, t, fake = desk()
     fake.sym[SYM]["margin"] = "CROSSED"
-    await t._prepare(SYM, 3)                    # switched: success
+    await t.prepare(SYM, 3)                    # switched: success
     assert fake.sym[SYM]["margin"] == "ISOLATED" and float(t.j.get(ISOLATED_OK_KEY + SYM)) > time.time() - 5
     t.j.set(ISOLATED_OK_KEY + SYM, "0")
-    await t._prepare(SYM, 3)                    # -4046 MarginModeAlreadySet: isolated already
+    await t.prepare(SYM, 3)                    # -4046 MarginModeAlreadySet: isolated already
     assert float(t.j.get(ISOLATED_OK_KEY + SYM)) > time.time() - 5
 
 
@@ -41,7 +41,7 @@ async def test_a_split_entrys_second_leg_proceeds_on_the_first_legs_confirmation
     fake.price = 1.035
     r = await d.propose_group([prop(1.04, tranches=[{"limit_price": 1.04, "share": 0.5},
                                                     {"limit_price": 1.07, "share": 0.5}])])
-    assert r["ok"] and len(r["placed"]) == 2, r   # leg 2's _prepare met -4067 (leg 1 rests)
+    assert r["ok"] and len(r["placed"]) == 2, r   # leg 2's prepare met -4067 (leg 1 rests)
 
 
 async def test_a_crossed_symbol_pinned_by_an_open_order_is_refused_before_any_order():
@@ -50,7 +50,7 @@ async def test_a_crossed_symbol_pinned_by_an_open_order_is_refused_before_any_or
     await fake.create_order(SYM, "limit", "sell", 10, 1.2, gtd())   # someone else's order, resting in cross
     before = len(fake.orders)
     with pytest.raises(RuntimeError, match="CROSSED"):
-        await t._prepare(SYM, 2)
+        await t.prepare(SYM, 2)
     with pytest.raises(RuntimeError, match="CROSSED"):   # open_short: refused before its journal row and order
         await entry(t)
     assert fake.position == 0 and len(fake.orders) == before
@@ -65,13 +65,13 @@ async def test_unconfirmed_isolation_is_refused_when_symbol_config_is_down(seen_
         t.j.set(ISOLATED_OK_KEY + SYM, str(time.time() - seen_s_ago))
     await fake.create_order(SYM, "limit", "sell", 10, 1.2, gtd())
     with pytest.raises(RuntimeError, match="can't be confirmed isolated"):
-        await t._prepare(SYM, 2)
+        await t.prepare(SYM, 2)
 
 
 async def test_a_readable_isolated_config_lets_the_entry_through():
     _, t, fake = desk()
     await fake.create_order(SYM, "limit", "sell", 10, 1.2, gtd())
-    await t._prepare(SYM, 2)                    # -4067, symbolConfig says ISOLATED
+    await t.prepare(SYM, 2)                    # -4067, symbolConfig says ISOLATED
     assert float(t.j.get(ISOLATED_OK_KEY + SYM)) > time.time() - 5
 
 
@@ -79,7 +79,7 @@ async def test_multi_assets_mode_refuses_an_entry_loudly():
     _, t, fake = desk()
     fake.multi_assets, fake.sym[SYM]["margin"] = True, "CROSSED"
     with pytest.raises(ccxt.BadRequest, match="-4168"):
-        await t._prepare(SYM, 2)
+        await t.prepare(SYM, 2)
 
 
 # ------------------------------------------------------------ exits Binance made itself

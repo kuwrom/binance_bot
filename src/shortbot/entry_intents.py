@@ -148,7 +148,7 @@ async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
     if r["abandon"] and not filled:
         from .entries_cancel import withdraw
         async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: withdraw an abandoned intent"):
-            got = await withdraw(t, {**r, "order_id": o["id"]}, desk.tr.alert)
+            got = await withdraw(desk.tr, {**r, "order_id": o["id"]}, desk.tr.alert)
         if got == "unknown":
             return None   # the cancel failed: look again next tick
         if got == "unfilled":
@@ -192,7 +192,7 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
             if r["status"] != "pending":   # its entry is gone, so its stop must go too
                 try:
                     async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a dead entry's pre-arm"):
-                        await t.cancel_order(o["id"], sym, params={"trigger": True})
+                        await desk.tr.cancel(sym, o["id"], trigger=True)
                 except Exception as e:  # noqa: BLE001 - Gone: off the book already; else retried next tick
                     if errors.classify(e) is not errors.Gone:
                         await _carry_on(desk, f"pre-arm of dead entry #{r['id']} not cancelled",
@@ -249,7 +249,7 @@ async def _externals_left(desk, rows: list[dict], resting: set[str]) -> None:
             st = "external_filled" if float(o.get("filled") or 0) > 0 else "external_gone"
             desk._settle(r["id"], "external", status=st, reason=f"{r['reason']}; left the book ({o.get('status')})")
     if any(r["status"] == "external_filled" for r in rows):
-        held = {p["symbol"] for p in await desk.tr._raw_positions()}
+        held = {p["symbol"] for p in await desk.tr.raw_positions()}
         for r in rows:
             if r["status"] == "external_filled" and r["symbol"] not in held:
                 desk._settle(r["id"], "external_filled", status="external_gone")
@@ -290,7 +290,7 @@ async def _late(desk, r: dict, o: dict, oid: str, cid: str | None, sym: str) -> 
         return None
     from .entries_cancel import withdraw
     async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a late order"):   # cancel first; a fill is kept
-        got = await withdraw(desk.tr.t, {**r, "order_id": oid}, desk.tr.alert)
+        got = await withdraw(desk.tr, {**r, "order_id": oid}, desk.tr.alert)
     if got == "unknown":
         return None   # the next sweep retries
     if got == "filled" and r["status"] != "filled":

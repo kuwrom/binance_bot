@@ -1,4 +1,4 @@
-"""The probes that hold a minimum short (#55; runner and rules: probes.py). Each opens through the desk's _market_sell
+"""The probes that hold a minimum short (#55; runner and rules: probes.py). Each opens through the desk's open_market
 with a closePosition safety stop at once (Probe.open_short), measures one thing, and leaves the cleanup to flatten.
 Each returns {"observed", "verdict", "matches_fake"}: matches_fake compares Binance's answer with what tests/fakes.py
 assumes (the assumption is quoted in probes.CASES)."""
@@ -51,7 +51,7 @@ async def close_stop_at_flat(p: Probe) -> dict[str, Any]:
     size = await p.open_short()
     if p.safety is None:
         raise kit.ProbeError("the safety stop's id is unknown: nothing to watch")
-    await p.need("close: reduce-only market BUY (desk _market_close)", p.tr._market_close, p.sym, size)
+    await p.need("close: reduce-only market BUY (desk close_market)", p.tr.close_market, p.sym, size)
     st = (await p.watch_algo({"closePosition": p.safety}))["closePosition"]
     gone = st["gone_after_s"] is not None
     when = f"left the open list within {st['gone_after_s']:g} s" if gone else "still rests 15.5 s"
@@ -66,7 +66,7 @@ async def reduce_only_stop_at_flat(p: Probe) -> dict[str, Any]:
     ok, ro, _ = await p.stop("reduce-only stop for the position +9% (pre-arm shape)", p.px(9), close=False, qty=size)
     if not ok:
         raise kit.ProbeError(f"the reduce-only stop was refused: {say(ok, ro)}")
-    await p.need("close: reduce-only market BUY (desk _market_close)", p.tr._market_close, p.sym, size)
+    await p.need("close: reduce-only market BUY (desk close_market)", p.tr.close_market, p.sym, size)
     ids = {"reduce_only": str(ro["id"]), **({"closePosition": p.safety} if p.safety else {})}
     w = await p.watch_algo(ids)
     r = w["reduce_only"]
@@ -112,7 +112,7 @@ async def cancel_finished(p: Probe) -> dict[str, Any]:
         cancels["canceled_first"] = await p.cancel("cancel the resting near stop", near)
         cancels["canceled_repeat"] = {**await p.cancel("cancel it again", near), "status_before": "CANCELED"}
     if pos := await p.position("position after the near stop"):
-        await p.need("close: reduce-only market BUY (desk _market_close)", p.tr._market_close, p.sym,
+        await p.need("close: reduce-only market BUY (desk close_market)", p.tr.close_market, p.sym,
                      float(pos["contracts"]))
     if p.safety:
         st = (await p.watch_algo({"closePosition": p.safety}, delays=(0.5, 1, 2, 2)))["closePosition"]["status"]

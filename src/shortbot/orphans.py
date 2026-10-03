@@ -86,7 +86,7 @@ async def _symbol(desk, sym: str) -> list[dict[str, Any]]:
                                "may be its only one: kept until the guardian restores that stop", sym, False)
             continue
         try:
-            await tr.t.cancel_order(o["id"], sym, params=stops.TRIG)
+            await tr.cancel(sym, o["id"], trigger=True)
         except Exception as e:  # noqa: BLE001 - Gone: off the book already; anything else: the next sweep retries
             if errors.classify(e) is not errors.Gone:
                 log.warning("orphan %s on %s not cancelled: %s", o["id"], sym, errors.describe(e))
