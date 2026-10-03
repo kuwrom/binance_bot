@@ -46,7 +46,7 @@ DERIVED = {"30m": "5m"}                       # built on read from the base time
 READABLE = TFS + tuple(DERIVED)
 # backfill depth = the deepest live reader, +margin (klines weight: < 100 bars 1, 100-499 2): flow 1m x60, flow and
 # mark 5m x288, 15m x120 (tier 1) / x96, 1h x170 (market map), 4h x60, 1d x200 (BTC x400, risk budget)
-BACKFILL = {"1m": 99, "5m": 300, "15m": 130, "1h": 200, "4h": 99, "1d": 400}
+BACKFILL = {"1m": 99, "5m": 300, "15m": 130, "1h": 200, "4h": 150, "1d": 400}
 KEEP = {"1m": 2000, "5m": 900, "15m": 500, "30m": 0, "1h": 500, "4h": 300, "1d": 500}   # bars kept per timeframe
 ALL_MARKET = ("!ticker@arr", "!markPrice@arr@1s")
 MAX_STREAMS_PER_CONN = 200   # Binance allows 1024; two sockets halve what one drop loses

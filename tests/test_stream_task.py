@@ -237,7 +237,7 @@ async def test_no_stream_task_or_scan_for_an_in_memory_journal(monkeypatch):
 def test_the_scan_lane_is_research_class():
     g = guardian_with(FakeCcxt())
     lanes = g._lanes()
-    assert [j.name for j in lanes["scan"].jobs] == ["scan", "cadence_shadow"]
+    assert [j.name for j in lanes["scan"].jobs] == ["scan", "cadence_shadow", "mtf_views"]
     assert weight.class_for("scan", "scan") == weight.RESEARCH == weight.class_for("scan", "cadence_shadow")
     assert gmod.SCAN["scan"][0] <= 15                    # fast events decay in 10-45 min: check often
 

@@ -261,6 +261,16 @@ class MarketJobs:
             r = await asyncio.to_thread(cadence_shadow.run, store, int(time.time() * 1000))
             log.debug("cadence shadow: %s", r)
 
+    async def mtf_views(self) -> None:
+        """Every streamed coin's 5m/15m/1h/4h/1d state, logged once per 15m close (mtf_live.py). Local reads only."""
+        from . import mtf_live
+        from .market import streams
+        store = streams.path_for(self.app.settings.db_path)
+        if store is not None and store.exists():
+            r = await asyncio.to_thread(mtf_live.run, store, int(time.time() * 1000))
+            if r.get("logged"):
+                log.info("mtf views: %d coins at %s", r["logged"], r["close"])
+
     async def laggard_study(self) -> None:
         """Shadow study (docs/LADDER.md A): log sector-leader breakdowns with their laggards and a random control."""
         from .laggard import detect
