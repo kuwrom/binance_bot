@@ -6,7 +6,8 @@ is then matched in trade history by id, not by time.
 The resting ones (cancel, place_limit, edit_limit, place_reduce_stop, place_reduce_limit) send ONE request and return
 ccxt's answer, or raise its error, as is: the flows that call them (entries_*, stops, targets_sync, orphans) journal
 first, classify the error and resolve an ambiguous answer by its client id. They are the only way any other module
-writes to the exchange (#36 gateway step 0; GATEWAY.md §7 makes them side-aware later).
+writes to the exchange (#36 gateway step 0; GATEWAY.md §7 makes them side-aware later). Each order sent under a client
+id is linked to the intent it belongs to just before the send (intents.link, #36 step 2).
 
 trading.py imports this module, so `DEAD`, `_f` and `_sleep` are imported inside each method at call time: a
 module-level import would be circular, and would bind `_sleep` before the tests patch `shortbot.trading._sleep`.
@@ -14,7 +15,7 @@ module-level import would be circular, and would bind `_sleep` before the tests 
 
 from __future__ import annotations
 
-from . import clientid, errors, order_ids
+from . import clientid, errors, intents, order_ids
 
 
 class OrderFlow:
@@ -40,6 +41,7 @@ class OrderFlow:
         for i in range(tries):
             if whole or not doubt:
                 cid = clientid.new("close", clientid.tag(symbol))
+                intents.link(self.j, cid, symbol)
                 try:
                     return await self.t.create_order(symbol, "market", "buy", amount, None,
                                                      {"reduceOnly": True, "clientOrderId": cid})
@@ -111,6 +113,7 @@ class OrderFlow:
 
     async def _sell_once(self, symbol: str, amount: float, cid: str, lookups: int) -> dict:
         from .trading import DEAD, _f, _sleep
+        intents.link(self.j, cid, symbol)
         try:
             return await self.t.create_order(symbol, "market", "sell", amount, None, {"clientOrderId": cid})
         except Exception as e:  # noqa: BLE001 - classified: a definite refusal raises as is, else looked up by its id
@@ -138,6 +141,7 @@ class OrderFlow:
 
     async def place_limit(self, symbol: str, amount: float, price: float, expires_ms: int, cid: str) -> dict:
         """A GTD limit SELL that opens a short when it fills (an entry, entries_place.py), resting to `expires_ms`."""
+        intents.link(self.j, cid, symbol)
         return await self.t.create_order(symbol, "limit", "sell", amount, price,
                                          {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
 
@@ -148,12 +152,14 @@ class OrderFlow:
     async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> dict:
         """A reduce-only STOP_MARKET BUY of `amount` (mark price): the bridge that covers a stop swap (stops.py) or an
         entry's pre-armed stop (entries_place.py). Unlike place_close_stop it has a size; a side may hold several."""
+        intents.link(self.j, cid, symbol)
         return await self.t.create_order(symbol, "STOP_MARKET", "buy", amount, None, {
             "triggerPrice": float(self.t.price_to_precision(symbol, trigger)), "reduceOnly": True,
             "workingType": "MARK_PRICE", "clientOrderId": cid})
 
     async def place_reduce_limit(self, symbol: str, qty: float, price: float, cid: str) -> dict:
         """A reduce-only GTC limit BUY: a plan target resting on the book (targets_sync.py)."""
+        intents.link(self.j, cid, symbol)
         return await self.t.create_order(symbol, "limit", "buy", qty, price,
                                          {"reduceOnly": True, "timeInForce": "GTC", "clientOrderId": cid})
 

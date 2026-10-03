@@ -8,7 +8,8 @@ stale-code guard, audit trail). Every tool is a commands.py declaration (the sam
 comes from), registered below in declaration order (= tools/list order).
 
 Audit (#24): every tool call runs as actor mcp:<tool>, under its #70 weight class, and each write (not the reads, nor
-log_decision, whose row is the record) leaves a `call` decision row: args, outcome (ok / refused / unknown / error)."""
+log_decision, whose row is the record) is an intent (gateway.py, #36): journalled with its args before it runs, its
+status and result after; a write refused on stale code is journalled as refused."""
 
 from __future__ import annotations
 
@@ -20,10 +21,10 @@ from typing import Callable
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import app as _app_mod
 from . import audit, commands, procs, stale_guard, weight
 from .app import close_app
 from .commands import Command, CommandError
+from .gateway import LocalGateway
 from .redact import install_log_redaction
 
 INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Call start_session first, then follow the
@@ -53,11 +54,9 @@ mcp = MCPServer("shortbot", instructions=INSTRUCTIONS, lifespan=lifespan)
 
 
 def _journal(f):
-    """The journal the tool used: its module's get_app (patched in tests). Never builds the app just to log."""
-    get = f.__globals__.get("get_app")
-    if get is None or (get is _app_mod.get_app and _app_mod._app is None):
-        return None
-    return getattr(get(), "journal", None)
+    """The journal the tool's body uses: its module's get_app (patched in tests). A write journals its intent before
+    the body runs, so this builds the app when the server hasn't yet."""
+    return f.__globals__["get_app"]().journal
 
 
 TOOLS: dict[str, Callable] = {}   # name -> the registered wrapper (what an MCP call runs: audit, stale guard, weight class)
@@ -69,9 +68,9 @@ def tool(cmd: Command):
     schemas from it (a list / str return is wrapped as {"result": ...}, which stale_guard.annotate relies on)."""
     f, name, sig = cmd.body, cmd.name, cmd.mcp_signature()
 
-    async def run(*args, **kwargs):
+    async def run(coro):
         try:
-            return await f(*args, **kwargs)
+            return await coro
         except CommandError as e:
             raise ToolError(str(e)) from e
 
@@ -81,13 +80,11 @@ def tool(cmd: Command):
             code = await stale_guard.verdict()   # #68: on stale code writes never run, reads carry a warning
             try:
                 if not cmd.write:
-                    return stale_guard.annotate(await run(*args, **kwargs), code)
-                bound = audit.bound_args(sig, args, kwargs)
-                if not code.ok and not cmd.stale_exempt:   # refused: nothing sent, the call row says so
-                    return await audit.called(lambda: _journal(f), name, bound,
-                                              stale_guard.refuse(name, code, cmd.cli_form()))
-                return stale_guard.annotate(await audit.called(lambda: _journal(f), name, bound,
-                                                               run(*args, **kwargs)), code)
+                    return stale_guard.annotate(await run(f(*args, **kwargs)), code)
+                gw, intent = LocalGateway(lambda: _journal(f)), cmd.intent(audit.bound_args(sig, args, kwargs))
+                if not code.ok and not cmd.stale_exempt:   # refused: nothing sent, the intent row says so
+                    return await gw.submit(intent, await stale_guard.refuse(name, code, cmd.cli_form()))
+                return stale_guard.annotate(await run(gw.submit(intent)), code)
             except Exception as e:  # noqa: BLE001
                 if code.stale:
                     raise stale_guard.failed(name, e, code) from e

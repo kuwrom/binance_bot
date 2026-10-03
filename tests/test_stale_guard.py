@@ -50,8 +50,10 @@ def _desk(monkeypatch, j, **trader):
 
 
 def _call_rows(j):
-    return [json.loads(r["snapshot"]) | {"reasoning": r["reasoning"], "actor": r["actor"]}
-            for r in j.decisions(calls=True)]
+    """The writes' intent rows (#36: each tool call's record), newest first."""
+    return [{"name": r["kind"], "outcome": r["status"], "actor": r["actor"],
+             "reasoning": (json.loads(r["result"] or "{}") or {}).get("error") or r["error"] or ""}
+            for r in j._rows("SELECT * FROM intents ORDER BY rowid DESC")]
 
 
 # ------------------------------------------------------------ writes
@@ -88,7 +90,7 @@ async def test_a_write_runs_when_the_code_on_disk_matches(tmp_path, monkeypatch)
     res = await TOOLS["move_stop"]("QNT", 1.1, "trail")
     assert res == {"ok": True, "stop": 1.1} and sent == [("QNT", 1.1, "trail")]
     (row,) = _call_rows(j)
-    assert row["outcome"] == "ok"
+    assert row["outcome"] == "done"
 
 
 async def test_flatten_all_is_refused_with_the_cli_fallback(tmp_path, monkeypatch):
@@ -133,7 +135,7 @@ async def test_a_dict_read_runs_with_a_warning(tmp_path, monkeypatch):
     assert res["stale_code"].startswith(f"stale code: this MCP server started on {procs.code_version()[:12]}, the code "
                                         f"on disk is {NEW[:12]}")
     assert "/mcp" in res["stale_code"] and acct == {"equity": 100.0}   # a copy: the tool's own dict is untouched
-    assert _call_rows(j) == []   # reads leave no call row
+    assert _call_rows(j) == []   # reads are no intents
 
 
 async def test_list_and_str_reads_are_wrapped_and_pass_the_output_schema(tmp_path, monkeypatch):

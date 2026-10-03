@@ -56,6 +56,12 @@ def tag(symbol: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", symbol.split("/")[0])[:12]
 
 
+def kind_of(cid: str) -> str:
+    """The kind an id of ours was made for ('sb-c1000PEPE-1f2e3d4c' -> 'close'); 'other' for any other id."""
+    letter = cid[len(PREFIX) + 1:len(PREFIX) + 2] if ours(cid) else ""
+    return next((k for k, v in KINDS.items() if v == letter), "other")
+
+
 def ours(cid: Any) -> bool:
     return str(cid or "").startswith(PREFIX + "-")
 

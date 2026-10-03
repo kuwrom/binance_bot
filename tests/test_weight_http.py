@@ -12,6 +12,7 @@ from shortbot import weight
 from shortbot.config import RiskLimits, Settings
 from shortbot.exchange import Exchanges
 from shortbot.guardian_loop import Job
+from shortbot.journal import Journal
 from shortbot.weight import DESK, PROTECTIVE, RESEARCH, BudgetWait
 from tests.fake_http import FakeHost, FakeSession, fake_clock, wire
 
@@ -166,7 +167,7 @@ async def test_mcp_tools_run_under_their_class(monkeypatch):
     async def record(*a, **k):
         seen.append(weight.current())
         return {"verdict_for_shorts": "favorable"}
-    app = SimpleNamespace(ex=None, journal=None, trader=SimpleNamespace(move_stop=record))
+    app = SimpleNamespace(ex=None, journal=Journal(":memory:"), trader=SimpleNamespace(move_stop=record))
     monkeypatch.setattr(cmd_trade, "get_app", lambda: app)
     monkeypatch.setattr(cmd_trade, "regime", SimpleNamespace(market_regime=record))
     monkeypatch.setattr(cmd_trade, "scanner", SimpleNamespace(scan_shorts=record, coin_snapshot=record))

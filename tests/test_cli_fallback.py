@@ -17,7 +17,8 @@ from shortbot.params import ResearchParams
 
 NEW = "f" * 64
 VOLATILE = {"id", "ts", "started_at", "created_at", "updated_at", "opened_at", "actor", "claude_session",
-            "code_version"}
+            "code_version", "intent_id"}
+CALLS = ("intents", "intent_orders")   # who called, with what: compared through `calls`
 _TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(\+00:00|Z)?")
 
 
@@ -108,12 +109,12 @@ def _norm(v):
 
 
 def _effect(j: Journal) -> dict:
-    """Every journal row, without ids, times and who acted; tool / CLI call rows aside."""
+    """Every journal row, without ids, times and who acted; the calls' intent rows aside."""
     out = {}
     for (t,) in j.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+        if t in CALLS:
+            continue
         rows = j._rows(f"SELECT * FROM {t}")
-        if t == "decisions":
-            rows = [r for r in rows if r["action"] != "call"]
         if t == "kv":
             rows = [r for r in rows if not r["k"].startswith("proc:")]
         out[t] = sorted((json.dumps(_norm(r), sort_keys=True, default=str) for r in rows))
@@ -121,7 +122,7 @@ def _effect(j: Journal) -> dict:
 
 
 async def _both(tmp_path, monkeypatch, seed, mcp_call, argv):
-    """(effect after the MCP tool, effect after the CLI command, each path's call row), from identical journals."""
+    """(effect after the MCP tool, effect after the CLI command, each path's intent), from identical journals."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     apps = {k: _app(tmp_path, k) for k in ("mcp", "cli")}
     for a in apps.values():
@@ -140,9 +141,11 @@ async def _both(tmp_path, monkeypatch, seed, mcp_call, argv):
     res_cli = await cli._audited(build_parser().parse_args(argv))
     effects = {k: _effect(a.journal) for k, a in apps.items()}
     assert effects["mcp"] == effects["cli"] and effects["mcp"] != before
-    calls = {k: [(r["actor"], json.loads(r["snapshot"])["outcome"]) for r in a.journal.decisions(calls=True)
-                 if r["action"] == "call"]
+    calls = {k: [(r["actor"], r["status"]) for r in a.journal._rows("SELECT * FROM intents ORDER BY rowid")]
              for k, a in apps.items()}
+    kinds = {k: [(r["kind"], json.loads(r["args"])) for r in a.journal._rows("SELECT * FROM intents")]
+             for k, a in apps.items()}
+    assert _norm(kinds["mcp"]) == _norm(kinds["cli"])   # both surfaces submit the same intent
     return res_mcp, res_cli, calls
 
 
@@ -158,7 +161,7 @@ async def test_update_plan_parity(tmp_path, monkeypatch):
         tmp_path, monkeypatch, _open_trade, lambda: TOOLS["update_plan"]("QNT", changes, "longer hold"),
         ["update-plan", "QNT", "--changes", json.dumps(changes), "--reason", "longer hold"])
     assert res_mcp["ok"] and res_mcp == res_cli
-    assert calls == {"mcp": [("mcp:update_plan", "ok")], "cli": [("cli:update-plan", "ok")]}
+    assert calls == {"mcp": [("mcp:update_plan", "done")], "cli": [("cli:update-plan", "done")]}
 
 
 async def test_set_and_reset_params_parity(tmp_path, monkeypatch):
@@ -167,7 +170,7 @@ async def test_set_and_reset_params_parity(tmp_path, monkeypatch):
         lambda: TOOLS["set_risk_params"]({"max_leverage": 5, "max_positions": 4}, "tight-stop fades", "lev5"),
         ["set-params", "max_leverage=5", "max_positions=4", "--experiment", "lev5", "--reason", "tight-stop fades"])
     assert res_mcp["changed"]["max_leverage"]["to"] == 5 and _norm(res_mcp) == _norm(res_cli)
-    assert calls == {"mcp": [("mcp:set_risk_params", "ok")], "cli": [("cli:set-params", "ok")]}
+    assert calls == {"mcp": [("mcp:set_risk_params", "done")], "cli": [("cli:set-params", "done")]}
 
     def lev5(a):
         a.params.set({"max_leverage": 5}, "tight-stop fades", "lev5")
@@ -175,7 +178,7 @@ async def test_set_and_reset_params_parity(tmp_path, monkeypatch):
         tmp_path / "reset", monkeypatch, lev5, lambda: TOOLS["reset_risk_params"]("back to baseline"),
         ["reset-params", "--reason", "back to baseline"])
     assert _norm(res_mcp) == _norm(res_cli)
-    assert calls["cli"] == [("cli:reset-params", "ok")]
+    assert calls["cli"] == [("cli:reset-params", "done")]
 
 
 def test_set_params_rejects_a_malformed_pair():
@@ -193,7 +196,7 @@ async def test_update_learning_parity(tmp_path, monkeypatch):
         ["update-learning", "1", "--status", "supported", "--evidence", "trades 4-9", "--confidence", "medium",
          "--provenance", "trade:9", "--provenance", "research_report", "--n", "31", "--days", "12"])
     assert res_mcp == res_cli == {"ok": True}
-    assert calls["cli"] == [("cli:update-learning", "ok")]
+    assert calls["cli"] == [("cli:update-learning", "done")]
 
 
 async def test_start_session_parity(tmp_path, monkeypatch):
@@ -203,4 +206,4 @@ async def test_start_session_parity(tmp_path, monkeypatch):
         tmp_path, monkeypatch, alerts, lambda: TOOLS["start_session"]("morning"),
         ["start-session", "--notes", "morning"])
     assert res_mcp == res_cli and res_mcp["alerts_acknowledged"]["count"] == 1
-    assert calls["cli"] == [("cli:start-session", "ok")]
+    assert calls["cli"] == [("cli:start-session", "done")]

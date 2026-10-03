@@ -1,6 +1,6 @@
 """Audit trail (#24): every decision and alert row says who acted (MCP tool, CLI command, guardian job), from which
-Claude Code session, on which code and in which mode; mutating tool / CLI calls leave a `call` row, failed ones too;
-decisions are append-only."""
+Claude Code session, on which code and in which mode; mutating tool / CLI calls are intents (#36: the intent row is the
+call's record), failed ones too; decisions are append-only."""
 
 import argparse
 import json
@@ -90,6 +90,10 @@ def test_signed_urls_never_reach_a_decision_row(tmp_path):
     assert snap["error"] == "x?signature=<redacted>" and snap["nested"][0]["fan_token"] == 2   # a sector, not a secret
 
 
+def _intents(j: Journal) -> list[dict]:
+    return j._rows("SELECT * FROM intents ORDER BY rowid")
+
+
 def _app(j, **kw):
     return SimpleNamespace(journal=j, settings=SimpleNamespace(mode=j.mode), ex=SimpleNamespace(experiment=None), **kw)
 
@@ -134,10 +138,18 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
     rows = _rows(jg, "decisions")
     assert all(r["actor"] and r["code_version"] == audit.CODE_VERSION and r["mode"] == "demo" for r in rows)
     by = {(r["actor"], r["action"]): r for r in rows}
-    assert set(by) == {("mcp:start_session", "call"), ("mcp:log_decision", "watch"), ("mcp:add_learning", "call"),
-                       ("cli:log", "skip"), ("cli:learn", "call"), ("guardian:positions", "trail")}
-    for key in [k for k in by if not k[0].startswith("guardian")]:
-        assert (by[key]["claude_session"], by[key]["session_id"]) == ("S", sid), key
+    assert set(by) == {("mcp:log_decision", "watch"), ("cli:log", "skip"), ("guardian:positions", "trail")}
+    writes = {(r["actor"], r["kind"]): r for r in _intents(jg)}
+    assert set(writes) == {("mcp:start_session", "start_session"), ("mcp:add_learning", "add_learning"),
+                           ("cli:learn", "add_learning")}
+    assert all(w["status"] == "done" and w["code_version"] == audit.CODE_VERSION and w["mode"] == "demo"
+               for w in writes.values())
+    started = writes[("mcp:start_session", "start_session")]   # received before its session existed
+    assert (started["claude_session"], started["session_id"], json.loads(started["result"])["session_id"]) == (
+        "S", None, sid)
+    for key, r in [*((k, by[k]) for k in by if not k[0].startswith("guardian")),
+                   *((k, writes[k]) for k in writes if k[0] != "mcp:start_session")]:
+        assert (r["claude_session"], r["session_id"]) == ("S", sid), key
     g = by[("guardian:positions", "trail")]
     assert (g["claude_session"], g["session_id"], g["trade_id"]) == (None, None, 3)
     (al,) = _rows(jg, "alerts")
@@ -145,8 +157,8 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
     (s,) = _rows(jg, "sessions")
     assert (s["id"], s["actor"], s["claude_session"], s["code_version"]) == (
         sid, "mcp:start_session", "S", audit.CODE_VERSION)
-    call = json.loads(by[("cli:learn", "call")]["snapshot"])
-    assert call["outcome"] == "ok" and call["args"]["statement"] == "s" and "cmd" not in call["args"]
+    learn = json.loads(writes[("cli:learn", "add_learning")]["args"])   # the body's arguments, as from MCP
+    assert learn["statement"] == "s" and learn["provenance"] == ["trade:2"] and "cmd" not in learn
 
 
 async def test_a_failed_tool_call_is_logged(tmp_path, monkeypatch):
@@ -160,13 +172,13 @@ async def test_a_failed_tool_call_is_logged(tmp_path, monkeypatch):
     monkeypatch.setattr(cmd_trade, "get_app", lambda: _app(j, trader=SimpleNamespace(move_stop=boom)))
     with pytest.raises(ToolError, match="RuntimeError: exchange down"):
         await TOOLS["move_stop"]("QNT", 1.2, "trail")
-    plan_call, stop_call = j.decisions(calls=True)[::-1]
-    assert (plan_call["action"], plan_call["actor"], plan_call["symbol"]) == ("call", "mcp:update_plan", "QNT/USDT:USDT")
-    assert json.loads(plan_call["snapshot"])["outcome"] == "error" and "no open journal trade" in plan_call["reasoning"]
-    snap = json.loads(stop_call["snapshot"])
-    assert snap["outcome"] == "error" and snap["error"] == "RuntimeError: exchange down"
-    assert snap["args"] == {"symbol": "QNT", "new_stop": 1.2, "reason": "trail"}
-    assert j.decisions() == []   # call rows stay out of the recent-decisions view
+    plan_call, stop_call = _intents(j)
+    assert (plan_call["kind"], plan_call["actor"], plan_call["symbol"]) == ("update_plan", "mcp:update_plan",
+                                                                            "QNT/USDT:USDT")
+    assert plan_call["status"] == "refused" and "no open journal trade" in plan_call["error"]   # nothing was sent
+    assert stop_call["status"] == "failed" and stop_call["error"] == "RuntimeError: exchange down"
+    assert json.loads(stop_call["args"]) == {"symbol": "QNT", "new_stop": 1.2, "reason": "trail"}
+    assert j.decisions(calls=True) == []   # the intent row is the call's record
 
 
 async def test_refused_and_read_tool_calls(tmp_path, monkeypatch):
@@ -181,10 +193,9 @@ async def test_refused_and_read_tool_calls(tmp_path, monkeypatch):
     monkeypatch.setattr(cmd_trade, "get_app", lambda: _app(j, trader=tr))
     await TOOLS["move_stop"]("QNT", 1.2, "see https://x?timestamp=1&signature=abc")
     await TOOLS["positions"]()   # a read: no row
-    (row,) = j.decisions(calls=True)
-    snap = json.loads(row["snapshot"])
-    assert snap["outcome"] == "refused" and "no open position" in row["reasoning"]
-    assert snap["args"]["reason"] == "see https://x?timestamp=<redacted>&signature=<redacted>"
+    (row,) = _intents(j)
+    assert row["status"] == "refused" and "no open position" in json.loads(row["result"])["error"]
+    assert json.loads(row["args"])["reason"] == "see https://x?timestamp=<redacted>&signature=<redacted>"
 
 
 async def test_the_writes_are_the_logged_tools():

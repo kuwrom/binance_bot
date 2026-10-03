@@ -16,7 +16,7 @@ next to what the fake assumes. Cases: probe_trades.py (a probe position), probe_
 - cleanup in `finally`: countdown off, the probe's regular orders cancelled, the position closed through Trader.close
   (the desk's close path), the probe's conditional orders cancelled, the symbol re-read; anything left alerts urgently
 - one `probe_result` decision row per probe: every call with its raw answer or error code, what was seen, the fake's
-  assumption and whether it held. A refusal sends and journals nothing (the CLI's own call row records it)
+  assumption and whether it held. A refusal sends and journals nothing (the CLI call's intent row records it)
 Not probed, as they can't be forced: the 503 body format (#5) and INSURANCE_CLEAR timing (#14)."""
 
 from __future__ import annotations

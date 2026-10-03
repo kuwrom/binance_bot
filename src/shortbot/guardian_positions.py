@@ -1,6 +1,10 @@
 """Guardian position jobs. Protective lane: fills (5 s), the stop/plan pass (60 s) and entry sends of unknown outcome
 (60 s), which touch only the trade client and the journal. The watch lane (alert-only checks on open shorts) lives in
-guardian_watch.py. Alert thresholds live here."""
+guardian_watch.py. Alert thresholds live here.
+
+A stop restore and a forced close are intents (#36 step 2, gateway.py), actor guardian:<job>: the pass decides, the
+handlers below run it (with the guardian as their context). The reconcile job also ends the intents of a process that
+died mid-run (intents.sweep)."""
 
 from __future__ import annotations
 
@@ -11,9 +15,11 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_gates, entry_intents, errors, reconcile, stops, targets_sync
+from . import entry_gates, entry_intents, errors, intents, reconcile, stops, targets_sync
 from .exchange import to_raw
+from .gateway import handler
 from .guardian_loop import guarded, send_safe
+from .intents import Intent
 from .killswitch import ACTIVE, HALTED, REDUCING
 from .killswitch_ops import cancel_resting
 from .risk_budget import track_day_peak
@@ -214,9 +220,8 @@ class PositionChecks:
 
     async def _restore_stop(self, sym: str) -> bool:
         """True when a stop rests now (restored, or one was there) or the position is gone; False when it failed."""
-        tr = self.app.trader
         try:
-            res = await tr.ensure_stop(sym, FALLBACK_STOP_PCT)
+            res = await self.gw.submit(Intent("restore_stop", {"symbol": sym, "fallback_pct": FALLBACK_STOP_PCT}, sym))
             self.stop_fails.pop(sym, None)
             if res and res.get("action") == "bridges_swept":   # a dead stop swap's leftovers (stops.py)
                 await self.n.send("bridge_swept", f"leftover stop-swap bridge(s) cancelled: {res}", sym, cooldown_s=0)
@@ -229,15 +234,11 @@ class PositionChecks:
         except Exception as e:  # noqa: BLE001
             n = self.stop_fails[sym] = self.stop_fails.get(sym, 0) + 1
             if n >= MAX_STOP_RESTORE_FAILS:
-                async with tr.symbol_lock(sym, "guardian: forced close (no stop)"):
-                    pos = await tr.position(sym)   # still due? another process may have protected or closed it
-                    covered = bool(pos) and bool(await tr.stop_orders(sym, close_position_only=True))
-                    if pos and not covered and (await tr.close_market(sym, float(pos["contracts"]))).get("rejected"):
-                        pos = None   # -2022: flat before the close landed (closed elsewhere first)
+                r = await self.gw.submit(Intent("force_close", {"symbol": sym, "failures": n}, sym))
                 self.stop_fails.pop(sym, None)
                 await self.n.send("forced_close", f"Could not restore a stop {n}x ({e}); " + (
-                    "a stop is in place now (set elsewhere): NOT closed." if covered else "position CLOSED." if pos
-                    else "the position was already gone (closed elsewhere): nothing to close."), sym,
+                    "a stop is in place now (set elsewhere): NOT closed." if r["covered"] else "position CLOSED."
+                    if r["closed"] else "the position was already gone (closed elsewhere): nothing to close."), sym,
                                   urgent=True, cooldown_s=0)
                 return True
             await self.n.send("stop_restore_failed", f"attempt {n}/{MAX_STOP_RESTORE_FAILS}: {e}", sym,
@@ -337,6 +338,34 @@ class PositionChecks:
                             urgent=True, cooldown_s=1800)
 
     async def reconcile_entries(self) -> None:
-        """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts)."""
+        """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts), and
+        intents whose process died mid-run: ended, and alerted with the orders they sent (the reconcilers resolve
+        those orders; a market close or add of unknown outcome is the human's until step 3's resolver)."""
         if self.ex.trade:
             await entry_intents.reconcile(self.entries)
+        for r in intents.sweep(self.j):
+            sent = (f"orders it sent: {', '.join(r['orders'])}. Re-read the position and orders" if r["orders"]
+                    else "it sent nothing")
+            await send_safe(self.n, "intent_interrupted", f"intent {r['id']} ({r['kind']}, {r['actor']}) "
+                            f"{r['status']}: its process died mid-run; {sent}", r["symbol"], urgent=bool(r["orders"]),
+                            cooldown_s=0)
+
+
+# ------------------------------------------------------------ intent handlers (gateway.py): ctx = the guardian
+@handler("restore_stop")
+async def restore_stop(g, symbol: str, fallback_pct: float) -> dict | None:
+    """RestoreStop (GATEWAY.md §4.2): Trader.ensure_stop, which re-reads everything under the symbol lock."""
+    return await g.app.trader.ensure_stop(symbol, fallback_pct)
+
+
+@handler("force_close")
+async def force_close(g, symbol: str, failures: int) -> dict:
+    """ForceClose: a short whose stop could not be restored `failures` times is closed at market, unless a stop rests
+    by now or it is gone (re-read under the lock: another process may have protected or closed it)."""
+    tr = g.app.trader
+    async with tr.symbol_lock(symbol, "guardian: forced close (no stop)"):
+        pos = await tr.position(symbol)
+        covered = bool(pos) and bool(await tr.stop_orders(symbol, close_position_only=True))
+        if pos and not covered and (await tr.close_market(symbol, float(pos["contracts"]))).get("rejected"):
+            pos = None   # -2022: flat before the close landed (closed elsewhere first)
+    return {"ok": True, "symbol": symbol, "covered": covered, "closed": bool(pos) and not covered, "gone": not pos}

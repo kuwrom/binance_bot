@@ -1,7 +1,8 @@
 # Order gateway (task #36, design, 2026-10-02)
 One process owns every exchange write. The MCP servers, the CLI and the guardian submit **intents** to it. It runs them one at a time per symbol, journals each one before acting, resolves unknown outcomes by client id, and answers with a typed result. It replaces the per-symbol flock (#21) as the serialiser, works when the desk runs on AWS Tokyo, gives `Trader` a public interface, and makes one command registry the source of both the MCP tools and the CLI.
 
-Status: step 0 built (public `Trader`, §1.2); the rest is design. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
+Status: steps 0 (public `Trader`, §1.2), 1 (command registry) and 2a (in-process intents, §8) built; the rest is
+design. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
 
 ## Recommendation in one screen
 - **Where:** its own small process, `shortbot-gateway`, on the desk host (the host with the journal and the guardian). The guardian becomes its first client. Not inside the guardian, and not a library with a leader lock (§2).
@@ -237,6 +238,12 @@ B is the same pattern, with the guardian as one more surface. A and B share step
   - the CLI, one per invocation, or `--intent-id` to ask about or retry a known one;
   - the guardian, deterministically where retries should collapse: `g:<job>:<symbol>:<position fingerprint>`.
 - **Orders inside an intent** keep their #9 client ids, linked in `intent_orders(intent_id, client_id, kind, symbol, sent_at, outcome)`. Any unknown order can be traced back to its intent.
+- **Built in step 2a** (`intents.py`, `gateway.py`):
+  - one `Intent` dataclass. A command's kind is its MCP name (else its body's), and its args schema is the body's signature in the registry, so no per-kind class can drift from it;
+  - the `intents` row replaces the write's #24 `call` decision row: it is written before the call runs, holds the request, actor and Claude session, then the status and today's result. Request columns are frozen and a final status is final (triggers), like decisions. Decision and alert rows written while an intent runs carry `intent_id`;
+  - `intent_orders(client_id, intent_id, kind, symbol, at)` is written by the primitives just before each send. `entries`, `target_orders` and the trade's open id keep their own state and are reached through the client id; nothing is copied. `outcome` comes with step 3's resolver;
+  - statuses keep today's outcomes until step 3 types them: done, refused (`ok: false`), unknown, failed (raised), busy (nothing sent: runs again under its id), interrupted, expired;
+  - guardian ids are one ULID per attempt for now: in-process there is no retry to collapse, and a fixed id would stop the next pass from retrying a failed restore. The fingerprint ids come with step 6's transport.
 
 ### 4.4 Ordering
 Per-symbol FIFO within a class (§3.3), with one running sequence per symbol. The journal records each symbol's sequences in execution order. There is no cross-symbol atomicity (there is none today either); groups roll back by compensation, as in `_rollback`.
@@ -256,6 +263,7 @@ Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe rece
 
 ## 5. Crash recovery and reconciliation
 - **The intent journal:** an intent goes `received` → `running` → a final status. Every transition is compare-and-set, and no write transaction spans an exchange call (symlock's rule stays).
+- **In-process (step 2a):** there is no gateway start. The guardian's `entry_reconcile` job ends the open intents of a process that is gone (pid check, one host per D2) or that have been open over an hour (pid reuse): received → expired, running → interrupted, alerted as `intent_interrupted` with their client ids. The existing reconcilers resolve the orders, as before.
 - **At start, before listening:**
   1. `received` rows from a previous run become `expired`. An intent never runs late on an old decision; the guardian re-issues its intents on its next pass.
   2. `running` rows become `interrupted`, and their `intent_orders` client ids are collected.
@@ -325,7 +333,8 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 |---|---|---|---|---|
 | 0 | **Public `Trader`** (done). Public names for the 8 privates used elsewhere (`place_close_stop`, `close_market`, `open_market`, `prepare`, `raw_positions`, `verified_position`, `find_stop`, `set_alert`); 5 more primitives (`cancel`, `place_limit`, `edit_limit`, `place_reduce_stop`, `place_reduce_limit`) carry the raw `tr.t` writes of 8 modules; callers moved, wire and results unchanged. Probes stay raw (§1.2) | as today | existing suite; `test_trader_public.py`: no `Trader._` name outside trading*, no raw write outside the primitives and probes | ~300 |
 | 1 | **Command registry** (done). One declaration per command in `commands.py`: MCP name, CLI name, args typed by the body's signature, read / write, weight class, stale-exempt, CLI hint. It generates the MCP tool and the argparse subcommand. The six tables, `stale_guard.CLI` and `cli.tool_body` are gone. Pairs whose bodies differed now share the MCP body, and the weight classes agree (`set-params`, `flatten` and `kill-switch` are protective) | as today | `test_commands.py`; `test_cli_fallback.py` (every write has a CLI form the parser accepts); the `commands` block in `surface.json`; `tools/list` unchanged | ~400 |
-| 2 | **Intents in-process:** intent dataclasses, `Gateway` protocol, `LocalGateway` running today's flows; MCP, CLI, guardian, killswitch_ops and ladder_apply call `submit()`; `intents` + `intent_orders` tables (write-ahead, idempotent ids) | as today | resubmitting an id runs once; each intent kind maps to today's result dict | ~500 |
+| 2a | **Intents in-process** (done). `Intent`, the `Gateway` protocol, `LocalGateway` running today's code; every MCP and CLI write submits one intent (killswitch_ops and ladder_apply run inside their command's); the guardian's `restore_stop`, `force_close`, `cap_stop` and `plan_step` are intents of its jobs; `intents` + `intent_orders` tables; the interrupted-intent sweep | as today | `test_intents.py`: journal first, a resubmitted id runs once, in progress, busy re-runs, status mapping, append-only rows, sweep; `test_intent_paths.py`: one intent per write on both surfaces, linked orders and decisions, a crash mid-send resolved as before, guardian actors | ~600 + tests |
+| 2b | **The guardian's other writes as intents:** the fill poll (protect a fill, OCO sibling cancels, expiry and cancel rules, `_forgotten`, tranche joins), the HALTED and governor/pause sweeps, `entry_intents.reconcile`'s resolutions, `targets_sync.settle_flat`, and the session watchdog's stale-heartbeat halt (it runs from reads). Each per-row decision split from its send. After it, step 6 is a transport change only | as today | each write in the fill poll and sweeps is an intent of its job | ~300 |
 | 3 | **Typed results + generic resolver** for market sends of unknown outcome (gap 3), on #37's types | as today | fakes: a close/add that times out is resolved by client id; nothing is re-sent | ~250 |
 | 4 | **Gateway process + socket client**, behind `SHORTBOT_GATEWAY=off\|session` (default off). With `session`, MCP and CLI go through the gateway; the guardian still writes directly. Break-glass for risk-reducing actions; `gateway_heartbeat`; global admission (gap 4); self-restart on a stale closure; launchd plist + compose service in DEPLOY.md | the gateway also takes it per sequence, so mixed writers stay serialised | a real socket in tests: deadline/expired, busy, disconnect mid-run, receipt-unknown → `status`, mode mismatch, break-glass only for the allowed set, peer-uid refusal | ~600 |
 | 5 | **Sessions on by default** after a demo soak (D6). The stale guard for writes becomes a protocol check (D5) | belt and braces | the stale-guard tests are rewritten for intents | ~100 |

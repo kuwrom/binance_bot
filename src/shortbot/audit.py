@@ -9,10 +9,13 @@ passes it:
   stamps the code it runs, not what was merged on disk since; the same value its kv proc:<pid> row carries.
 - the model is known only to the SessionStart hook (stdin `model`): `shortbot hook-session` records it (audit_view).
 
-Two kinds of rows come from here. `refusals(op)` wraps each order path: a refusal (ok False, not a no-op) or an
-exception that journalled no decision of its own gets a `rejected` / `failed` row, an identical one (same actor, op,
-symbol, reason with numbers masked) at most once per DEDUPE_S with the count of those suppressed. `called` /
-`log_call` write the `call` row of a tool or CLI call that changes state: args (secrets redacted), outcome, error."""
+- intent_id: the intent (#36, intents.py) running in this task, set by the gateway (`within`), so every row an
+  intent's code writes links back to it. The intent row itself is the record of a write's call (it replaced the
+  `call` decision row): request, actor and result.
+
+`refusals(op)` wraps each order path: a refusal (ok False, not a no-op) or an exception that journalled no decision
+of its own gets a `rejected` / `failed` row, an identical one (same actor, op, symbol, reason with numbers masked) at
+most once per DEDUPE_S with the count of those suppressed."""
 
 from __future__ import annotations
 
@@ -46,6 +49,7 @@ _REASON_KEYS = ("error", "vetoed", "rejected_by_budget", "rejected_by_risk", "pl
 _proc: dict[str, Any] = {"kind": None, "claude_session": os.getenv("CLAUDE_CODE_SESSION_ID") or None}
 _actor: ContextVar[str | None] = ContextVar("audit_actor", default=None)
 _scope: ContextVar[list[int] | None] = ContextVar("audit_scope", default=None)
+_intent: ContextVar[str | None] = ContextVar("audit_intent", default=None)
 _seen: dict[tuple, list[float]] = {}   # dedupe: key -> [first logged at, suppressed since]
 _now = time.monotonic
 
@@ -69,8 +73,23 @@ def actor() -> str:
     return _actor.get() or _proc["kind"] or f"py:{Path(sys.argv[0] or 'python').name}"
 
 
+@contextmanager
+def within(intent_id: str):
+    """The rows written inside belong to this intent (gateway.py)."""
+    tok = _intent.set(intent_id)
+    try:
+        yield
+    finally:
+        _intent.reset(tok)
+
+
+def intent_id() -> str | None:
+    return _intent.get()
+
+
 def stamp() -> dict[str, Any]:
-    return {"actor": actor(), "claude_session": _proc["claude_session"], "code_version": CODE_VERSION}
+    return {"actor": actor(), "claude_session": _proc["claude_session"], "code_version": CODE_VERSION,
+            "intent_id": _intent.get()}
 
 
 def count_decision() -> None:
@@ -199,46 +218,3 @@ def refusals(op: str) -> Callable:
             return res
         return inner
     return wrap
-
-
-# ------------------------------------------------------------ tool / CLI calls
-def outcome(res: Any) -> str:
-    if isinstance(res, dict) and res.get("unknown"):
-        return "unknown"
-    return "refused" if isinstance(res, dict) and res.get("ok") is False else "ok"
-
-
-def log_call(j: Any, name: str, args: dict, result: Any = None, error: BaseException | None = None,
-             ms: int | None = None) -> None:
-    """The `call` row of one tool / CLI call that changes state. Never raises."""
-    try:
-        if j is None or not hasattr(j, "log_decision"):
-            return
-        out = ("cancelled" if not isinstance(error, Exception) else "error") if error else outcome(result)
-        detail = _err(error) if error else (_why(result) if out != "ok" else "")
-        snap = {"name": name, "args": clean(args), "outcome": out, "ms": ms,
-                **({"error": detail} if error else {"result": _compact(result)})}
-        j.log_decision("call", f"{name} {out}" + (f": {detail[:300]}" if detail else ""), _symbol(args.get("symbol")),
-                       snapshot=snap, trade_id=_trade_id(result))
-    except Exception:  # noqa: BLE001
-        log.exception("could not journal the %s call", name)
-
-
-async def called(journal: Callable[[], Any], name: str, args: dict, coro: Awaitable[Any]) -> Any:
-    """Await `coro`, then write its call row. `journal` is resolved afterwards (the call may build the app)."""
-    t0 = time.monotonic()
-    try:
-        res = await coro
-    except BaseException as e:
-        log_call(_safe(journal), name, args, error=e, ms=round((time.monotonic() - t0) * 1000))
-        raise
-    log_call(_safe(journal), name, args, result=res, ms=round((time.monotonic() - t0) * 1000))
-    return res
-
-
-def _safe(journal: Callable[[], Any]) -> Any:
-    try:
-        return journal()
-    except Exception:  # noqa: BLE001
-        log.exception("no journal for the call row")
-        return None

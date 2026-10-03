@@ -6,7 +6,7 @@ the order path included, so mcp_server.tool() asks `verdict()` before every call
 - the code this process imported (procs.code_version) vs the code in its own package dir now, hashed by
   procs.disk_codes as the #58 audit does: a worktree server compares with its worktree, a dir that is gone is stale;
 - on stale code a write is refused before anything runs (`refuse`: ok false, stale_code true, its CLI form to run
-  instead, from its commands.py declaration; its call row says refused). Reads and the stale-exempt writes
+  instead, from its commands.py declaration; its intent row says refused). Reads and the stale-exempt writes
   (halt_trading: a halt only removes risk) run with a `stale_code` warning (`annotate`); a crash while stale says so
   (`failed`);
 - hashing takes ~7 ms (168 files, 1.4 MB), so it runs in a thread and is cached TTL_S. A failed hash is not cached and

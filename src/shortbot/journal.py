@@ -9,7 +9,8 @@ closed results, stats) see only the journal's own mode unless asked for all_mode
 period marks, research overrides) goes through `mode_key`.
 
 Audit trail (#24, audit.py): every decision, alert and session row is stamped with the actor, the Claude Code session,
-the code version and the mode (+ the journal session and trade id on decisions). Decisions are append-only."""
+the code version and the mode (+ the journal session and trade id on decisions, the running intent on decisions and
+alerts). Decisions are append-only; so are intents (intents.py, the record of every write)."""
 
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import audit, fill_report
+from . import audit, fill_report, intents
 from .journal_research import RESEARCH_SCHEMA, ResearchStore
 from .redact import redact
 from .sessions import session_bucket
@@ -62,12 +63,12 @@ TRADE_COLUMNS: dict[str, str] = {
 # The audit stamp (#24); rows written by a process that predates it keep NULLs.
 AUDIT_COLUMNS: dict[str, dict[str, str]] = {
     "decisions": {"actor": "TEXT", "claude_session": "TEXT", "code_version": "TEXT", "trade_id": "INTEGER",
-                  "mode": "TEXT"},
+                  "mode": "TEXT", "intent_id": "TEXT"},
     "alerts": {"actor": "TEXT", "session_id": "INTEGER", "claude_session": "TEXT", "code_version": "TEXT",
-               "mode": "TEXT"},
+               "mode": "TEXT", "intent_id": "TEXT"},
     "sessions": {"actor": "TEXT", "claude_session": "TEXT", "code_version": "TEXT"},
 }
-AUDIT_ACTIONS = ("call", "claude_session")   # audit-only rows: `shortbot audit` lists them, decisions() doesn't
+AUDIT_ACTIONS = ("call", "claude_session")   # audit-only rows (call: a write, before intents): decisions() skips them
 JSON_FIELDS = ("plan", "entry_features", "targets_hit", "post_exit", "fill_refs")
 MODES = ("demo", "live")
 
@@ -120,7 +121,7 @@ class Journal(ResearchStore):
         self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=15)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")  # guardian + MCP server share this file
-        self.db.executescript(SCHEMA + RESEARCH_SCHEMA)
+        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + intents.SCHEMA)
         self._migrate()
 
     def _migrate(self) -> None:
@@ -161,7 +162,7 @@ class Journal(ResearchStore):
             (now_iso(), mode, notes, st["actor"], st["claude_session"], st["code_version"]))
         return self.session_id
 
-    def _session(self, claude_session: str | None) -> int | None:
+    def session_of(self, claude_session: str | None) -> int | None:
         """This process's session, else the latest one its Claude Code session started (a CLI call from its Bash)."""
         if self.session_id is None and claude_session:
             row = self.db.execute("SELECT id FROM sessions WHERE claude_session=? ORDER BY id DESC LIMIT 1",
@@ -178,10 +179,11 @@ class Journal(ResearchStore):
             trade_id = snapshot["trade_id"]
         return self._insert(
             "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot, actor, claude_session,"
-            " code_version, trade_id, mode) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (now_iso(), session_id if session_id is not None else self._session(st["claude_session"]), symbol, action,
-             redact(reasoning), json.dumps(audit.clean(snapshot, trim=False), default=str) if snapshot else None,
-             st["actor"], st["claude_session"], st["code_version"], trade_id, self.mode))
+            " code_version, trade_id, mode, intent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), session_id if session_id is not None else self.session_of(st["claude_session"]), symbol,
+             action, redact(reasoning),
+             json.dumps(audit.clean(snapshot, trim=False), default=str) if snapshot else None,
+             st["actor"], st["claude_session"], st["code_version"], trade_id, self.mode, st["intent_id"]))
 
     def decisions(self, symbol: str | None = None, limit: int = 50, calls: bool = False) -> list[dict[str, Any]]:
         """Newest first. calls=True also returns the audit-only rows (AUDIT_ACTIONS: tool/CLI calls, hook rows)."""
@@ -309,10 +311,11 @@ class Journal(ResearchStore):
     def log_alert(self, kind: str, message: str, symbol: str | None = None) -> int:
         st = audit.stamp()
         return self._insert(
-            "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode)"
-            " VALUES (?,?,?,?,?,?,?,?,?)", (now_iso(), symbol, kind, redact(message),   # no signed URL or token in a row
-                                           st["actor"], self._session(st["claude_session"]), st["claude_session"],
-                                           st["code_version"], self.mode))
+            "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode,"
+            " intent_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), symbol, kind, redact(message),   # no signed URL or token in a row
+             st["actor"], self.session_of(st["claude_session"]), st["claude_session"], st["code_version"], self.mode,
+             st["intent_id"]))
 
     def alerts(self, limit: int = 30, since: str | None = None) -> list[dict[str, Any]]:
         if since:

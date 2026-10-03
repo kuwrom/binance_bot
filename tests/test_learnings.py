@@ -88,7 +88,8 @@ async def test_cli_learn_takes_the_same_fields(monkeypatch):
     from shortbot import cli, cmd_research
     from shortbot.commands import build_parser
     j = Journal(":memory:")
-    monkeypatch.setattr(cmd_research, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
+    for mod in (cmd_research, cli):   # the body's journal and the one its intent is journalled in
+        monkeypatch.setattr(mod, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
 
     async def no_close():
         return None

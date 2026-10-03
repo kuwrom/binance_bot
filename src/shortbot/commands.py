@@ -5,8 +5,9 @@ A command is an async body plus:
 - its MCP tool name (the body's name; mcp=False: CLI only) and its subcommand (cli=None: MCP only);
 - args: the CLI form of each argument (Arg). Types, defaults and required-ness come from the body's signature, which is
   also the MCP tool's (minus cli_only args), so a type lives in one place;
-- write: it changes state, so it leaves a #24 `call` row and is refused on stale code (#68) unless stale_exempt. A
-  read changes nothing at risk, or journals its own row (log_decision);
+- write: it changes state, so both surfaces submit it as an intent (gateway.py, #36: journalled on receipt, its row
+  the #24 record of the call) and a stale MCP server refuses it (#68) unless stale_exempt. A read changes nothing at
+  risk, or journals its own row (log_decision);
 - weight: its #70 class, weight.PROTECTIVE or weight.RESEARCH (None: a desk read);
 - help: the CLI one-liner (the body's docstring is the MCP description); hint: the CLI form a stale MCP server names for
   a write whose subcommand has another shape (cli_form() generates the rest);
@@ -27,6 +28,9 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from . import intents
+from .intents import Intent
+
 MODULES = ("cmd_trade", "cmd_research", "cmd_book", "cmd_desk", "cmd_kill", "cli_cmds")
 _EMPTY = inspect.Parameter.empty
 _UNSET: Any = object()
@@ -40,7 +44,7 @@ class CommandError(Exception):
 class Arg:
     """The CLI form of one argument. `name` is the body's keyword (and the MCP parameter unless cli_only); `flag` is the
     option ("--stop"), None for a positional. `dest` keeps the CLI's own spelling of a positional (`price` for
-    new_stop); a flag's comes from the flag (--stop: stop). The CLI's call rows record that parsed namespace. The rest
+    new_stop); a flag's comes from the flag (--stop: stop). A write's intent records the body's names. The rest
     is argparse's, derived from the body where left out: type (float / int), default, required (a flag whose parameter
     has no default), store_true (a bool defaulting to False). `convert` turns the parsed value into the body's (JSON
     text, KEY=VALUE pairs)."""
@@ -78,6 +82,18 @@ class Command:
     hint: str | None = None
     raw: bool = False
     sig: inspect.Signature | None = field(default=None, compare=False, repr=False)
+
+    @property
+    def kind(self) -> str:
+        """Its intent kind (gateway.py): the MCP name, else the body's name (kill_switch, macro_add...)."""
+        return self.name or self.body.__name__
+
+    def intent(self, kwargs: dict[str, Any]) -> Intent:
+        """This write as an intent: the body's keyword arguments with its defaults applied, the same from both
+        surfaces (CLI-only arguments included)."""
+        b = self.sig.bind(**kwargs)
+        b.apply_defaults()
+        return Intent(self.kind, dict(b.arguments), intents.symbol_of(b.arguments))
 
     def mcp_signature(self) -> inspect.Signature:
         """The MCP tool's signature: the body's, annotations evaluated, without the CLI-only parameters."""
@@ -151,6 +167,7 @@ def _core(ann: Any) -> Any:
 REGISTRY: list[Command] = []
 _BY_NAME: dict[str, Command] = {}
 _BY_CLI: dict[str, Command] = {}
+_BY_KIND: dict[str, Command] = {}   # writes only
 
 
 def command(*, cli: str | None = None, mcp: bool = True, args: tuple[Arg, ...] = (), write: bool = False,
@@ -167,6 +184,8 @@ def command(*, cli: str | None = None, mcp: bool = True, args: tuple[Arg, ...] =
             _BY_NAME[name] = cmd
         if cli:
             _BY_CLI[cli] = cmd
+        if write:
+            _BY_KIND[cmd.kind] = cmd
         return body
     return register
 
@@ -176,6 +195,8 @@ def _check(cmd: Command) -> None:
     label = cmd.name or cmd.cli
     if not (cmd.name or cmd.cli) or (cmd.name in _BY_NAME) or (cmd.cli in _BY_CLI):
         raise ValueError(f"{label}: needs a unique MCP name or subcommand")
+    if cmd.write and cmd.kind in _BY_KIND:
+        raise ValueError(f"{label}: intent kind {cmd.kind} is taken")
     if cmd.raw:
         if cmd.name or not cmd.cli:
             raise ValueError(f"{label}: a raw command is CLI only")
@@ -207,6 +228,11 @@ def by_cli(name: str) -> Command:
 
 def by_name(name: str) -> Command:
     return _BY_NAME[name]
+
+
+def by_kind(kind: str) -> Command | None:
+    """The write command whose intents have this kind (gateway.py)."""
+    return _BY_KIND.get(kind)
 
 
 def add_arguments(p: argparse.ArgumentParser, cmd: Command | tuple[Arg, ...]) -> None:

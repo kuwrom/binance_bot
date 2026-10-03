@@ -22,6 +22,7 @@ from pathlib import Path
 from . import audit, procs
 from .app import close_app, get_app
 from .entries import EntryDesk
+from .gateway import LocalGateway
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
 from .guardian_margin import MarginChecks
@@ -100,6 +101,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self.kill_seen: dict | None = None                # last kill-switch state seen (loosening tripwire)
         self._last_resync = 0.0
         self.entries = EntryDesk(self.app.trader)
+        self.gw = LocalGateway(lambda: self.j, ctx=self)   # its protective actions are intents (#36 step 2)
         self.liq_store = LiquidationStore(self.app.settings.db_path)
         self.social_store = SocialStore(self.app.settings.db_path)
         self._social_task: asyncio.Task | None = None

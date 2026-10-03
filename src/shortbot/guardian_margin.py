@@ -8,7 +8,8 @@
   USDT/USDC, isolated margin >= 2x maintenance, and its resting stop inside liquidation (Trader.cap_stop tightens it).
 - Monitor lane: Multi-Assets mode (GET /fapi/v1/multiAssetsMargin, weight 30) is an urgent alert.
 
-All of it alerts only, except cap_stop: a stop past liquidation never fires, so a stop at the cap is strictly better.
+All of it alerts only, except cap_stop (an intent, #36: gateway.py): a stop past liquidation never fires, so a stop at
+the cap is strictly better.
 A thin margin blocks nothing: isolated margin bounds the loss to this position, a second entry on the symbol is
 refused anyway ("already short"), and adds already check liquidation against the stop (risk.check_add)."""
 
@@ -20,7 +21,9 @@ import time
 
 from . import margin
 from .exchange import to_raw
+from .gateway import handler
 from .guardian_loop import send_safe
+from .intents import Intent
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.guardian")
@@ -114,7 +117,7 @@ class MarginChecks:
                                 urgent=True, cooldown_s=MARGIN_ALERT_COOLDOWN_S)
 
     async def _cap_stop(self, sym: str, h: dict) -> None:
-        r = await self.app.trader.cap_stop(sym)
+        r = await self.gw.submit(Intent("cap_stop", {"symbol": sym}, sym))
         if not r:
             return
         did = {"tightened": f"tightened to {r['to']:g}", "closed": f"price {r['mark']:g} already past {r['to']:g}: "
@@ -137,3 +140,9 @@ class MarginChecks:
                               "isolated margin. Isolated margin is refused under it (-4168), so every entry fails, and "
                               "non-USDT collateral backs positions. Switch it off in Binance.", urgent=True,
                               cooldown_s=MULTI_ASSETS_COOLDOWN_S)
+
+
+@handler("cap_stop")
+async def cap_stop(g, symbol: str) -> dict | None:
+    """CapStop (GATEWAY.md §4.2, the margin pass's intent): Trader.cap_stop, decided again under the symbol lock."""
+    return await g.app.trader.cap_stop(symbol)

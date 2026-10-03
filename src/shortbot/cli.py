@@ -1,8 +1,8 @@
 """Terminal access: `shortbot scan`, `shortbot snapshot QNT`, `shortbot positions`, `shortbot brief`...
 Every subcommand is a commands.py declaration, the same one its MCP tool comes from (one body for both surfaces):
 the parser is generated from the registry and each command runs its declared body.
-Audit (#24): each command runs as actor cli:<cmd>, under its #70 weight class; a write leaves a `call` decision row
-(audit.py). Every state-changing MCP tool has a CLI form: a stale MCP server's refusal names it (#68)."""
+Audit (#24): each command runs as actor cli:<cmd>, under its #70 weight class; a write is an intent (gateway.py, #36),
+journalled before it runs. Every state-changing MCP tool has a CLI form: a stale MCP server's refusal names it (#68)."""
 
 from __future__ import annotations
 
@@ -13,25 +13,26 @@ import json
 from . import audit, commands, weight
 from .app import close_app, get_app
 from .commands import build_parser
+from .gateway import LocalGateway
 from .redact import install_log_redaction
 
 
 async def _run(args: argparse.Namespace) -> object:
+    """The subcommand's declared body; a write goes through the gateway as an intent, journalled before it runs."""
     cmd = commands.by_cli(args.cmd)
-    try:
-        return await cmd.body(**cmd.cli_kwargs(args))
-    finally:
-        await close_app()
+    kwargs = cmd.cli_kwargs(args)
+    if not cmd.write:
+        return await cmd.body(**kwargs)
+    return await LocalGateway(lambda: get_app().journal).submit(cmd.intent(kwargs))
 
 
 async def _audited(args: argparse.Namespace) -> object:
     cmd = commands.by_cli(args.cmd)
     with audit.acting(f"cli:{args.cmd}"), weight.tagged(cmd.weight, wait_s=weight.ENTRY_WAIT_S):
-        if not cmd.write:
+        try:
             return await _run(args)
-        j = get_app().journal   # the singleton the body uses; close_app leaves its journal open
-        return await audit.called(lambda: j, args.cmd, {k: v for k, v in vars(args).items() if k != "cmd"},
-                                  _run(args))
+        finally:
+            await close_app()
 
 
 def main() -> None:

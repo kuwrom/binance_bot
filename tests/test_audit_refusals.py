@@ -8,7 +8,8 @@ import sys
 
 import pytest
 
-from shortbot import audit, audit_view, cli
+from shortbot import audit, audit_view, cli, intents
+from shortbot.intents import Intent
 from shortbot.journal import Journal
 from tests.fakes import SYM
 from tests.test_trading import open_default, trader
@@ -119,18 +120,21 @@ def test_audit_view_filters_and_names_the_model(tmp_path, monkeypatch):
     audit.set_process("hook", claude_session="S1")
     j.log_decision("claude_session", "startup: claude-opus-5", snapshot={"model": "claude-opus-5"})
     audit.set_process("mcp", claude_session="S1")
-    with audit.acting("mcp:open_short"):
-        audit.log_call(j, "open_short", {"symbol": "QNT"}, result={"ok": False, "vetoed": ["hostile"]}, ms=5)
+    with audit.acting("mcp:open_short"):   # a write refused before it ran (#36: its intent row is its record)
+        intents.receive(j, Intent("open_short", {"symbol": "QNT"}, "QNT/USDT:USDT"), {"ok": False, "vetoed": ["x"]})
     audit.set_process("guardian", claude=False)
     with audit.acting("guardian:positions"):
         j.log_decision("move_stop", "plan trail", "QNT/USDT:USDT")
     j.db.execute("INSERT INTO decisions (ts, action, reasoning) VALUES ('2020-01-01T00:00:00+00:00', 'hold', 'old')")
     out = audit_view.report(j, since="24h")
-    assert [r["actor"] for r in out["rows"]] == ["guardian:positions", "mcp:open_short", "hook"]
+    assert [r["actor"] for r in out["rows"] if r["action"] != "intent"] == ["guardian:positions", "hook"]
+    assert {r["actor"] for r in out["rows"]} == {"guardian:positions", "mcp:open_short", "hook"}   # one second apart
     assert out["by_actor"] == {"guardian:positions": 1, "mcp:open_short": 1, "hook": 1}
     assert out["claude_sessions"]["S1"]["model"] == "claude-opus-5" and out["unstamped_rows"] == 0
-    call = out["rows"][1]
-    assert call["outcome"] == "refused" and call["args"] == {"symbol": "QNT"}
+    (call,) = [r for r in out["rows"] if r["action"] == "intent"]
+    assert (call["action"], call["kind"], call["status"], call["args"]) == ("intent", "open_short", "refused",
+                                                                           {"symbol": "QNT"})
+    assert [r["kind"] for r in audit_view.report(j, action="intent")["rows"]] == ["open_short"]
     assert [r["actor"] for r in audit_view.report(j, actor="mcp")["rows"]] == ["mcp:open_short"]
     assert audit_view.report(j)["unstamped_rows"] == 1
     assert [r["action"] for r in audit_view.report(j, action="hold")["rows"]] == ["hold"]

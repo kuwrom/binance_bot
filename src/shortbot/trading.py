@@ -30,7 +30,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, equity_marks, errors, reconcile, targets
+from . import clientid, equity_marks, errors, intents, reconcile, targets
 from .exchange import Exchanges, to_raw, to_symbol
 from .journal import Journal
 from .risk import AccountState
@@ -273,6 +273,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         resolved by the id again. Raises the last error when the id was never found (it may still land)."""
         px = float(self.t.price_to_precision(symbol, stop_price))
         cid = clientid.new("stop", clientid.tag(symbol))
+        intents.link(self.j, cid, symbol)
         doubt = False
         for i in range(tries):
             try:
