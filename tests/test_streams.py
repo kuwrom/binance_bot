@@ -137,3 +137,16 @@ def test_groups_respect_the_stream_cap():
     gs = S.groups(syms)
     assert sum(map(len, gs)) == 2 + 183 * len(S.TFS) and all(len(g) <= S.MAX_STREAMS_PER_CONN for g in gs)
     assert gs[0][:2] == list(S.ALL_MARKET) and "c0usdt@kline_15m" in gs[0]
+
+
+def test_a_store_the_collector_has_not_created_tables_in_yet_is_a_miss(tmp_path):
+    """StreamStore creates the file, then its tables: a reader in between gets a miss, not 'no such table' (seen on
+    a fresh EC2 desk, where streams.db doesn't exist until the guardian's collector starts)."""
+    import sqlite3
+    db = tmp_path / "streams.db"
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA journal_mode=WAL")   # the file exists, no table yet
+    con.close()
+    assert R.fresh_symbols("kline_15m", 90, db, now_ms=T0) == []
+    assert R.latest("mark", db, now_ms=T0) == {}
+    assert R.candles("AAAUSDT", "15m", 3, db, now_ms=T0) is None
