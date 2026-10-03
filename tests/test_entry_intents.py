@@ -237,7 +237,7 @@ async def test_sweep_cancels_a_late_order_of_a_rejected_intent_unless_it_filled(
     d, t, fake = desk()
     fake.ack_lost = 1
     eid = (await d.propose_group([prop(1.04)]))["unknown"][0]["entry_id"]
-    assert d._settle(eid, "unknown", status="rejected")             # the engine queued it past the grace
+    assert await d._settle(eid, "unknown", status="rejected")             # the engine queued it past the grace
     (oid,) = open_limits(fake)
     if filled:
         fake.fill_limit(oid, qty=fake.limits[oid]["amount"] / 2)
@@ -253,7 +253,7 @@ async def test_a_fresh_rejected_send_still_explains_a_position_for_a_while():
     d, t, fake = desk()
     fake.ack_lost = 1
     eid = (await d.propose_group([prop(1.04)]))["unknown"][0]["entry_id"]
-    assert d._settle(eid, "unknown", status="rejected")
+    assert await d._settle(eid, "unknown", status="rejected")
     assert entry_intents.explained_symbols(d) == {SYM}             # it may still have run late
     age(d, eid, entry_intents.LATE_S + 1)
     assert entry_intents.explained_symbols(d) == set()

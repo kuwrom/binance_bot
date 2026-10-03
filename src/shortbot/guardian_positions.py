@@ -20,6 +20,7 @@ from .exchange import to_raw
 from .gateway import handler
 from .guardian_loop import guarded, send_safe
 from .intents import Intent
+from .journal import Journal
 from .killswitch import ACTIVE, HALTED, REDUCING
 from .killswitch_ops import cancel_resting
 from .risk_budget import track_day_peak
@@ -256,7 +257,7 @@ class PositionChecks:
         since = int(datetime.fromisoformat(trade["opened_at"]).timestamp() * 1000)
         rows = await self.ex.trade.fapiPrivateGetIncome({"symbol": to_raw(sym), "incomeType": "FUNDING_FEE",
                                                          "startTime": since, "limit": 1000})
-        self.j.update_trade(trade["id"], funding=round(sum(float(r.get("income") or 0) for r in rows), 6))
+        self.j.post(Journal.update_trade, trade["id"], funding=round(sum(float(r.get("income") or 0) for r in rows), 6))
 
     # ------------------------------------------------------------ limit entries (protective, 5 s)
     async def check_entries(self) -> None:
@@ -297,8 +298,8 @@ class PositionChecks:
             seen = self._last_seen() if started else self.kill_seen
             self.kill_seen = st
             if (seen or {}).get("state") != st["state"] or (seen or {}).get("at") != st.get("at"):
-                self.j.set(self.j.mode_key(SEEN_KEY),
-                           json.dumps({k: st.get(k) for k in ("state", "by", "reason", "at", "cause")}))
+                self.j.post(Journal.set, self.j.mode_key(SEEN_KEY),
+                            json.dumps({k: st.get(k) for k in ("state", "by", "reason", "at", "cause")}))
             if seen and st["level"] < seen["level"]:
                 sanctioned = (st.get("cause") == "auto_clear" or bool(st.get("restored_at"))   # stale halt lifted
                               or str(st.get("by")).startswith("human:"))
@@ -343,7 +344,7 @@ class PositionChecks:
         those orders; a market close or add of unknown outcome is the human's until step 3's resolver)."""
         if self.ex.trade:
             await entry_intents.reconcile(self.entries)
-        for r in intents.sweep(self.j):
+        for r in await self.j.write(intents.sweep):
             sent = (f"orders it sent: {', '.join(r['orders'])}. Re-read the position and orders" if r["orders"]
                     else "it sent nothing")
             await send_safe(self.n, "intent_interrupted", f"intent {r['id']} ({r['kind']}, {r['actor']}) "
@@ -352,13 +353,13 @@ class PositionChecks:
 
 
 # ------------------------------------------------------------ intent handlers (gateway.py): ctx = the guardian
-@handler("restore_stop")
+@handler("restore_stop", late_ok=True)
 async def restore_stop(g, symbol: str, fallback_pct: float) -> dict | None:
     """RestoreStop (GATEWAY.md §4.2): Trader.ensure_stop, which re-reads everything under the symbol lock."""
     return await g.app.trader.ensure_stop(symbol, fallback_pct)
 
 
-@handler("force_close")
+@handler("force_close", late_ok=True)
 async def force_close(g, symbol: str, failures: int) -> dict:
     """ForceClose: a short whose stop could not be restored `failures` times is closed at market, unless a stop rests
     by now or it is gone (re-read under the lock: another process may have protected or closed it)."""

@@ -213,6 +213,7 @@ B is the same pattern, with the guardian as one more surface. A and B share step
   - journal-first, send, resolve, protect.
 - **Hard caps:** the gateway re-checks them under `killswitch.effective_limits` (research override if active, else `.env`), the same limits the guardian's loss trips use.
 - **Guardian-origin intents** run under the `.env` baseline, as today. A per-intent limits context, like `weight.tagged`, keeps "the AWS guardian always uses the `.env` baseline" true inside a shared process.
+- **The journal never makes an event loop wait** (#79, `journal_writer.py`). Receipt and start are one unit the caller awaits before anything runs; the result is posted. Journal-first has one exception: a protective guardian intent (`restore_stop`, `force_close`, `cap_stop`: idempotent sends, by client id and one closePosition stop per side) waits at most `CLAIM_WAIT_S` (2 s) while another process holds the write lock, then runs; its rows are posted and marked `journal_late`. Session, CLI and risk-adding intents always wait for their row.
 
 ### 4.2 Intents
 | intent | today | preconditions / idempotency | class |

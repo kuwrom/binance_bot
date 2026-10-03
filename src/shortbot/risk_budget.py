@@ -187,8 +187,12 @@ def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> floa
     """Highest day P&L seen today (the guardian calls this every minute; arms the give-back stop)."""
     key = journal.mode_key(f"day_peak:{(now or datetime.now(timezone.utc)).date().isoformat()}")
     peak = max(float(journal.get(key) or 0.0), day_pnl)
-    journal.set(key, str(peak))
+    journal.post(_raise_day_peak, key, day_pnl)   # #79: the pass never waits; the unit keeps the highest
     return peak
+
+
+def _raise_day_peak(journal, key: str, day_pnl: float) -> None:
+    journal.set(key, str(max(float(journal.get(key) or 0.0), day_pnl)))
 
 
 def quarter_start(now: datetime) -> str:

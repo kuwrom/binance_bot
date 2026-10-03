@@ -61,26 +61,21 @@ def code_version() -> str:
 
 
 # ------------------------------------------------------------ registration
-def register(j, role: str, mode: str) -> bool:
-    """Best-effort: a process that can't register shows up as unregistered (alerted), it never fails to start."""
+def register(j, role: str, mode: str) -> None:
+    """Best-effort and posted (#79): a process that can't register shows up as unregistered (alerted), it never fails
+    or waits to start."""
     rec = {"pid": os.getpid(), "role": role, "code": CODE, "pkg": str(provenance.PKG), "mode": mode, "ns": NS,
            "started": STARTED, "argv": " ".join(sys.argv[:2])}
-    try:
-        j.set(f"proc:{os.getpid()}", json.dumps(rec))
-        return True
-    except Exception:  # noqa: BLE001
-        log.exception("could not register %s pid %d", role, os.getpid())
-        return False
+    j.post(lambda j: j.set(f"proc:{os.getpid()}", json.dumps(rec)))
 
 
-def register_app(role: str) -> bool:
+def register_app(role: str) -> None:
     try:
         from .app import get_app
         app = get_app()
-        return register(app.journal, role, app.settings.mode)
-    except Exception:  # noqa: BLE001
+        register(app.journal, role, app.settings.mode)
+    except Exception:  # noqa: BLE001 - logged: the process shows up as unregistered (alerted)
         log.exception("could not register %s pid %d", role, os.getpid())
-        return False
 
 
 def rows(j) -> dict[int, dict[str, Any]]:
@@ -98,9 +93,10 @@ def rows(j) -> dict[int, dict[str, Any]]:
 
 
 def forget(j, pids) -> None:
-    for pid in pids:
-        j.db.execute("DELETE FROM kv WHERE k=?", (f"proc:{pid}",))
-    j.db.commit()
+    """Posted (#79): bookkeeping of dead processes, never awaited."""
+    ks = [(f"proc:{pid}",) for pid in pids]
+    if ks:
+        j.post(lambda j: j.db.executemany("DELETE FROM kv WHERE k=?", ks))
 
 
 # ------------------------------------------------------------ the process table

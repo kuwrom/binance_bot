@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .equity_marks import period_starts
+from .journal import Journal
 
 DAILY, DRAWDOWN = "daily_loss", "drawdown"
 LAPSE = {DAILY: "day", DRAWDOWN: "week"}   # the equity_marks period whose end lapses a hold
@@ -40,9 +41,11 @@ def _obj(raw: str | None) -> dict[str, Any] | None:
 
 
 def observe(j, cond: str, loss_pct: float, limit_pct: float, now: datetime | None = None) -> None:
+    """Posted (#79): the guardian's pass never waits for it."""
     now = _now(now)
-    j.set(j.mode_key(KV_OBS + cond), json.dumps({"loss_pct": loss_pct, "limit_pct": limit_pct,
-                                                 "ts": now.timestamp(), "at": now.isoformat(timespec="seconds")}))
+    j.post(Journal.set, j.mode_key(KV_OBS + cond), json.dumps({"loss_pct": loss_pct, "limit_pct": limit_pct,
+                                                               "ts": now.timestamp(),
+                                                               "at": now.isoformat(timespec="seconds")}))
 
 
 def preview(j, margin_pp: float = REARM_MARGIN_PP, now: datetime | None = None) -> dict[str, Any]:
@@ -110,9 +113,12 @@ def trip_at(j, cond: str, loss_pct: float, limit_pct: float, now: datetime | Non
         return max(limit_pct, rearm), {**h, "margin_pp": margin, "baseline_pct": baseline, "cleared_by": hold.get("by"),
                                        "cleared_at": hold.get("at")}
     rest = {k: v for k, v in hold["held"].items() if k != cond}
-    n = j.db.execute("UPDATE kv SET v=? WHERE k=? AND v=?", (json.dumps({**hold, "held": rest}), key, raw)).rowcount
-    j.db.commit()   # a clear that landed meanwhile wins (it already replaced this hold)
-    if n:
-        j.log_decision("kill_switch_rearmed", f"{cond} hold from the clear at {hold.get('at')} lapsed: {why}", None,
-                       snapshot={"condition": cond, "hold": h, "loss_pct": loss_pct, "limit_pct": limit_pct})
+    j.post(_drop, key, raw, json.dumps({**hold, "held": rest}), f"{cond} hold from the clear at {hold.get('at')} "
+           f"lapsed: {why}", {"condition": cond, "hold": h, "loss_pct": loss_pct, "limit_pct": limit_pct})
     return limit_pct, None
+
+
+def _drop(j, key: str, raw: str, new: str, why: str, snapshot: dict[str, Any]) -> None:
+    """A lapsed hold goes (posted: the pass that saw it lapse never waits); a clear that landed meanwhile wins."""
+    if j.db.execute("UPDATE kv SET v=? WHERE k=? AND v=?", (new, key, raw)).rowcount:
+        j.log_decision("kill_switch_rearmed", why, None, snapshot=snapshot)

@@ -10,11 +10,17 @@ MCP tools and `shortbot` subcommands that write (commands.py) and the guardian's
   call and runs it.
 - One intent at a time per task: a submit inside a running intent is a bug, like nested symbol locks.
 - A resubmitted id never runs again: it answers the stored result, or "in progress" (unknown: never resend it).
-  Only a busy intent (nothing sent: a symbol or the account lock was held) runs again under its id (§3.5)."""
+  Only a busy intent (nothing sent: a symbol or the account lock was held) runs again under its id (§3.5).
+- The journal never makes the caller's event loop wait (#79): receipt and start are one unit the caller awaits before
+  anything runs (journal-first), the result a posted unit. A handler registered late_ok (the guardian's restore_stop,
+  force_close, cap_stop: protection before journal-first) waits at most CLAIM_WAIT_S for that unit while another
+  process holds the write lock, then runs anyway; its rows are posted, marked journal_late (intents.py)."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import logging
 from typing import Any, Awaitable, Callable, Protocol
 
 import ccxt.async_support as ccxt
@@ -25,15 +31,21 @@ from .intents import Intent
 from .redact import redact
 from .symlock import AccountBusy, SymbolBusy
 
+log = logging.getLogger("shortbot.gateway")
 HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {}
+LATE_OK: set[str] = set()   # kinds that run without their row while the journal is locked (protection, idempotent)
+CLAIM_WAIT_S = 2.0          # how long a late_ok intent waits for its row first
 
 
-def handler(kind: str) -> Callable[[Callable], Callable]:
-    """Register the function that runs intents of `kind`: fn(ctx, **args)."""
+def handler(kind: str, late_ok: bool = False) -> Callable[[Callable], Callable]:
+    """Register the function that runs intents of `kind`: fn(ctx, **args). late_ok: see the module doc; only for a
+    protective guardian action whose sends are idempotent."""
     def register(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         if kind in HANDLERS:
             raise ValueError(f"two handlers for intent kind {kind}")
         HANDLERS[kind] = fn
+        if late_ok:
+            LATE_OK.add(kind)
         return fn
     return register
 
@@ -113,24 +125,44 @@ class LocalGateway:
                                "runs its steps itself")
         if intent.side != "short" and refusal is None:
             refusal = {"ok": False, "error": f"side {intent.side}: this desk is short-only until LONG_BUILD phase 2"}
-        j = self._journal()
-        seen = intents.receive(j, intent, refusal)
-        if seen is not None:
-            if intents.dumps(intent.args) != intents.dumps(seen["args"]) or intent.kind != seen["kind"]:
-                raise ValueError(f"intent id {intent.id} reused for another request ({seen['kind']})")
-            if seen["status"] != "busy":
-                return answer(seen)
-        elif refusal is not None:
-            return refusal
-        if not intents.start(j, intent.id):   # another caller started it first
-            if (row := intents.get(j, intent.id)) is None:
-                raise RuntimeError(f"intent {intent.id} is not in the journal it was just received in")
-            return answer(row)
+        j, at = self._journal(), intents.now_ms()
+        claim = j.write(_claim, intent, refusal)
+        if intent.kind in LATE_OK and refusal is None:
+            try:
+                verdict = await asyncio.wait_for(claim, CLAIM_WAIT_S)
+            except TimeoutError:   # the write lock is held elsewhere: protect first, journal when it frees
+                log.warning("intent %s (%s) runs before its row: the journal's write lock is held (journal_late)",
+                            intent.id, intent.kind)
+                j.post(intents.receive, intent, None, at, True)
+                verdict = None
+        else:
+            verdict = await claim
+        if verdict is not None:
+            return verdict[0]
         with audit.within(intent.id):
             try:
                 res = await run(self.ctx, **intent.args)
             except BaseException as e:
-                intents.finish(j, intent.id, failure_of(e), error=redact(f"{type(e).__name__}: {e}"))
+                j.post(intents.finish, intent.id, failure_of(e), None, redact(f"{type(e).__name__}: {e}"),
+                       intents.now_ms())
                 raise
-        intents.finish(j, intent.id, status_of(res), res)
+        j.post(intents.finish, intent.id, status_of(res), res, None, intents.now_ms())
         return res
+
+
+def _claim(j: Any, intent: Intent, refusal: Any) -> tuple[Any] | None:
+    """One unit before anything runs: journal `intent` on receipt and start it. None: run it now; else (the answer)
+    without running: its refusal, or a resubmitted id's stored answer."""
+    seen = intents.receive(j, intent, refusal)
+    if seen is not None:
+        if intents.dumps(intent.args) != intents.dumps(seen["args"]) or intent.kind != seen["kind"]:
+            raise ValueError(f"intent id {intent.id} reused for another request ({seen['kind']})")
+        if seen["status"] != "busy":
+            return (answer(seen),)
+    elif refusal is not None:
+        return (refusal,)
+    if not intents.start(j, intent.id):   # another caller started it first
+        row = intents.get(j, intent.id)
+        assert row is not None   # journalled above, in this unit
+        return (answer(row),)
+    return None

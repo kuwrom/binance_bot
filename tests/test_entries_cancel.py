@@ -88,7 +88,7 @@ async def test_a_fill_racing_any_cancel_rule_keeps_its_stop_and_is_adopted(path)
     eid, oid = r["placed"][0]["entry_id"], next(iter(fake.limits))
     fake.price = {"cascade": 1.045, "cancel_below": 0.94}.get(path, 1.0)   # ATR(1h) = 4%: 1.045 is a cascade
     if path in ("ttl", "partial"):
-        d._update(eid, expires_ms=0)                               # local TTL passed, GTD expiry not applied yet
+        await d._update(eid, expires_ms=0)                               # local TTL passed, GTD expiry not applied yet
     fill_during_cancel(fake, oid, fake.limits[oid]["amount"] / 2 if path == "partial" else None)
     ev = await d.poll()
     assert ev == [] and [x["id"] for x in d.pending()] == [eid]    # never labelled cancelled/expired

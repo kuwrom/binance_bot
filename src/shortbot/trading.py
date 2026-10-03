@@ -154,11 +154,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
                 for k, (_, s) in starts.items()}
         old_day, old_week = round(real["day"] + unreal, 4), round(real["week"] + unreal, 4)
         per = equity_marks.period_pnl(self.j, equity, rows, old_day, old_week, now, unreal)   # never raises
-        try:
-            peak = equity_marks.adjusted_peak(self.j, equity, rows, now_ms)
-        except Exception:  # noqa: BLE001 - kv locked: the stored peak; the cursor stays, so no transfer is lost
-            log.warning("equity peak not updated (kv)", exc_info=True)
-            peak = max(_f(self.j.get(self.j.mode_key(equity_marks.KV_PEAK))), equity)
+        peak = equity_marks.adjusted_peak(self.j, equity, rows, now_ms)   # its writes are posted (#79)
         return {"realized_today": round(real["day"], 4), "unrealized": round(unreal, 4),
                 "day_pnl": per["day_pnl"], "week_pnl": per["week_pnl"], "old_day_pnl": old_day,
                 "old_week_pnl": old_week, "late": per["late"], "pending": per.get("pending", {}),
@@ -235,7 +231,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         await self.t.set_leverage(leverage, symbol)
 
     def _isolated(self, symbol: str) -> None:
-        self.j.set(self.j.mode_key(ISOLATED_OK_KEY + symbol), str(time.time()))
+        self.j.post(lambda j: j.set(j.mode_key(ISOLATED_OK_KEY + symbol), str(time.time())))   # a cache: posted
 
     async def _confirm_isolated(self, symbol: str, e: Exception) -> None:
         """-4047/-4067: open orders block a margin-type change. Demo answers -4067 whenever an order rests, even when

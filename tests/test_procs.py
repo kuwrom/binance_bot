@@ -91,27 +91,31 @@ def test_code_version_is_fixed_at_import(monkeypatch):
 
 def test_register_writes_the_record():
     j = Journal(":memory:")
-    assert procs.register(j, "mcp", "demo")
+    procs.register(j, "mcp", "demo")
     r = json.loads(j.get(f"proc:{os.getpid()}"))
     assert r["pid"] == os.getpid() and r["role"] == "mcp" and r["mode"] == "demo" and r["ns"] == procs.NS
     assert r["code"] == procs.code_version() and r["pkg"] == str(provenance.PKG)
     assert abs(r["started"] - procs.STARTED) < 1 and r["started"] <= time.time()
 
 
-def test_register_never_raises():
-    class Broken:
-        def set(self, k, v):
-            raise RuntimeError("database is locked")
-    assert procs.register(Broken(), "guardian", "demo") is False
+def test_register_never_raises(caplog):
+    j = Journal(":memory:")
+
+    def broken(k, v):
+        raise RuntimeError("database is locked")
+    j.set = broken
+    procs.register(j, "guardian", "demo")   # posted: the failure is logged, the process starts
+    assert "posted write" in caplog.text and j.w.stats["failed_posts"] == 1
 
 
-def test_register_app_never_raises(monkeypatch):
+def test_register_app_never_raises(monkeypatch, caplog):
     import shortbot.app as app_mod
 
     def boom(*a, **k):
         raise RuntimeError("bad .env")
     monkeypatch.setattr(app_mod, "get_app", boom)
-    assert procs.register_app("mcp") is False
+    procs.register_app("mcp")
+    assert "could not register mcp" in caplog.text
 
 
 # ------------------------------------------------------------ audit

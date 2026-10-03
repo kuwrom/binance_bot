@@ -138,7 +138,7 @@ async def test_reconcile_tells_a_human_once_about_an_unexpected_failure(monkeypa
     d, t, fake = desk(price=1.0)
     monkeypatch.setattr(errors, "_reported", {})
     eid = (await d.propose_group([prop(1.04)]))["placed"][0]["entry_id"]
-    d._update(eid, status="unknown")
+    await d._update(eid, status="unknown")
     for e in (ccxt.RequestTimeout("slow"), err.rate_limited()):
         monkeypatch.setattr(entry_intents, "resolve", _raising(e))
         await entry_intents.reconcile(d)

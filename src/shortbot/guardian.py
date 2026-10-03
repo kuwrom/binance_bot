@@ -154,15 +154,13 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
     def _heartbeat(self, at: float) -> None:
         """Called by a positions pass that verified every held position (or a flat account), `at` = its position read.
         Stamped only while the fill poll's last run succeeded: fills are protected (and journalled) by it. Its age is
-        how long protection has gone unverified; every reader acts on that age (killswitch.watch_guardian)."""
+        how long protection has gone unverified; every reader acts on that age (killswitch.watch_guardian). Posted
+        (#79): another process's write lock delays it, never the pass."""
         lane = self.lanes.get("protective")
         if lane and lane.failing("entries"):
             log.info("heartbeat withheld: the fill poll is failing")
             return
-        try:
-            self.j.set(HEARTBEAT_KEY, str(at))
-        except Exception:  # noqa: BLE001 - a locked DB must not cost the pass its income read; the age shows it
-            log.exception("heartbeat not written")
+        self.j.post(lambda j: j.set(HEARTBEAT_KEY, str(at)))
 
     # ------------------------------------------------------------ run
     async def _startup(self) -> None:

@@ -90,7 +90,7 @@ class EntryCancel:
             if not e.get("order_id"):   # placing (its call died: a live one holds this lock) or unknown
                 found = await located(self.tr.t, e)
                 if found == "unfilled":
-                    self._settle(e["id"], frm, status="rejected",
+                    await self._settle(e["id"], frm, status="rejected",
                                  reason=f"{reason}; not on the exchange {GRACE_S} s after the send: never placed")
                     return "unfilled"
                 if isinstance(found, str):
@@ -98,7 +98,7 @@ class EntryCancel:
                 e = found
             got = await withdraw(self.tr, e, self.tr.alert)
             if got == "unfilled":
-                self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
+                await self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
         return got
 
     def _filled_sibling(self, e: dict) -> int | None:

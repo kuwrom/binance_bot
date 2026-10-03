@@ -128,7 +128,8 @@ async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
     if r["status"] == "placing":
         if age < GRACE_S:
             return None   # its own call may still be waiting for the answer
-        if not desk._settle(r["id"], "placing", status="unknown", abandon=1, reason="placing call never returned"):
+        if not await desk._settle(r["id"], "placing", status="unknown", abandon=1,
+                                  reason="placing call never returned"):
             return None
         r = {**r, "status": "unknown", "abandon": 1}
         if r.get("tranche"):   # a split entry is one unit: the dead call's acked, never-pinned legs go too
@@ -160,13 +161,13 @@ async def _adopt(desk, r: dict[str, Any], oid: str, why: str) -> dict[str, Any] 
     """From here on an ordinary pending entry: the poll adopts its fill and protects it with the plan's stop."""
     if r.get("tranche") and "ladder_live" not in r["plan"]:
         from . import tranches
-        tranches.finalize(desk.j.db, [_unit(r)])   # its split was rolled back: pinned to its own size, like _rollback
+        await desk.j.write(lambda j: tranches.finalize(j.db, [_unit(r)]))   # rolled back: pinned to its own size
     return await _done(desk, r, "pending", f"{why}: adopted", urgent=bool(r["abandon"]) or r["status"] != "unknown",
                        order_id=oid)
 
 
 async def _done(desk, r: dict[str, Any], status: str, why: str, urgent: bool = False, **f: Any) -> dict | None:
-    if not desk._settle(r["id"], r["status"], status=status, reason=why, **f):
+    if not await desk._settle(r["id"], r["status"], status=status, reason=why, **f):
         return None   # resolved elsewhere first
     desk.j.log_decision("entry_intent", f"entry #{r['id']} {r['status']} -> {status}: {why}", r["symbol"],
                         snapshot={"entry_id": r["id"], "client_id": r["client_id"], "status": status, **f})
@@ -198,7 +199,7 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
                         await _carry_on(desk, f"pre-arm of dead entry #{r['id']} not cancelled",
                                         "entry_intents._resolve_prearms", e, sym)
                         continue
-            desk._update(r["id"], prearm_id=o["id"])
+            await desk._update(r["id"], prearm_id=o["id"])
             events.append({"entry_id": r["id"], "event": "prearm_resolved", "cancelled": r["status"] != "pending"})
     return events
 
@@ -247,12 +248,13 @@ async def _externals_left(desk, rows: list[dict], resting: set[str]) -> None:
                                 r["symbol"])
                 continue
             st = "external_filled" if float(o.get("filled") or 0) > 0 else "external_gone"
-            desk._settle(r["id"], "external", status=st, reason=f"{r['reason']}; left the book ({o.get('status')})")
+            await desk._settle(r["id"], "external", status=st,
+                               reason=f"{r['reason']}; left the book ({o.get('status')})")
     if any(r["status"] == "external_filled" for r in rows):
         held = {p["symbol"] for p in await desk.tr.raw_positions()}
         for r in rows:
             if r["status"] == "external_filled" and r["symbol"] not in held:
-                desk._settle(r["id"], "external_filled", status="external_gone")
+                await desk._settle(r["id"], "external_filled", status="external_gone")
 
 
 def explained_symbols(desk) -> set[str]:
@@ -269,12 +271,11 @@ def explained_symbols(desk) -> set[str]:
 async def _external(desk, o: dict, oid: str, cid: str | None, sym: str) -> dict[str, Any]:
     why = ("a shortbot client id without a journal row (restored journal? another DB?)" if clientid.ours(cid)
            else "not placed by shortbot")
-    desk.j.db.execute(
+    await desk.j.write(lambda j: j.db.execute(
         "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, amount, order_id, reason,"
         " mode) VALUES ('external', ?, 'external', ?, ?, ?, ?, ?, ?, ?)",
         (sym, now_iso(), int(o.get("goodTillDate") or 0), float(o.get("price") or 0), float(o.get("origQty") or 0),
-         oid, f"{o.get('side')} {o.get('type')} {cid}: {why}", desk.j.mode))
-    desk.j.db.commit()
+         oid, f"{o.get('side')} {o.get('type')} {cid}: {why}", j.mode)))
     await desk.tr.alert("external_order", f"open {o.get('side')} {o.get('type')} {o.get('origQty')} @ {o.get('price')}"
                         f" ({cid}) is {why}: the desk doesn't manage it. Cancel it or journal it.", sym, True)
     return {"event": "external", "order_id": oid, "symbol": sym}

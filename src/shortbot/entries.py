@@ -102,16 +102,23 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             r["plan"] = json.loads(r["plan"]) if r.get("plan") else {}
         return rows
 
-    def _update(self, eid: int, **f: Any) -> None:
-        self.j.db.execute(f"UPDATE entries SET {', '.join(k + '=?' for k in f)} WHERE id=?", (*f.values(), eid))
-        self.j.db.commit()
+    async def _update(self, eid: int, **f: Any) -> None:
+        await self.j.write(lambda _j: self._set_row(eid, **f))
 
-    def _settle(self, eid: int, frm: str, **f: Any) -> bool:
+    async def _settle(self, eid: int, frm: str, **f: Any) -> bool:
         """Compare-and-set: applies only while the row is still `frm`. One statement, so the MCP server and the
-        guardian can't overwrite each other's resolution of the same intent. Returns whether it applied."""
+        guardian can't overwrite each other's resolution of the same intent. Returns whether it applied. A unit
+        (journal.write, #79): the caller waits for the journal, its event loop never does."""
+        return await self.j.write(lambda _j: self._cas_row(eid, frm, **f))
+
+    def _set_row(self, eid: int, **f: Any) -> None:
+        """_update's statement, for a caller already inside a unit."""
+        self.j.db.execute(f"UPDATE entries SET {', '.join(k + '=?' for k in f)} WHERE id=?", (*f.values(), eid))
+
+    def _cas_row(self, eid: int, frm: str, **f: Any) -> bool:
+        """_settle's statement, for a caller already inside a unit."""
         cur = self.j.db.execute(f"UPDATE entries SET {', '.join(k + '=?' for k in f)} WHERE id=? AND status=?",
                                 (*f.values(), eid, frm))
-        self.j.db.commit()
         return cur.rowcount == 1
 
     def pending(self, group_id: str | None = None, all_orders: bool = False) -> list[dict[str, Any]]:
@@ -198,7 +205,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                 await drop_prearm(self.tr, e["symbol"], e["prearm_id"], self.tr.alert,
                                   f"entry #{e['id']} expired unfilled")
         why = "order forgotten by Binance (-2013) past its GTD: it expired unfilled"
-        return {"entry_id": e["id"], "event": "expired", "why": why} if self._settle(
+        return {"entry_id": e["id"], "event": "expired", "why": why} if await self._settle(
             e["id"], "pending", status="expired", reason=why) else None
 
     async def _poll_failed(self, e: dict, x: Exception) -> None:
@@ -231,7 +238,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         if e["atr_1h"] and now_ms - e["ref_ms"] <= FAST_APPROACH_WINDOW_MS and last - e["ref_price"] >= e["atr_1h"]:
             return f"price rose {last - e['ref_price']:.6g} (≥ 1 ATR) toward the limit within 15 min: cascade risk"
         if now_ms - e["ref_ms"] > FAST_APPROACH_WINDOW_MS:
-            self._update(e["id"], ref_price=last, ref_ms=now_ms)  # rolling 15-min reference
+            self.j.post(lambda _j: self._set_row(e["id"], ref_price=last, ref_ms=now_ms))  # rolling 15-min reference
         return None
 
     async def _on_fill(self, e: dict, o: dict) -> dict[str, Any]:
@@ -259,7 +266,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                 self._cancel_fails.pop(e["id"], None)
                 await fills.plan_stop(self, e, cps)
                 trades = await fills.history(tr.t, e, o)
-                done = fills.adopt(self, e, o, pos, trades) if pos else None
+                done = await self.j.write(lambda _j: fills.adopt(self, e, o, pos, trades)) if pos else None
                 if pos:   # another trade's targets never meet this fill (#65); its own rest at once (#71)
                     await targets_sync.clear_stale(tr, sym, (self.j.active_trade(sym) or {}).get("id"))
                     await targets_sync.at_entry(tr, sym, f"entry #{e['id']} filled")

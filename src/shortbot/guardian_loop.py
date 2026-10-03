@@ -3,8 +3,9 @@ run concurrently, so a hung job only ever delays its own lane (never the protect
 job; on lanes that escalate (protective, watch) a streak sends one urgent alert and its end is announced. Slow jobs
 remember their last successful run in kv, so a restart doesn't re-run the daily studies (but retries failed ones).
 
-asyncio can't pre-empt synchronous work (CPU-heavy steps, a SQLite busy-wait): that still stalls every lane, which
-is why a lane logs when it wakes late.
+asyncio can't pre-empt synchronous work (a CPU-heavy step): that still stalls every lane, which is why a lane logs
+when it wakes late. Journal writes never wait for SQLite's write lock on the loop (#79, journal_writer.py): a job
+awaits its write (only its lane waits) or posts it (nothing waits).
 
 An event can bring a job's next run forward (`Lane.trigger`: the user-data stream, user_stream.py, #54). A burst of
 triggers is one run, never sooner than `min_gap_s` after the job's last start; each triggered run logs how long after
@@ -185,10 +186,7 @@ class Lane:
                 await send_safe(self.n, f"guardian_recovered:{job.name}", f"{job.name} OK again after {r[0]} "
                                 f"failures ({r[1] / 60:.0f} min)", cooldown_s=0)
             if job.every_s >= PERSIST_EVERY_S:   # successes only: a restart retries a failed daily job
-                try:
-                    self.j.set(KV_LAST_RUN + job.name, str(self.last[job.name]))
-                except Exception:  # noqa: BLE001 - logged; a restart only runs the job early
-                    log.exception("could not store the last run of %s", job.name)
+                self.j.post(lambda j, k=KV_LAST_RUN + job.name, v=str(self.last[job.name]): j.set(k, v))
 
     async def _failed(self, job: Job, e: Exception) -> None:
         escalate = self.streak.fail(job.name)

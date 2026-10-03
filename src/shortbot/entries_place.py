@@ -25,6 +25,7 @@ from .audit import refusals
 from .entry_gates import market_pause, stamps
 from .entry_intents import HINTS, SendUnknown
 from .exchange import to_symbol
+from .journal import Journal
 from .plans import build_plan, validate_plan
 from .setups import resolve
 from .steps import floor_amount, too_small
@@ -78,7 +79,7 @@ class EntryPlacement:
                         try:
                             for leg in legs:
                                 got.append(await self._place_one(gid, leg, regime, expires_ms, prearm_stop))
-                            pinned = tranches.finalize(self.j.db, got)
+                            pinned = await self.j.write(lambda j, placed=got: tranches.finalize(j.db, placed))
                         except Exception as e:
                             await self._rollback(got)   # a split entry is one unit (0G 2026-10-01)
                             if isinstance(e, SendUnknown):   # that leg is abandoned: cancelled if it turns up
@@ -206,7 +207,7 @@ class EntryPlacement:
             # write-ahead intent (entry_intents.py): the row and its client id exist before the order is sent
             cid = clientid.new("entry", gid)
             sized = stamps(budget.get("multipliers"))   # the multipliers it was sized under: entry_gates resize (#66)
-            eid = self.j._insert(
+            eid = await self.j.write(Journal._insert,
                 "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price,"
                 " amount, leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price,"
                 " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon, mode, experiment, limits,"
@@ -223,11 +224,12 @@ class EntryPlacement:
                 order = await tr.place_limit(sym, amount, px, expires_ms, cid)
             except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
                 unsure = errors.classify(e).unknown
-                self._settle(eid, "placing", status="unknown" if unsure else "rejected", reason=errors.describe(e))
+                await self._settle(eid, "placing", status="unknown" if unsure else "rejected",
+                                   reason=errors.describe(e))
                 if unsure:
                     raise SendUnknown(eid, e) from e
                 raise
-            if not self._settle(eid, "placing", status="pending", order_id=order.get("id")):
+            if not await self._settle(eid, "placing", status="pending", order_id=order.get("id")):
                 raise RuntimeError(f"entry #{eid} was resolved by the reconciler while its order was in flight")
             prearm_id = await self._prearm(eid, sym, amount, stop) if prearm else None
         odds = {}
@@ -254,7 +256,7 @@ class EntryPlacement:
         limit already rests and is tracked, and the 5 s fill poll still protects."""
         cid = clientid.new("prearm", eid)
         try:
-            self._update(eid, prearm_cid=cid)
+            await self._update(eid, prearm_cid=cid)
         except sqlite3.Error:
             return None   # no intent journalled: don't send
         o, refused = None, False
@@ -265,9 +267,9 @@ class EntryPlacement:
             log.warning("pre-arm of entry #%s %s: %s", eid, "refused" if refused else "unknown", errors.describe(e))
         try:
             if o is not None:
-                self._update(eid, prearm_id=o.get("id"))
+                await self._update(eid, prearm_id=o.get("id"))
             elif refused:
-                self._update(eid, prearm_cid=None)   # nothing rests
+                await self._update(eid, prearm_cid=None)   # nothing rests
         except sqlite3.Error:
             pass   # the row keeps prearm_cid: entry_intents finds the stop by it
         return (o or {}).get("id")
@@ -283,4 +285,4 @@ class EntryPlacement:
                 kept.append(x)   # (partly) filled, or the cancel failed: keeps its stop, the poll reconciles
         if kept:
             from . import tranches
-            tranches.finalize(self.j.db, kept)
+            await self.j.write(lambda j: tranches.finalize(j.db, kept))

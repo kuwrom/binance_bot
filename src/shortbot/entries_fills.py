@@ -112,7 +112,7 @@ def adopt(desk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
     orphan = bool(e.get("tranche")) and tranches.parent_closed(desk, e)   # a fresh position nobody asked for
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
     tid = new_trade(desk, e, at)
-    if not desk._settle(e["id"], "pending", status="filled", trade_id=tid, filled_at=iso(at), fill_price=fill,
+    if not desk._cas_row(e["id"], "pending", status="filled", trade_id=tid, filled_at=iso(at), fill_price=fill,
                         filled_qty=qty):
         desk.j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}, None
@@ -197,17 +197,9 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
     foreign = [x for x in rt["orders"] if x not in ours]
     if foreign:   # the position's PnL is exact, but it is not one clean bet: research must be able to tell
         reason += f"; NOT one bet: includes orders that aren't this desk's limit entries ({', '.join(foreign)})"
-    tid = new_trade(desk, e, rt["opened_ms"], round_trip={"orders": rt["orders"], "exit_orders": rt["exit_orders"],
-                                                          "exit": "prearm_stop" if stopped else "exchange",
-                                                          "foreign_orders": foreign})
-    if not _claim(desk, e, own(rt["sells"], e["order_id"]), tid):
-        j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
+    tid = await j.write(lambda _j: _journal_round_trip(desk, e, rt, stopped, foreign))
+    if tid is None:
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}
-    j.activate_trade(tid, rt["entry"], rt["qty"], round(rt["entry"] * rt["qty"], 2))
-    j.update_trade(tid, mae_pct=round(max(0.0, (rt["exit"] / rt["entry"] - 1) * 100), 3))   # at least the exit's
-    for x in desk.pending():   # same-symbol orders that filled into this round trip too: one trade, not two
-        if x["symbol"] == sym and str(x["order_id"]) in rt["orders"]:
-            _claim(desk, x, own(rt["sells"], x["order_id"]), tid)
     res = None
     try:
         res = await reconcile.finalize(desk.tr, j.get_trade(tid), reason, episode=rt)   # closed_at = its exit fill
@@ -225,10 +217,28 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
             "exit": rt["exit"], "net": res["net"] if res else None}
 
 
+def _journal_round_trip(desk, e: dict[str, Any], rt: dict[str, Any], stopped: bool, foreign: list[str]) -> int | None:
+    """The round trip's trade, one unit: opened, claimed by its entry (None: resolved elsewhere first) and by the
+    same-symbol orders that filled into it too (one trade, not two)."""
+    j, sym = desk.j, e["symbol"]
+    tid = new_trade(desk, e, rt["opened_ms"], round_trip={"orders": rt["orders"], "exit_orders": rt["exit_orders"],
+                                                          "exit": "prearm_stop" if stopped else "exchange",
+                                                          "foreign_orders": foreign})
+    if not _claim(desk, e, own(rt["sells"], e["order_id"]), tid):
+        j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
+        return None
+    j.activate_trade(tid, rt["entry"], rt["qty"], round(rt["entry"] * rt["qty"], 2))
+    j.update_trade(tid, mae_pct=round(max(0.0, (rt["exit"] / rt["entry"] - 1) * 100), 3))   # at least the exit's
+    for x in desk.pending():
+        if x["symbol"] == sym and str(x["order_id"]) in rt["orders"]:
+            _claim(desk, x, own(rt["sells"], x["order_id"]), tid)
+    return tid
+
+
 def _claim(desk, e: dict[str, Any], mine: list[dict], tid: int, o: dict | None = None) -> bool:
     """pending -> filled (compare-and-set), stamped with the order's own fills."""
     o = o or {}
-    return desk._settle(e["id"], "pending", status="filled", trade_id=tid,
+    return desk._cas_row(e["id"], "pending", status="filled", trade_id=tid,
                         filled_at=iso(int(mine[0]["timestamp"]) if mine else o.get("lastTradeTimestamp")),
                         fill_price=_vwap(mine) if mine else float(o.get("average") or e["limit_price"]),
                         filled_qty=_qty(mine) if mine else float(o.get("filled") or 0))
@@ -236,7 +246,7 @@ def _claim(desk, e: dict[str, Any], mine: list[dict], tid: int, o: dict | None =
 
 async def _link(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict], tid: int, urgent: bool,
                 why: str) -> dict[str, Any]:
-    if not _claim(desk, e, own(trades, e["order_id"]), tid, o):
+    if not await desk.j.write(lambda _j: _claim(desk, e, own(trades, e["order_id"]), tid, o)):
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}
     await _drop_prearm(desk, e, [])
     desk.j.log_decision("fill_linked", f"entry #{e['id']} {why}", e["symbol"], snapshot={"trade_id": tid})
@@ -257,7 +267,7 @@ async def _unresolved(desk, e: dict[str, Any], o: dict[str, Any]) -> dict[str, A
         return {"entry_id": e["id"], "event": "fill_unresolved", "tries": n}
     desk._rt_tries.pop(e["id"], None)
     why = f"order {e['order_id']} filled {o.get('filled')}, but no position and no round trip in trade history"
-    if desk._settle(e["id"], "pending", status="error", reason=why):
+    if await desk._settle(e["id"], "pending", status="error", reason=why):
         await desk.tr.alert("fill_unresolved", f"entry #{e['id']}: {why} after {n} polls. Check Binance and journal "
                             "it by hand.", e["symbol"], True)
     return {"entry_id": e["id"], "event": "error"}

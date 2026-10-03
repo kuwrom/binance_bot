@@ -264,20 +264,18 @@ async def _vol(ex, j, tid: int, symbol: str) -> bool:
         v = _num((await asyncio.wait_for(ex.public.fetch_ticker(symbol), TIMEOUT_S)).get("quoteVolume"))
     except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - the report falls back to entry_features.quote_volume
         return False
-    if v:
-        j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.vol24_usd', ?) WHERE id=?", (v, tid))
-        j.db.commit()
+    if v:   # posted, like every write here (#79): research data, never awaited
+        j.post(lambda j: j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.vol24_usd', ?) WHERE id=?",
+                                      (v, tid)))
     return True
 
 
 def _add(j, tid: int, fill: dict[str, Any]) -> None:
-    j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.fills[#]', json(?)) WHERE id=? AND {_NEW}",
-                 (json.dumps(fill), tid, fill["order"]))
-    j.db.commit()
+    j.post(lambda j: j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.fills[#]', json(?)) WHERE id=?"
+                                  f" AND {_NEW}", (json.dumps(fill), tid, fill["order"])))
 
 
 def _miss(j, tid: int, order: str, why: str) -> None:
     log.info("trade #%s: no mainnet reference for order %s (%s)", tid, order, why)
-    j.db.execute(f"UPDATE trades SET fill_refs = json_set({DOC}, '$.missed.' || json_quote(?), ?) WHERE id=? AND "
-                 f"{_NEW}", (order, why, tid, order))
-    j.db.commit()
+    j.post(lambda j: j.db.execute(f"UPDATE trades SET fill_refs = json_set({DOC}, '$.missed.' || json_quote(?), ?) "
+                                  f"WHERE id=? AND {_NEW}", (order, why, tid, order)))

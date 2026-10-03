@@ -12,6 +12,7 @@ from . import targets, targets_sync
 from .gateway import handler
 from .guardian_loop import send_safe
 from .intents import Intent
+from .journal import Journal
 from .manager import excursions, plan_actions
 from .symlock import SymbolBusy
 
@@ -34,8 +35,8 @@ class PlanChecks:
 
     async def _run_plan(self, trade: dict, p: dict) -> None:
         ex = excursions(trade, p["mark"])
-        self.j.update_trade(trade["id"], mfe_pct=round(ex["mfe_pct"], 3), mae_pct=round(ex["mae_pct"], 3),
-                            low_since_entry=ex["low_since_entry"])
+        self.j.post(Journal.update_trade, trade["id"], mfe_pct=round(ex["mfe_pct"], 3),
+                    mae_pct=round(ex["mae_pct"], 3), low_since_entry=ex["low_since_entry"])
         trade = {**trade, **ex}
         tr, sym = self.app.trader, trade["symbol"]
         acts = plan_actions(trade, p)
@@ -62,7 +63,7 @@ class PlanChecks:
                 await self.n.send("plan_stop_moved" if r.get("ok") else "plan_stop_move_failed",
                                   f"{a.reason} -> {a.price:.6g}: {r}", sym, cooldown_s=0)
             elif a.kind == "target_done":
-                targets.mark_hit(self.j, trade["id"], a.target_price)   # re-read: a fill may have added one
+                await targets.mark_hit(self.j, trade["id"], a.target_price)   # re-read: a fill may have added one
                 done.append({"kind": a.kind, "reason": a.reason})
                 await self.n.send("plan_target_done", a.reason, sym, cooldown_s=0)
             elif a.kind == "close":
@@ -73,7 +74,7 @@ class PlanChecks:
                 done.append({"kind": a.kind, "reason": a.reason, "result": r})
                 cur = r.get("remaining", cur)   # T1 and T2 in one pass: the second sees what the first left
                 if a.target_price is not None and (r.get("ok") or r.get("noop")):
-                    targets.mark_hit(self.j, trade["id"], a.target_price)
+                    await targets.mark_hit(self.j, trade["id"], a.target_price)
                 await self.n.send("plan_close", f"{a.reason}: {r}", sym, cooldown_s=0)
                 if (a.fraction or 1.0) >= 1.0:
                     return done

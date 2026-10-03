@@ -19,6 +19,7 @@ import ccxt.async_support as ccxt
 from . import clientid, close_intent, errors, fill_quality, margin, reconcile, stops, targets_sync, tranches
 from .audit import refusals
 from .exchange import to_symbol
+from .journal import Journal
 from .stops import is_bridge, is_protective_stop
 
 TRIG = {"trigger": True}
@@ -236,7 +237,7 @@ class ManageFlow:
             placed = res["placed"]
             trade = self.j.active_trade(symbol)
             if trade:
-                self.j.update_trade(trade["id"], stop_price=new_stop)
+                await self.j.write(Journal.update_trade, trade["id"], stop_price=new_stop)
             self.j.log_decision("move_stop", reason, symbol, snapshot={"from": current, "to": new_stop})
             await targets_sync.after(self, symbol, "stop move")   # #65: in case its bridge took a target with it
             return {"ok": True, "symbol": symbol, "old_stop": current, "new_stop": new_stop,

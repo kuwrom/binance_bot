@@ -39,9 +39,9 @@ def note(j, symbol: str, leg: str, order: Any) -> None:
         trade = j.active_trade(symbol)
         if not trade:
             return
-        j.db.execute(f"UPDATE trades SET fill_refs = json_set({DOC}, '$.orders.' || json_quote(?), json(?)) WHERE id=?",
-                     (str(oid), json.dumps({"leg": leg, "cid": order.get("clientOrderId")}), trade["id"]))
-        j.db.commit()
+        args = (str(oid), json.dumps({"leg": leg, "cid": order.get("clientOrderId")}), trade["id"])
+        j.post(lambda j: j.db.execute(f"UPDATE trades SET fill_refs = json_set({DOC}, '$.orders.' || json_quote(?), "
+                                      "json(?)) WHERE id=?", args))   # posted (#79): after the send, never awaited
     except Exception as e:  # noqa: BLE001 - never in an order's way: the trade then matches by time
         log.warning("%s order id of %s not journalled: %s: %s", leg, symbol, type(e).__name__, e)
 

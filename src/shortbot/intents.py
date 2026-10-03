@@ -13,14 +13,18 @@ anything runs, under an id its caller picks (a ULID). gateway.py runs them; this
   reached through that id; nothing is copied.
 - A process that died mid-intent leaves it open: `sweep` (the guardian's reconcile job) ends it, expired if it never
   started, interrupted if it did, and lists its client ids; the existing reconcilers resolve the orders themselves.
+- Journal-first, with one exception (#79): a guardian intent whose handler is registered late_ok (restoring or capping a
+  stop, closing a naked position) sends after CLAIM_WAIT_S without its row when another process holds the journal's
+  write lock. Its rows are posted, stamped when it ran, and marked journal_late; its sends are idempotent (client
+  ids, one closePosition stop per side).
 
-Every function takes the journal and runs plain synchronous SQLite: no event-loop state, so a caller may run it in a
-thread on its own connection (#79)."""
+Every function takes the journal and runs plain synchronous SQLite: the gateway runs each as a unit (journal.write /
+post, journal_writer.py), so an event loop never waits for the write lock. A time is the caller's (`at`): a posted row
+lands later, stamped when it happened."""
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 import secrets
 import time
@@ -29,8 +33,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from . import audit, clientid
-
-log = logging.getLogger("shortbot.intents")
 
 OPEN = ("received", "running")
 FINAL = ("done", "refused", "failed", "unknown", "expired")   # interrupted may still get its owner's late answer
@@ -42,7 +44,7 @@ CREATE TABLE IF NOT EXISTS intents (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, symbol TEXT, side TEXT NOT NULL, args TEXT NOT NULL,
     status TEXT NOT NULL, result TEXT, error TEXT, trade_id INTEGER,
     actor TEXT NOT NULL, claude_session TEXT, session_id INTEGER, code_version TEXT, mode TEXT NOT NULL,
-    pid INTEGER NOT NULL, received_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+    pid INTEGER NOT NULL, received_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, journal_late INTEGER
 );
 CREATE INDEX IF NOT EXISTS intents_open ON intents (status) WHERE status IN ('received', 'running');
 CREATE INDEX IF NOT EXISTS intents_received ON intents (received_at);
@@ -65,6 +67,7 @@ CREATE TRIGGER IF NOT EXISTS intent_orders_no_delete BEFORE DELETE ON intent_ord
     BEGIN SELECT RAISE(ABORT, 'an intent''s order link never changes'); END;
 """
 
+COLUMNS = {"journal_late": "INTEGER"}   # added since the table was first created (Journal._migrate)
 _B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"   # Crockford
 
 
@@ -108,32 +111,35 @@ def dumps(obj: Any) -> str:
 
 
 # ------------------------------------------------------------ the row
-def receive(j, it: Intent, refused: Any = None) -> dict[str, Any] | None:
-    """Journal `it` as received (or straight away as refused, with the caller's refusal as its result). None when it is
-    new; the stored row when its id was journalled before (a resubmission: never run again)."""
+def receive(j, it: Intent, refused: Any = None, at: str | None = None, late: bool = False) -> dict[str, Any] | None:
+    """Journal `it` as received (or straight away as refused, with the caller's refusal as its result; or, late, as
+    running since `at`: it ran without waiting for its row). None when it is new; the stored row when its id was
+    journalled before (a resubmission: never run again)."""
     st = audit.stamp()
-    now = now_ms()
+    at = at or now_ms()
     done = refused is not None
+    status = "refused" if done else "running" if late else "received"
     cur = j.db.execute(
         "INSERT INTO intents (id, kind, symbol, side, args, status, result, actor, claude_session, session_id,"
-        " code_version, mode, pid, received_at, finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-        " ON CONFLICT (id) DO NOTHING",
-        (it.id, it.kind, it.symbol, it.side, dumps(it.args), "refused" if done else "received",
-         dumps(refused) if done else None, it.actor, st["claude_session"], j.session_of(st["claude_session"]),
-         st["code_version"], j.mode, os.getpid(), now, now if done else None))
+        " code_version, mode, pid, received_at, started_at, finished_at, journal_late)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
+        (it.id, it.kind, it.symbol, it.side, dumps(it.args), status, dumps(refused) if done else None, it.actor,
+         st["claude_session"], j.session_of(st["claude_session"]), st["code_version"], j.mode, os.getpid(), at,
+         at if late else None, at if done else None, 1 if late else None))
     j.db.commit()
     return None if cur.rowcount == 1 else get(j, it.id)
 
 
-def start(j, intent_id: str) -> bool:
+def start(j, intent_id: str, at: str | None = None) -> bool:
     """received (or busy, run again) -> running. False: another caller started it first."""
     cur = j.db.execute("UPDATE intents SET status='running', started_at=? WHERE id=? AND status IN ('received','busy')",
-                       (now_ms(), intent_id))
+                       (at or now_ms(), intent_id))
     j.db.commit()
     return cur.rowcount == 1
 
 
-def finish(j, intent_id: str, status: str, result: Any = None, error: str | None = None) -> bool:
+def finish(j, intent_id: str, status: str, result: Any = None, error: str | None = None,
+           at: str | None = None) -> bool:
     """running -> `status`, with the result (today's shape) or the error. An intent the sweep ended while its owner
     was suspended takes the owner's answer: it is the truth."""
     tid = result.get("trade_id") if isinstance(result, dict) else None
@@ -141,7 +147,7 @@ def finish(j, intent_id: str, status: str, result: Any = None, error: str | None
         "UPDATE intents SET status=?, result=?, error=?, trade_id=?, finished_at=? WHERE id=?"
         " AND status IN ('running','interrupted')",
         (status, None if result is None else dumps(result), error,
-         tid if isinstance(tid, int) and not isinstance(tid, bool) else None, now_ms(), intent_id))
+         tid if isinstance(tid, int) and not isinstance(tid, bool) else None, at or now_ms(), intent_id))
     j.db.commit()
     return cur.rowcount == 1
 
@@ -159,17 +165,17 @@ def get(j, intent_id: str) -> dict[str, Any] | None:
 # ------------------------------------------------------------ orders
 def link(j, cid: str, symbol: str) -> None:
     """Called by a Trader primitive just before it sends an order under client id `cid`: the order belongs to the
-    intent running in this task, if any. Bookkeeping only: the order's own row already carries `cid`, so a failed link
-    is logged and never costs the send."""
+    intent running in this task, if any. Bookkeeping only (the order's own row already carries `cid`): posted, so it
+    never holds up the send, and a failure is logged."""
     iid = audit.intent_id()
-    if iid is None:
-        return
-    try:
-        j.db.execute("INSERT INTO intent_orders (client_id, intent_id, kind, symbol, at) VALUES (?,?,?,?,?)",
-                     (cid, iid, clientid.kind_of(cid), symbol, now_ms()))
-        j.db.commit()
-    except Exception:  # noqa: BLE001 - logged; the send it precedes is protected by its own write-ahead row
-        log.exception("could not link order %s to intent %s", cid, iid)
+    if iid is not None:
+        j.post(_link, cid, iid, symbol, now_ms())
+
+
+def _link(j, cid: str, iid: str, symbol: str, at: str) -> None:
+    j.db.execute("INSERT INTO intent_orders (client_id, intent_id, kind, symbol, at) VALUES (?,?,?,?,?)",
+                 (cid, iid, clientid.kind_of(cid), symbol, at))
+    j.db.commit()
 
 
 def orders(j, intent_id: str) -> list[dict[str, Any]]:

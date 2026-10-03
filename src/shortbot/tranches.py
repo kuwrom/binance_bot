@@ -79,10 +79,9 @@ async def cancel_legs(trader, trade_id: int, reason: str) -> dict[str, list[dict
     for e in own_legs(trader.j, trade_id):
         async with trader.symbol_lock(e["symbol"], f"trade #{trade_id} closed: withdraw its legs"):
             got[await withdraw(trader, e, trader.alert)].append(e)
-    for e in got["unfilled"]:   # written after the awaits, one commit each: no write transaction spans an exchange call
-        trader.j.db.execute("UPDATE entries SET status='cancelled', reason=? WHERE id=? AND status='pending'",
-                            (reason, e["id"]))
-        trader.j.db.commit()
+    for e in got["unfilled"]:   # written after the awaits, one unit each: no write transaction spans an exchange call
+        await trader.j.write(lambda j, e=e: j.db.execute(
+            "UPDATE entries SET status='cancelled', reason=? WHERE id=? AND status='pending'", (reason, e["id"])))
     return got
 
 
@@ -117,7 +116,7 @@ def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int,
     peak = max(float((desk.j.get_trade(tid) or {}).get("amount") or 0), qty)
     owners = desk._rows("trade_id=?", (tid,))
     leg = e.get("tranche") and any(r["tranche"] == e["tranche"] for r in owners)
-    if not desk._settle(e["id"], "pending", status="filled", trade_id=tid, filled_at=filled_at or _now(),
+    if not desk._cas_row(e["id"], "pending", status="filled", trade_id=tid, filled_at=filled_at or _now(),
                         fill_price=e["limit_price"], filled_qty=e["amount"]):
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}, None
     desk.j.update_trade(tid, entry_price=fill, amount=peak, notional=round(fill * qty, 2))

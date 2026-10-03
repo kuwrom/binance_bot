@@ -24,6 +24,7 @@ from .exchange import to_raw
 from .gateway import handler
 from .guardian_loop import send_safe
 from .intents import Intent
+from .journal import Journal
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.guardian")
@@ -46,7 +47,7 @@ class MarginChecks:
             return {}, [], f"adl: adlQuantile read failed: {type(e).__name__}: {e}"
         if resp and self.j.get(ADL_SAMPLE_KEY) is None:   # the live shape, once (unverified on demo)
             raw = json.dumps(resp, default=str)[:4000]
-            self.j.set(ADL_SAMPLE_KEY, raw)
+            self.j.post(Journal.set, ADL_SAMPLE_KEY, raw)
             log.info("adlQuantile first non-empty answer: %s", raw)
         got, bad = margin.parse_adl(resp)
         if bad:
@@ -142,7 +143,7 @@ class MarginChecks:
                               cooldown_s=MULTI_ASSETS_COOLDOWN_S)
 
 
-@handler("cap_stop")
+@handler("cap_stop", late_ok=True)
 async def cap_stop(g, symbol: str) -> dict | None:
     """CapStop (GATEWAY.md §4.2, the margin pass's intent): Trader.cap_stop, decided again under the symbol lock."""
     return await g.app.trader.cap_stop(symbol)

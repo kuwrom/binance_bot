@@ -34,7 +34,8 @@ import sqlite3
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, TypeVar
+from types import TracebackType
+from typing import Any, Callable, Literal, TypeVar
 
 from . import wal_holder
 
@@ -53,6 +54,17 @@ class UnitConnection(sqlite3.Connection):
     def commit(self) -> None:
         if not self.unit_depth:
             super().commit()
+
+    def __exit__(self, typ: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None, /
+                 ) -> Literal[False]:   # `with db:` inside a unit: the unit commits or rolls back
+        if not self.unit_depth:
+            super().__exit__(typ, val, tb)
+        return False
+
+    def executescript(self, sql: str, /) -> sqlite3.Cursor:
+        if self.unit_depth:   # it COMMITs first (Python sqlite3 docs): the unit would end half-way
+            raise sqlite3.ProgrammingError("executescript inside a journal unit: run schema DDL before the unit")
+        return super().executescript(sql)
 
 
 @dataclass

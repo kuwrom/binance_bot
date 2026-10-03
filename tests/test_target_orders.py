@@ -198,8 +198,8 @@ async def test_an_empty_positions_answer_alone_never_pulls_the_targets(tmp_path)
 async def test_a_send_written_off_that_lands_late_is_tracked_again(tmp_path):
     g, fake, tid = await desk(tmp_path, {**PLAN, "auto": {"targets": False}})
     tr = g.app.trader
-    rid = targets.add(g.j, tid, SYM, 0.95, 0.95, 50, f"sb-t{tid}-1a7e1a7e")
-    targets.move(g.j, targets.rows(g.j, "id=?", (rid,))[0], "lost", "never reached the book")
+    rid = await targets.add(g.j, tid, SYM, 0.95, 0.95, 50, f"sb-t{tid}-1a7e1a7e")
+    await targets.move(g.j, targets.rows(g.j, "id=?", (rid,))[0], "lost", "never reached the book")
     o = await fake.create_order(SYM, "limit", "buy", 50, 0.95, {"reduceOnly": True, "timeInForce": "GTC",
                                                                "clientOrderId": f"sb-t{tid}-1a7e1a7e"})
     await targets_sync.settle(tr, SYM)

@@ -11,6 +11,8 @@ withdrawal looks like a 12% drawdown). Here:
   drawdown; `reset_peak` is the human reset (shortbot-admin).
 Every key here belongs to one account: read and written through `journal.mode_key` (demo keeps the bare key, live
 gets '@live'), so a switch to live never starts from demo's peak or marks (#32).
+Values are computed from what is stored and returned at once; what they store is posted (#79, journal_writer.py), so
+the guardian's pass never waits for another process's write lock.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import reconcile
+from .journal import Journal
 
 LATE_MARK_S = 15 * 60
 KV_PEAK = "equity_peak"
@@ -41,8 +44,13 @@ def _mark(journal, kind: str, key: str, equity: float, now_ms: int, unrealized: 
     if raw:
         return json.loads(raw)
     m = {"equity": equity, "ts": now_ms, **({"unrealized": unrealized} if unrealized is not None else {})}
-    journal.set(k, json.dumps(m))
+    journal.post(_first_mark, k, json.dumps(m))
     return m
+
+
+def _first_mark(journal, k: str, v: str) -> None:
+    """The period's first mark stays: another process's, if it got there first."""
+    journal.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (k, v))
 
 
 def trading_income(rows: list[dict[str, Any]], since_ms: int) -> float:
@@ -92,12 +100,12 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
                 if abs(pnl - b) > max(1.0, 0.001 * abs(equity)):
                     first = int(journal.get(pk) or 0) or now_ms
                     if first == now_ms:
-                        journal.set(pk, str(now_ms))
+                        journal.post(Journal.set, pk, str(now_ms))
                     young = now_ms - first < PENDING_MS
                     out["pending"][kind] = young
                     pnl = b if young else min(pnl, b)
                 elif journal.get(pk) not in (None, "0"):
-                    journal.set(pk, "0")
+                    journal.post(Journal.set, pk, "0")
             late = ts - start_ms > LATE_MARK_S * 1000
             out["late"][kind] = late
             out[f"{kind}_pnl"] = round(min(pnl, old) if late else pnl, 4)
@@ -111,30 +119,32 @@ CURSOR_LAG_MS = 60_000   # income can be reported a few seconds late: count tran
 
 def adjusted_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int | None = None) -> float:
     """equity_peak shifted by transfers, never below current equity. Several processes call this (guardian lanes,
-    MCP, CLI), so the read-modify-write is one IMMEDIATE transaction and the cursor only moves forward: each
-    transfer in [cursor, now - lag) is counted exactly once by whichever caller advances the cursor over it."""
+    MCP, CLI), so the stored peak and cursor move in one unit that recomputes from what it reads, and the cursor only
+    moves forward: each transfer in [cursor, now - lag) is counted exactly once by whichever caller advances the
+    cursor over it. Posted: the peak returned is computed from what is stored now (the unit's own result, unless
+    another process moved them meanwhile)."""
     now_ms = now_ms or int(time.time() * 1000)
-    upto = now_ms - CURSOR_LAG_MS
-    db, kp, kc = journal.db, journal.mode_key(KV_PEAK), journal.mode_key(KV_CURSOR)
-    db.commit()
-    db.execute("BEGIN IMMEDIATE")
-    try:
-        row = db.execute("SELECT v FROM kv WHERE k=?", (kc,)).fetchone()
-        cursor = int(row[0]) if row else upto
-        row = db.execute("SELECT v FROM kv WHERE k=?", (kp,)).fetchone()
-        peak = float(row[0]) if row else 0.0
-        if upto > cursor:
-            peak += transfers(transfer_rows, cursor, upto)
-        # transfers inside the lag window are already in equity but not yet in the peak: leave them out of the
-        # high-water mark, or the next pass adds them a second time (phantom drawdown, #16 review)
-        peak = max(peak, equity - transfers(transfer_rows, max(cursor, upto)))
-        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (kp, str(peak)))
-        db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (kc, str(max(cursor, upto))))
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    peak = _peak(journal, equity, transfer_rows, now_ms)[0]
+    journal.post(_advance_peak, equity, transfer_rows, now_ms)
     return peak
+
+
+def _peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int) -> tuple[float, int]:
+    upto = now_ms - CURSOR_LAG_MS
+    raw = journal.get(journal.mode_key(KV_CURSOR))
+    cursor = int(raw) if raw else upto
+    peak = float(journal.get(journal.mode_key(KV_PEAK)) or 0.0)
+    if upto > cursor:
+        peak += transfers(transfer_rows, cursor, upto)
+    # transfers inside the lag window are already in equity but not yet in the peak: leave them out of the
+    # high-water mark, or the next pass adds them a second time (phantom drawdown, #16 review)
+    return max(peak, equity - transfers(transfer_rows, max(cursor, upto))), max(cursor, upto)
+
+
+def _advance_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int) -> None:
+    peak, cursor = _peak(journal, equity, transfer_rows, now_ms)
+    journal.set(journal.mode_key(KV_PEAK), str(peak))
+    journal.set(journal.mode_key(KV_CURSOR), str(cursor))
 
 
 def reset_peak(journal, equity: float, reason: str) -> dict[str, Any]:

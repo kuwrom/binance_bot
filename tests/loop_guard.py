@@ -1,0 +1,60 @@
+"""Guard (#79): a write the guardian runs on its event loop outside a non-waiting unit (journal_writer.py) is a write
+that can sleep in SQLite's busy handler and stall every lane. `loop_writes(g)` collects each such statement, with the
+code that ran it, on the journal and every store connection the guardian holds."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+
+WRITES = ("INSERT", "UPDATE", "DELETE", "REPLACE")
+STORES = ("journal.py", "journal_research.py", "journal_writer.py", "intents.py")
+
+
+def _on_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _site() -> str:
+    for f in reversed(traceback.extract_stack()[:-3]):
+        if "/shortbot/" in f.filename and os.path.basename(f.filename) not in STORES:
+            return f"{os.path.basename(f.filename)}:{f.lineno} {f.name}"
+    return "?"
+
+
+def connections(g: Any) -> list[Any]:
+    out = [g.j.db]
+    for name in ("liq_store", "social_store"):
+        store = getattr(g, name, None)
+        if store is not None:
+            out.append(store.db)
+    return out
+
+
+@contextmanager
+def loop_writes(g: Any) -> Iterator[list[str]]:
+    bad: list[str] = []
+
+    def watch(db: Any):
+        def cb(sql: str) -> None:
+            verb = sql.lstrip().split(None, 1)[0].upper()
+            unit = getattr(db, "unit", None) if getattr(db, "unit_depth", 0) else None
+            if verb in WRITES and _on_loop() and unit in (None, "run"):
+                bad.append(f"{_site()}: {' '.join(sql.split())[:70]}")
+        return cb
+    dbs = connections(g)
+    for db in dbs:
+        db.set_trace_callback(watch(db))
+    try:
+        yield bad
+    finally:
+        for db in dbs:
+            db.set_trace_callback(None)

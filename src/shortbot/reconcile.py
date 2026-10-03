@@ -144,16 +144,23 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
                                                                 until_ms))[0]
     if inc["liquidated"] and "liquidat" not in reason:
         reason = f"LIQUIDATED ({reason})"
-    j.close_trade(trade["id"], exit_px, inc["net"], reason, lesson,
-                  gross_pnl=inc["gross"], fees=inc["fees"], funding=inc["funding"] + inc["liq_fee"])
-    if episode:
-        j.update_trade(trade["id"], closed_at=ms_to_iso(episode["closed_ms"]))
+    await j.write(_close_row, trade["id"], exit_px, inc, reason, lesson,
+                  ms_to_iso(episode["closed_ms"]) if episode else None)
     if given:   # rebuilt here: the desk's close, whose fills it benchmarks live (#35)
         fill_quality.record_episode(trader, trade, episode,   # mainnet refs for its fills not yet referenced (#35)
                                     targets.order_kinds(j, trade["id"]))   # its resting targets' fills say so
     j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,
                                                                       "exit": exit_px})
     return {"trade_id": trade["id"], "symbol": trade["symbol"], "exit": exit_px, **inc, "reason": reason}
+
+
+def _close_row(j, trade_id: int, exit_px: float | None, inc: dict[str, Any], reason: str, lesson: str,
+               closed_at: str | None) -> None:
+    """The trade's close, one unit (journal.write: an event loop never waits for the lock)."""
+    j.close_trade(trade_id, exit_px, inc["net"], reason, lesson, gross_pnl=inc["gross"], fees=inc["fees"],
+                  funding=inc["funding"] + inc["liq_fee"])
+    if closed_at:
+        j.update_trade(trade_id, closed_at=closed_at)
 
 
 async def own_episode(trader, trade: dict[str, Any]) -> dict[str, Any] | None:

@@ -59,7 +59,7 @@ async def test_an_order_binance_forgot_after_its_gtd_retires_the_entry_and_its_p
     fake.advance(3 * 86400 + 3700)                               # the guardian was down: GTD lapsed, then forgotten
     with pytest.raises(ccxt.OrderNotFound):
         await d.poll()                                           # not past its TTL by the desk's clock: kept, raised
-    d._update(eid, expires_ms=0)
+    await d._update(eid, expires_ms=0)
     assert [x["event"] for x in await d.poll()] == ["expired"]
     assert d.pending() == [] and fake.prearms == {}
     assert "forgot" in d._rows("id=?", (eid,))[0]["reason"]

@@ -308,7 +308,4 @@ class UserStream:
     def _persist(self) -> None:
         snap = {**self.stats, "up": self.up, "lanes": self.extra_stats(),
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-        try:
-            self.j.set(self.j.mode_key(STATS_KEY), json.dumps(snap, default=str))
-        except Exception:  # noqa: BLE001 - stats only: a locked DB costs one snapshot
-            log.exception("user stream stats not written")
+        self.j.post(lambda j: j.set(j.mode_key(STATS_KEY), json.dumps(snap, default=str)))   # stats only: posted

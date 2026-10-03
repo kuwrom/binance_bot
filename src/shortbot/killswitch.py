@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import killswitch_rearm as rearm
+from .journal import Journal
 
 log = logging.getLogger("shortbot.killswitch")
 ACTIVE, REDUCING, HALTED = "ACTIVE", "REDUCING", "HALTED"
@@ -75,7 +76,7 @@ def read(j) -> dict[str, Any]:
 
 def _cas(j, old: str | None, new: dict[str, Any], also: dict[str, str] | None = None) -> bool:
     """Write `new` only if the row still holds `old` (one statement: atomic across processes); `also` (kv rows) is
-    written in the same transaction, and only when the swap happened."""
+    written in the same transaction, and only when the swap happened. Run as a unit: await j.write(_cas, ...)."""
     if old is None:
         n = j.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (KV_KEY, json.dumps(new))).rowcount
     else:
@@ -108,7 +109,7 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
         if parsed and LEVEL[cur["state"]] >= LEVEL[state]:
             if cur.get("cause") != STALE or cause == STALE:
                 return {"ok": True, "changed": False, **read(j)}
-            if _cas(j, raw, {**cur, "since": [*cur.get("since", []), {k: row[k] for k in _KEEP}]}):
+            if await j.write(_cas, raw, {**cur, "since": [*cur.get("since", []), {k: row[k] for k in _KEEP}]}):
                 j.log_decision("kill_switch_noted", f"{state} by {by} during a stale-heartbeat halt: {reason}",
                                None, snapshot={**row, "evidence": evidence})
                 return {"ok": True, "changed": False, **read(j)}
@@ -116,12 +117,12 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
         new = {**row, "prev": cur["state"]}
         if cause == STALE:   # what the auto-clear restores
             new["prev_row"] = {k: cur.get(k) for k in _KEEP}
-        if _cas(j, raw, new):
+        if await j.write(_cas, raw, new):
             break
     else:
         raise RuntimeError("kill switch state kept changing under us; trip again")
     if cause == STALE:
-        j.set(FRESH_KEY, "{}")
+        j.post(Journal.set, FRESH_KEY, "{}")
     j.log_decision("kill_switch", f"{cur['state']} -> {state} by {by}: {reason}", None,
                    snapshot={**new, "evidence": evidence})
     await notify(j, settings, "kill_switch", f"{state} (was {cur['state']}) by {by}: {reason}. Allowed now: "
@@ -141,7 +142,7 @@ async def clear(j, settings, state: str, by: str, reason: str, shown: str | None
     row = {"state": state, "level": LEVEL[state], "by": by, "reason": reason.strip(), "at": _now_iso(),
            "cause": "human", "prev": prev["state"]}
     stored = rearm.encode(hold, by, row["at"])
-    if not _cas(j, shown, row, also={j.mode_key(rearm.KV_HOLD): stored}):
+    if not await j.write(_cas, shown, row, also={j.mode_key(rearm.KV_HOLD): stored}):
         return {"ok": False, "error": f"the kill-switch state changed while you were confirming (now {prev['state']} "
                                       f"by {prev.get('by')}: {prev.get('reason')}): nothing changed, re-run"}
     j.log_decision("kill_switch_clear", f"{prev['state']} -> {state} by {by}: {reason}", None,
@@ -166,7 +167,7 @@ def _fresh_passes(j, now: float | None) -> int:
         n, last = n + 1, hb
     else:
         return n
-    j.set(FRESH_KEY, json.dumps({"n": n, "hb": last}))
+    j.post(Journal.set, FRESH_KEY, json.dumps({"n": n, "hb": last}))
     return n
 
 
@@ -191,9 +192,9 @@ async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, A
     else:
         new = {**back, "restored_at": _now_iso()}
     new = {**new, "level": LEVEL[new["state"]], "prev": HALTED}
-    if not _cas(j, raw, new):
+    if not await j.write(_cas, raw, new):
         return None
-    j.set(FRESH_KEY, "{}")
+    j.post(Journal.set, FRESH_KEY, "{}")
     j.log_decision("kill_switch_auto_clear", f"HALTED (stale heartbeat) -> {new['state']}", None,
                    snapshot={"restored": new, "cleared": {k: st.get(k) for k in _KEEP}})
     await notify(j, settings, "kill_switch_clear", f"stale-heartbeat halt lifted: guardian is back. Now {new['state']}"

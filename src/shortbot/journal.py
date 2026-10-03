@@ -147,7 +147,7 @@ class Journal(ResearchStore):
         await self.w.flush()
 
     def _migrate(self) -> None:
-        for table, cols in {"trades": TRADE_COLUMNS, **AUDIT_COLUMNS}.items():
+        for table, cols in {"trades": TRADE_COLUMNS, "intents": intents.COLUMNS, **AUDIT_COLUMNS}.items():
             have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
             for col, ddl in cols.items():
                 if col not in have:
@@ -202,7 +202,8 @@ class Journal(ResearchStore):
         if trade_id is None and isinstance(snapshot, dict) and type(snapshot.get("trade_id")) is int:
             trade_id = snapshot["trade_id"]
         return self.post(
-            Journal._insert, "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot, actor, claude_session,"
+            Journal._insert,
+            "INSERT INTO decisions (ts, session_id, symbol, action, reasoning, snapshot, actor, claude_session,"
             " code_version, trade_id, mode, intent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (now_iso(), session_id if session_id is not None else self.session_of(st["claude_session"]), symbol,
              action, redact(reasoning),
@@ -336,7 +337,8 @@ class Journal(ResearchStore):
         """Posted, like log_decision."""
         st = audit.stamp()
         return self.post(
-            Journal._insert, "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode,"
+            Journal._insert,
+            "INSERT INTO alerts (ts, symbol, kind, message, actor, session_id, claude_session, code_version, mode,"
             " intent_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (now_iso(), symbol, kind, redact(message),   # no signed URL or token in a row
              st["actor"], self.session_of(st["claude_session"]), st["claude_session"], st["code_version"], self.mode,

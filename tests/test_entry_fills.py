@@ -156,7 +156,7 @@ async def test_an_order_adopted_after_its_round_trip_was_journalled_links_to_tha
     d, t, fake = desk()
     fake.price = 1.035
     a, b = (x["entry_id"] for x in (await d.propose_group([prop(1.04), prop(1.06, stop=1.12)]))["placed"])
-    d._update(b, status="unknown", order_id=None)               # its send's outcome unknown (#13): no order id
+    await d._update(b, status="unknown", order_id=None)               # its send's outcome unknown (#13): no order id
     fake.price = 1.13
     # the poll looks it up by client id after a's round trip (#60): adopted (found, filled) and linked, same pass
     ev, linked = await d.poll()

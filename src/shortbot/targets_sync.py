@@ -99,16 +99,17 @@ async def _landed(tr, row: dict, o: dict, why: str | None = None) -> None:
     as the position shrank lands smaller, and its row takes the size it has."""
     st, amount = o.get("status"), float(o.get("amount") or 0)
     if row["status"] in ("placing", "unknown") and 0 < amount < float(row["qty"]) - 1e-12:
-        targets.move(tr.j, row, row["status"], f"capped at the position by Binance: {amount:g} of {row['qty']:g}",
-                     qty=amount)
+        await targets.move(tr.j, row, row["status"],
+                           f"capped at the position by Binance: {amount:g} of {row['qty']:g}", qty=amount)
     if st == "open":
         if row["status"] != "resting":
-            targets.move(tr.j, row, "resting", "on the book", order_id=str(o["id"]))
-        targets.note_fill(tr, row, o, final=False)
+            await targets.move(tr.j, row, "resting", "on the book", order_id=str(o["id"]))
+        await targets.note_fill(tr, row, o, final=False)
         return
-    targets.note_fill(tr, row, o, final=True)
+    await targets.note_fill(tr, row, o, final=True)
     new = FINAL.get(st, "gone")
-    targets.move(tr.j, row, new, why or f"left the book: {st}", ex=st, order_id=str(o.get("id") or row.get("order_id")))
+    await targets.move(tr.j, row, new, why or f"left the book: {st}", ex=st,
+                       order_id=str(o.get("id") or row.get("order_id")))
     if why is None and new in ("cancelled", "expired"):   # Binance took it away: the drill wants to see each one
         tr.j.log_decision("target_gone", f"target {row['target']:g} left the book: {st}", row["symbol"], snapshot={
             "trade_id": row["trade_id"], "target": row["target"], "order": row.get("order_id"), "status": st,
@@ -127,9 +128,9 @@ async def _settle(tr, symbol: str, on_book: dict) -> None:
         if o is not None:
             await _landed(tr, row, o)
         elif row["status"] == "resting":
-            targets.move(tr.j, row, "gone", "off the book and unknown to Binance (unfilled, forgotten)")
+            await targets.move(tr.j, row, "gone", "off the book and unknown to Binance (unfilled, forgotten)")
         elif _age(row) > GRACE_S:
-            targets.move(tr.j, row, "lost", "never reached the book: not found by its client id")
+            await targets.move(tr.j, row, "lost", "never reached the book: not found by its client id")
 
 
 async def _cancel(tr, symbol: str, o: dict, row: dict | None, why: str) -> bool:
@@ -159,14 +160,14 @@ async def _cancel(tr, symbol: str, o: dict, row: dict | None, why: str) -> bool:
 
 async def _place(tr, symbol: str, trade: dict, w: dict) -> None:
     cid = clientid.new("target", trade["id"])
-    rid = targets.add(tr.j, trade["id"], symbol, w["target"], w["price"], w["qty"], cid)
+    rid = await targets.add(tr.j, trade["id"], symbol, w["target"], w["price"], w["qty"], cid)
     row = targets.rows(tr.j, "id=?", (rid,))[0]
     try:
         o = await tr.place_reduce_limit(symbol, w["qty"], w["price"], cid)
     except Exception as e:  # noqa: BLE001 - classified: refused is journalled and told, unknown found by its id
         kind = errors.classify(e)
         if not kind.unknown:
-            targets.move(tr.j, row, "rejected", f"refused: {errors.describe(e)}")
+            await targets.move(tr.j, row, "rejected", f"refused: {errors.describe(e)}")
             await tr.alert("target_rejected", f"target {w['target']:g} ({w['qty']:g} @ {w['price']:g}) refused: "
                            f"{errors.describe(e)}. Not retried at this size for an hour; the guardian's market "
                            "fallback covers it", symbol, False)
@@ -178,7 +179,8 @@ async def _place(tr, symbol: str, trade: dict, w: dict) -> None:
         except Exception:  # noqa: BLE001 - still unknown
             o = None
         if o is None:
-            targets.move(tr.j, row, "unknown", f"send status unknown ({type(e).__name__}): resolved by client id")
+            await targets.move(tr.j, row, "unknown",
+                               f"send status unknown ({type(e).__name__}): resolved by client id")
             return
     await _landed(tr, row, o)
 

@@ -85,32 +85,38 @@ def live(j, symbol: str | None = None) -> list[dict[str, Any]]:
     return rows(j, q + (" AND symbol=?" if symbol else ""), (*LIVE, *((symbol,) if symbol else ())))
 
 
-def add(j, trade_id: int, symbol: str, target: float, price: float, qty: float, cid: str) -> int:
-    """The write-ahead row: journalled BEFORE the order is sent."""
+async def add(j, trade_id: int, symbol: str, target: float, price: float, qty: float, cid: str) -> int:
+    """The write-ahead row: journalled BEFORE the order is sent (a unit its caller awaits: the loop never waits)."""
     ensure(j)
+    return await j.write(_add, trade_id, symbol, target, price, qty, cid)
+
+
+def _add(j, trade_id: int, symbol: str, target: float, price: float, qty: float, cid: str) -> int:
     hist = json.dumps([{"at": now_iso(), "status": "placing", "why": f"{qty:g} @ {price:g}"}])
     cur = j.db.execute("INSERT INTO target_orders (trade_id, symbol, target, price, qty, client_id, status, created_at,"
                        " history, mode) VALUES (?,?,?,?,?,?,'placing',?,?,?)",
                        (trade_id, symbol, target, price, qty, cid, now_iso(), hist, j.mode))
-    j.db.commit()
     return int(cur.lastrowid)
 
 
-def move(j, row: dict[str, Any], status: str, why: str, ex: str | None = None, **fields: Any) -> bool:
+async def move(j, row: dict[str, Any], status: str, why: str, ex: str | None = None, **fields: Any) -> bool:
     """Compare-and-set from the row's current status (another process may have moved it); the change is appended to
     its history. Returns whether this call moved it."""
+    return await j.write(_move, row, status, why, ex, fields)
+
+
+def _move(j, row: dict[str, Any], status: str, why: str, ex: str | None, fields: dict[str, Any]) -> bool:
     sets = ", ".join(f"{k}=?" for k in fields)
     entry = json.dumps({"at": now_iso(), "status": status, "why": why, **({"ex": ex} if ex else {})})
     cur = j.db.execute(f"UPDATE target_orders SET status=?, why=?, updated_at=?, {sets + ', ' if sets else ''}"
                        "history=json_insert(history, '$[#]', json(?)) WHERE id=? AND status=?",
                        (status, why, now_iso(), *fields.values(), entry, row["id"], row["status"]))
-    j.db.commit()
     if cur.rowcount:
         row.update(status=status, why=why, **fields)
     return bool(cur.rowcount)
 
 
-def note_fill(tr, row: dict[str, Any], o: dict[str, Any], final: bool) -> float:
+async def note_fill(tr, row: dict[str, Any], o: dict[str, Any], final: bool) -> float:
     """Journal what order `o` (ccxt) of target row `row` filled since the row last saw it: the row (filled, avg,
     fill_ms), a `target_fill` decision (a size event, close_intent.SIZE_EVENTS), the mainnet reference once the order
     is final (fill_quality, one per order), and targets_hit once the target is complete. Returns the new quantity."""
@@ -119,27 +125,34 @@ def note_fill(tr, row: dict[str, Any], o: dict[str, Any], final: bool) -> float:
     info = o.get("info") or {}
     ms = int(o.get("lastTradeTimestamp") or info.get("updateTime") or 0) or int(time.time() * 1000)
     avg = float(o.get("average") or 0) or float(row.get("avg") or 0) or row["price"]
-    if new > 0:
-        cur = j.db.execute("UPDATE target_orders SET filled=?, avg=?, fill_ms=?, updated_at=? WHERE id=? AND filled=?",
-                           (filled, avg, ms, now_iso(), row["id"], row.get("filled") or 0))
-        j.db.commit()
-        if cur.rowcount:   # this process saw it first: journalled once
-            row.update(filled=filled, avg=avg, fill_ms=ms)
-            j.log_decision("target_fill", f"target {row['target']:g}: {new:g} filled", row["symbol"], snapshot={
-                "trade_id": row["trade_id"], "target": row["target"], "order": str(o.get("id")),
-                "client_id": row["client_id"], "amount": new, "filled": filled, "qty": row["qty"], "px": avg,
-                "ms": ms, "status": o.get("status"), "slip_bps": round((avg - row["target"]) / row["target"] * 1e4, 2)})
-        else:
-            new = 0.0
+    if new > 0 and not await j.write(_filled, row, o, filled, avg, ms, new):
+        new = 0.0
     if final and filled > 0:
         fill_quality.record(tr, row["trade_id"], "exit", "target", {**o, "average": avg, "lastTradeTimestamp": ms})
     if final and filled >= float(row["qty"]) - 1e-12:
-        mark_hit(j, row["trade_id"], row["target"])
+        await mark_hit(j, row["trade_id"], row["target"])
     return max(new, 0.0)
 
 
-def mark_hit(j, trade_id: int, price: float) -> None:
-    """Add a target to the trade's targets_hit, re-read first: several writers in one pass never drop each other's."""
+def _filled(j, row: dict[str, Any], o: dict[str, Any], filled: float, avg: float, ms: int, new: float) -> bool:
+    cur = j.db.execute("UPDATE target_orders SET filled=?, avg=?, fill_ms=?, updated_at=? WHERE id=? AND filled=?",
+                       (filled, avg, ms, now_iso(), row["id"], row.get("filled") or 0))
+    if not cur.rowcount:   # another process saw it first: journalled once
+        return False
+    row.update(filled=filled, avg=avg, fill_ms=ms)
+    j.log_decision("target_fill", f"target {row['target']:g}: {new:g} filled", row["symbol"], snapshot={
+        "trade_id": row["trade_id"], "target": row["target"], "order": str(o.get("id")),
+        "client_id": row["client_id"], "amount": new, "filled": filled, "qty": row["qty"], "px": avg,
+        "ms": ms, "status": o.get("status"), "slip_bps": round((avg - row["target"]) / row["target"] * 1e4, 2)})
+    return True
+
+
+async def mark_hit(j, trade_id: int, price: float) -> None:
+    """Add a target to the trade's targets_hit, re-read first (one unit): several writers never drop each other's."""
+    await j.write(_mark_hit, trade_id, price)
+
+
+def _mark_hit(j, trade_id: int, price: float) -> None:
     t = j.get_trade(trade_id)
     if t and price not in (t.get("targets_hit") or []):
         j.update_trade(t["id"], targets_hit=[*(t.get("targets_hit") or []), price])
