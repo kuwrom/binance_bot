@@ -9,7 +9,8 @@
   or the positions pass at once (TRIGGER_GAP_S apart at most); the polls stay the truth and keep their schedule
 
 Jobs run in lanes (guardian_loop.py) that run concurrently: protective (fills, stops, plans), watch (alerts on
-open shorts), monitor (account and market alerts), research, and scan (tiers 1-3 at each 15m close). Every position and every job is isolated and
+open shorts), monitor (account and market alerts), research, scan (tiers 1-3 at each 15m close) and coins (the focus
+coins' memory, guardian_coins.py). Every position and every job is isolated and
 time-boxed, and a slow or hung job only ever delays its own lane, never the protective one. No journal write waits on
 the event loop for another process's write lock (#79, journal_writer.py): a job awaits a write it needs (only its lane
 waits) or posts bookkeeping (nothing waits); a wait past STALL_ALERT_S is alerted with the lock's holder.
@@ -26,6 +27,7 @@ from . import audit, procs
 from .app import FLUSH_S, close_app, get_app
 from .entries import EntryDesk
 from .gateway import LocalGateway
+from .guardian_coins import CoinJobs
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
 from .guardian_margin import MarginChecks
@@ -74,7 +76,9 @@ RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200,
 SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
         "cadence_shadow": (60, 50),   # #40: logs two rules every minute on live bars; no deep scores, no alerts
         "mtf_views": (60, 50)}        # #41: every coin's 5m-1d state at each 15m close, logged; no exchange calls
+COINS = {"coin_memory": (900, 300)}   # focus coins: state, events, break scores (coin_memory.py); alerts, never acts
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
+DELAYED_LANES = ("research", "scan", "coins")   # they start RESEARCH_START_DELAY_S after the others
 # a user-data event runs its job at once, but no sooner than this after the job's last start: a burst is one run, and
 # the positions pass (account and income reads) runs at most 4x a minute however many stop or target events come
 TRIGGER_GAP_S = {"entries": 1.0, "positions": 15.0}
@@ -82,7 +86,7 @@ TICK_S = 1.0
 STALL_ALERT_S = 60.0   # a journal write waiting this long for another process's lock is alerted, naming the holder
 
 
-class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs):
+class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs, CoinJobs):
     """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
     the kill-switch loss trips (daily loss, dd_stop) and the governor verdict (its halt withdraws resting entries,
     entry_gates.py) follow an active experiment's limits, the ones the session places and sizes under."""
@@ -130,7 +134,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
                "ladder": self.ladder_shadow, "laggard": self.laggard_study, "long_shadow": self.long_shadow,
                "scan": self.tiered_scan, "cadence_shadow": self.cadence_shadow, "mtf_views": self.mtf_views,
-               "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops}
+               "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops,
+               "coin_memory": self.coin_memory}
 
         def lane(name: str, table: dict, **kw) -> Lane:
             return Lane(name, [Job(k, fns[k], *v) for k, v in table.items()], self.n, self.ex, self.j, TICK_S, **kw)
@@ -138,7 +143,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                                    escalate_note=FAILING),
                 "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
                 "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH),
-                "scan": lane("scan", SCAN)}
+                "scan": lane("scan", SCAN), "coins": lane("coins", COINS)}
 
     def _on_stream_event(self, hit, at: float) -> None:
         """A user-data event about one of our orders (user_events.py): its job runs now, `at` = when it arrived."""
@@ -195,7 +200,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
     async def run(self) -> None:
         await self._startup()
         self.lanes = self._lanes()
-        runs = {name: (lambda ln=ln, d=RESEARCH_START_DELAY_S if name in ("research", "scan") else 0.0: ln.run(d))
+        runs = {name: (lambda ln=ln, d=RESEARCH_START_DELAY_S if name in DELAYED_LANES else 0.0: ln.run(d))
                 for name, ln in self.lanes.items()}
         # continuous liquidation recording (websocket; the only source of Binance liquidation data)
         runs["liquidations"] = LiquidationRecorder(self.liq_store).run

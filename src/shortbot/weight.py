@@ -57,7 +57,8 @@ _RATE_LIMITS = re.compile(r'"rateLimits"\s*:\s*(\[[^\]]*\])')
 
 # guardian lanes (guardian.py) -> class; a job named in GUARDIAN_JOBS overrides its lane
 GUARDIAN_LANES = {"protective": PROTECTIVE, "watch": PROTECTIVE, "monitor": RESEARCH, "research": RESEARCH,
-                  "scan": RESEARCH}   # the tiered scan (#72); its deep scores narrow themselves to TIER2
+                  "scan": RESEARCH,   # the tiered scan (#72); its deep scores narrow themselves to TIER2
+                  "coins": RESEARCH}  # coin memory (guardian_coins.py)
 GUARDIAN_JOBS = {"governor": PROTECTIVE,       # the kill-switch drawdown trip; a halt withdraws resting entries
                  "margin_mode": PROTECTIVE}    # margin checks
 
