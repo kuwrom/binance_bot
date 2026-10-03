@@ -108,7 +108,7 @@ def test_disconnect_then_gap_backfill_once(tmp_path):
         asyncio.run(col.run_one(names))
     with pytest.raises(ConnectionError):
         asyncio.run(col.run_one(names))
-    assert calls == [("SOL/USDT:USDT", "15m", T0 + 2 * M15, S.BACKFILL_LIMIT)]   # only the missing bars
+    assert calls == [("SOL/USDT:USDT", "15m", T0 + 2 * M15, S.BACKFILL["15m"])]   # only the missing bars
     got = S.candles("SOLUSDT", "15m", 6, p, now_ms=later)
     assert [r[0] for r in got] == [T0 + i * M15 for i in range(6)] and got[-1][4] == 15
     asyncio.run(col.fill_gaps(col.symbols))
@@ -133,5 +133,5 @@ def test_failed_backfill_is_not_retried_and_leaves_none(tmp_path):
 def test_groups_respect_the_stream_cap():
     syms = [f"C{i}USDT" for i in range(183)]
     gs = S.groups(syms)
-    assert sum(map(len, gs)) == 2 + 183 * 2 and all(len(g) <= S.MAX_STREAMS_PER_CONN for g in gs)
+    assert sum(map(len, gs)) == 2 + 183 * len(S.TFS) and all(len(g) <= S.MAX_STREAMS_PER_CONN for g in gs)
     assert gs[0][:2] == list(S.ALL_MARKET) and "c0usdt@kline_15m" in gs[0]

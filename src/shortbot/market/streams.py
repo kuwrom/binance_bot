@@ -11,13 +11,17 @@ Binance docs (websocket-market-streams/Connect, read 2026-10-02):
 - clients may send 10 messages/s (we send none: streams go in the URL);
 - "IPs that are repeatedly disconnected may be banned", hence the exponential backoff.
 
-Updates are buffered in memory and written once per second in a single transaction, so ~1400 kline msg/s cost
-one commit. Store: data/streams.db, its own WAL file, with one writer (the collector) and readers that tolerate a
-missing file. Rows are keyed by the Binance id (BTCUSDT); readers also accept ccxt symbols (BTC/USDT:USDT).
+Timeframes: every one the live code reads (docs/SCANNING.md "Timeframes"): 1m, 5m, 15m, 1h, 4h and 1d are
+streamed; 30m is built from 5m on read (stream_read.py, exact). ~182 coins x 6 streams ≈ 4,200 msg/s, measured at
+3.2 us each: ~13 ms of CPU per second, on the collector's own thread (stream_task.py).
+Updates are buffered in memory and written once per second in a single transaction. Store: data/streams.db, its own
+WAL file, with one writer (the collector) and readers that tolerate a missing file (stream_read.py). Rows are keyed
+by the Binance id (BTCUSDT); readers also accept ccxt symbols (BTC/USDT:USDT). Bars carry the quote volume and the
+taker-buy base and quote volumes, so the flow features read the store too.
 After each (re)connect, a (symbol, tf) whose last closed bar is older than the previous bar is backfilled once over
-REST. That is bounded: the last BACKFILL_LIMIT bars, at weight 1 per call.
+REST, to the depth its readers use (BACKFILL, weight 1-2 per call).
 
-    reader: candles(symbol, tf, n) -> [[ts, o, h, l, c, v], ...] or None when not fresh or gapped
+    readers: candles(symbol, tf, n), flow_candles(symbol, tf, n) -> rows or None when not fresh or gapped
 """
 
 from __future__ import annotations
@@ -32,22 +36,26 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from .. import clock as market_clock   # market time (a replay pins it)
-
 log = logging.getLogger("shortbot.streams")
 BASE = "wss://fstream.binance.com/market/stream?streams="
 DB_PATH = "data/streams.db"
-TF_MS = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
-TFS = ("15m", "1h")
+TF_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000,
+         "1d": 86_400_000}
+TFS = ("1m", "5m", "15m", "1h", "4h", "1d")   # streamed
+DERIVED = {"30m": "5m"}                       # built on read from the base timeframe
+READABLE = TFS + tuple(DERIVED)
+# backfill depth = the deepest live reader, +margin (klines weight: < 100 bars 1, 100-499 2): flow 1m x60, flow and
+# mark 5m x288, 15m x120 (tier 1) / x96, 1h x170 (market map), 4h x60, 1d x200 (BTC x400, risk budget)
+BACKFILL = {"1m": 99, "5m": 300, "15m": 130, "1h": 200, "4h": 99, "1d": 400}
+KEEP = {"1m": 1500, "5m": 900, "15m": 500, "30m": 0, "1h": 500, "4h": 300, "1d": 500}   # bars kept per timeframe
 ALL_MARKET = ("!ticker@arr", "!markPrice@arr@1s")
 MAX_STREAMS_PER_CONN = 200   # Binance allows 1024; two sockets halve what one drop loses
 RECONNECT_S = 23 * 3600      # before Binance's 24 h cut, at a time of our choosing
 RECV_TIMEOUT_S = 60          # markPrice@arr@1s ticks every second: a minute of silence is a dead socket
-BACKFILL_LIMIT = 99          # klines weight is 1 below 100 bars
-KEEP_BARS = 500
+COLS = "symbol, tf, ts, o, h, l, c, v, q, tbq, closed, tbv"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS candles (symbol TEXT, tf TEXT, ts INTEGER, o REAL, h REAL, l REAL, c REAL, v REAL,
-    q REAL, tbq REAL, closed INTEGER, PRIMARY KEY (symbol, tf, ts)) WITHOUT ROWID;
+    q REAL, tbq REAL, closed INTEGER, tbv REAL, PRIMARY KEY (symbol, tf, ts)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS latest (kind TEXT, symbol TEXT, ts INTEGER, data TEXT, PRIMARY KEY (kind, symbol))
     WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS fresh (symbol TEXT, stream TEXT, ts INTEGER, PRIMARY KEY (symbol, stream)) WITHOUT ROWID;
@@ -67,6 +75,8 @@ class StreamStore:
         self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=15)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        if "tbv" not in {r[1] for r in self.db.execute("PRAGMA table_info(candles)")}:   # a pre-2026-10-03 store
+            self.db.execute("ALTER TABLE candles ADD COLUMN tbv REAL")
         self.bars_buf: dict[tuple[str, str, int], tuple] = {}
         self.latest_buf: dict[tuple[str, str], tuple[int, str]] = {}
         self.fresh_buf: dict[tuple[str, str], int] = {}
@@ -75,22 +85,27 @@ class StreamStore:
         s = k["s"]
         self.bars_buf[(s, k["i"], int(k["t"]))] = (float(k["o"]), float(k["h"]), float(k["l"]), float(k["c"]),
                                                    float(k["v"]), float(k["q"]), float(k.get("Q") or 0),
-                                                   int(bool(k["x"])))
+                                                   int(bool(k["x"])), float(k.get("V") or 0))
         self.fresh_buf[(s, f"kline_{k['i']}")] = now_ms
 
     def latest(self, kind: str, symbol: str, data: dict[str, Any], now_ms: int) -> None:
         self.latest_buf[(kind, symbol)] = (now_ms, json.dumps(data))
         self.fresh_buf[(symbol, kind)] = now_ms
 
-    def bars(self, symbol: str, tf: str, rows: list[list[float]], now_ms: int) -> int:
-        """REST rows [ts, o, h, l, c, v] (ccxt shape), written at once: all but a still-forming bar are closed. A bar
-        the stream already holds keeps its taker volumes."""
+    def bars(self, symbol: str, tf: str, rows: list[list[Any]], now_ms: int) -> int:
+        """REST rows written at once: all but a still-forming bar are closed. Raw Binance klines (12 fields, strings)
+        carry the quote and taker volumes; ccxt OHLCV rows [ts, o, h, l, c, v] don't, and then a bar the stream
+        already holds keeps its own."""
         step, sym = TF_MS[tf], raw_id(symbol)
         for r in rows:
-            self.db.execute("INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,NULL,NULL,?) ON CONFLICT DO UPDATE SET "
-                            "o=excluded.o, h=excluded.h, l=excluded.l, c=excluded.c, v=excluded.v, "
-                            "closed=excluded.closed", (sym, tf, int(r[0]), *map(float, r[1:6]),
-                                                       int(r[0] + step <= now_ms)))
+            ts, ohlcv, closed = int(r[0]), tuple(float(x) for x in r[1:6]), int(int(r[0]) + step <= now_ms)
+            if len(r) >= 11:
+                self.db.execute(f"INSERT OR REPLACE INTO candles ({COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (sym, tf, ts, *ohlcv, float(r[7]), float(r[10]), closed, float(r[9])))
+            else:
+                self.db.execute(f"INSERT INTO candles ({COLS}) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,?,NULL) ON CONFLICT "
+                                "DO UPDATE SET o=excluded.o, h=excluded.h, l=excluded.l, c=excluded.c, v=excluded.v, "
+                                "closed=excluded.closed", (sym, tf, ts, *ohlcv, closed))
         self.db.commit()
         return len(rows)
 
@@ -99,7 +114,7 @@ class StreamStore:
         if not n:
             return 0
         with self.db:
-            self.db.executemany("INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            self.db.executemany(f"INSERT OR REPLACE INTO candles ({COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                                 [(*key, *row) for key, row in self.bars_buf.items()])
             self.db.executemany("INSERT OR REPLACE INTO latest VALUES (?,?,?,?)",
                                 [(*key, *row) for key, row in self.latest_buf.items()])
@@ -113,10 +128,10 @@ class StreamStore:
                                (raw_id(symbol), tf)).fetchone()[0]
 
     def prune(self, now_ms: int) -> int:
-        """Keep the last KEEP_BARS bars per timeframe (by time); returns the bars deleted."""
+        """Keep the last KEEP[tf] bars per timeframe (by time); returns the bars deleted."""
         with self.db:
             return sum(self.db.execute("DELETE FROM candles WHERE tf=? AND ts < ?",
-                                       (tf, now_ms - KEEP_BARS * step)).rowcount for tf, step in TF_MS.items())
+                                       (tf, now_ms - KEEP[tf] * TF_MS[tf])).rowcount for tf in TFS)
 
 
 def handle(store: StreamStore, msg: dict[str, Any], now_ms: int) -> str | None:
@@ -148,7 +163,7 @@ def groups(symbols: list[str], tfs: tuple[str, ...] = TFS) -> list[list[str]]:
 
 def gaps(store: StreamStore, symbols: list[str], tfs: tuple[str, ...], now_ms: int) -> list[tuple[str, str, int]]:
     """(symbol, tf, since_ms) whose last closed bar is older than the previous bar. `since` covers the missing bars,
-    capped to the last BACKFILL_LIMIT (an older hole stays outside every window candles() serves)."""
+    capped to the last BACKFILL[tf] bars (an older hole stays outside every window the readers serve)."""
     out = []
     for s in symbols:
         for tf in tfs:
@@ -156,7 +171,7 @@ def gaps(store: StreamStore, symbols: list[str], tfs: tuple[str, ...], now_ms: i
             current = now_ms // step * step
             last = store.last_closed(s, tf)
             if last is None or last < current - step:
-                floor = current - (BACKFILL_LIMIT - 1) * step
+                floor = current - (BACKFILL[tf] - 1) * step
                 out.append((s, tf, max(last + step, floor) if last is not None else floor))
     return out
 
@@ -191,7 +206,7 @@ class StreamCollector:
             self.backfilled.add((s, tf, since))
             self.backfill_calls += 1
             try:
-                n += self.store.bars(s, tf, await self.backfill(s, tf, since, BACKFILL_LIMIT),
+                n += self.store.bars(s, tf, await self.backfill(s, tf, since, BACKFILL[tf]),
                                      int(self.clock() * 1000))
             except Exception as e:  # noqa: BLE001 - research data: log, leave the gap visible
                 log.warning("backfill %s %s failed: %s", s, tf, e)
@@ -245,119 +260,10 @@ def _ssl() -> ssl.SSLContext:
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
-# ------------------------------------------------------------------ readers (any process; missing file -> None)
-# Every reader is bounded by "now" (the market clock): rows written after it are a replay's future (#29). Live,
-# nothing in the store is newer than now.
-def path_for(db_path: str | Path | None) -> Path | None:
-    """The store beside the journal (data/shortbot.db -> data/streams.db); None for an in-memory journal (tests)."""
-    if not db_path or str(db_path) == ":memory:":
-        return None
-    return Path(db_path).parent / "streams.db"
+# ------------------------------------------------------------------ readers: stream_read.py (re-exported here)
+from .stream_read import (  # noqa: E402  (stream_read imports this module's constants)
+    candles, flow_candles, fresh_symbols, freshness, latest, path_for, stale)
 
-
-def _ro(path: str | Path) -> sqlite3.Connection | None:
-    p = Path(path)
-    if not p.exists():
-        return None
-    try:
-        return sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=5)
-    except sqlite3.Error:
-        return None
-
-
-def _now(now_ms: int | None) -> int:
-    return now_ms if now_ms is not None else market_clock.now_ms()
-
-
-def candles(symbol: str, tf: str, n: int, path: str | Path = DB_PATH, now_ms: int | None = None,
-            max_age_s: float | None = None) -> list[list[float]] | None:
-    """The last n bars [ts, o, h, l, c, v], closed plus the forming one (like REST), when fresh: the last closed bar
-    is at most 1 bar old and the closed bars have no gap. With max_age_s, the symbol's kline stream must also have
-    updated within it: complete-looking bars from a socket that went quiet are stale (the forming bar stopped).
-    Otherwise None, and the caller falls back to REST."""
-    if tf not in TF_MS or n < 1:
-        return None
-    db = _ro(path)
-    if db is None:
-        return None
-    now, sym = _now(now_ms), raw_id(symbol)
-    try:
-        rows = db.execute("SELECT ts, o, h, l, c, v, closed FROM candles WHERE symbol=? AND tf=? AND ts <= ? "
-                          "ORDER BY ts DESC LIMIT ?", (sym, tf, now, n + 2)).fetchall()
-        seen = db.execute("SELECT ts FROM fresh WHERE symbol=? AND stream=?", (sym, f"kline_{tf}")).fetchone() \
-            if max_age_s is not None else None
-    except sqlite3.Error:
-        return None
-    finally:
-        db.close()
-    if max_age_s is not None and (seen is None or not now - max_age_s * 1000 <= seen[0] <= now):
-        return None
-    step = TF_MS[tf]
-    if any(r[6] and r[0] + step > now for r in rows):
-        return None                                                  # closed after now: a replay's future
-    closed = [r for r in rows if r[6]]
-    if not closed or closed[0][0] < now // step * step - 2 * step:   # last closed bar more than 1 bar old
-        return None
-    forming = [r for r in rows if not r[6] and r[0] > closed[0][0]]
-    if len(forming) > 1 or (forming and forming[0][0] != closed[0][0] + step):
-        return None                                                  # a missed close: that bar is incomplete
-    window = list(reversed(forming + closed))[-n:]
-    if len(window) < n or any(b[0] - a[0] != step for a, b in zip(window, window[1:])):
-        return None                                                  # too short, or a gap inside the window
-    return [list(r[:6]) for r in window]
-
-
-def freshness(path: str | Path = DB_PATH, now_ms: int | None = None) -> dict[str, Any] | None:
-    """Per stream kind: {"symbols": n, "oldest_s": age, "newest_s": age} of the last updates (None: no file)."""
-    db = _ro(path)
-    if db is None:
-        return None
-    now = _now(now_ms)
-    try:
-        return {stream: {"symbols": n, "oldest_s": round((now - lo) / 1000), "newest_s": round((now - hi) / 1000)}
-                for stream, n, lo, hi in db.execute("SELECT stream, COUNT(*), MIN(ts), MAX(ts) FROM fresh "
-                                                    "WHERE ts <= ? GROUP BY stream", (now,))}
-    except sqlite3.Error:
-        return None
-    finally:
-        db.close()
-
-
-def stale(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int | None = None) -> list[str]:
-    """Symbols whose last `stream` update is older than max_age_s (or after now: unusable at now)."""
-    db = _ro(path)
-    if db is None:
-        return []
-    now = _now(now_ms)
-    try:
-        return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND (ts < ? OR ts > ?) "
-                                         "ORDER BY symbol", (stream, now - max_age_s * 1000, now))]
-    finally:
-        db.close()
-
-
-def fresh_symbols(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int | None = None) -> list[str]:
-    """Symbols whose last `stream` update is at most max_age_s old: what the collector is streaming right now."""
-    db = _ro(path)
-    if db is None:
-        return []
-    now = _now(now_ms)
-    try:
-        return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND ts BETWEEN ? AND ? "
-                                         "ORDER BY symbol", (stream, now - max_age_s * 1000, now))]
-    finally:
-        db.close()
-
-
-def latest(kind: str, path: str | Path = DB_PATH, max_age_s: float = 120,
-           now_ms: int | None = None) -> dict[str, dict[str, Any]]:
-    """{symbol: data} of the ticker / mark rows younger than max_age_s ({} when the file is missing)."""
-    db = _ro(path)
-    if db is None:
-        return {}
-    now = _now(now_ms)
-    try:
-        return {s: json.loads(d) for s, d in db.execute("SELECT symbol, data FROM latest WHERE kind=? AND ts BETWEEN "
-                                                        "? AND ?", (kind, now - max_age_s * 1000, now))}
-    finally:
-        db.close()
+__all__ = ["BACKFILL", "DERIVED", "KEEP", "READABLE", "TFS", "TF_MS", "StreamCollector", "StreamStore", "candles",
+           "flow_candles", "fresh_symbols", "freshness", "gaps", "groups", "handle", "latest", "path_for", "raw_id",
+           "stale"]

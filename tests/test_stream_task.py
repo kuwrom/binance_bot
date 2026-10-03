@@ -24,7 +24,7 @@ A, B, C = "AAA/USDT:USDT", "BBB/USDT:USDT", "CCC/USDT:USDT"
 class Ex:
     def __init__(self, vols):
         self.vols, self.seen = vols, []
-        self.public = SimpleNamespace(fetch_tickers=self.fetch_tickers, fetch_ohlcv=self.fetch_ohlcv)
+        self.public = SimpleNamespace(fetch_tickers=self.fetch_tickers, fapiPublicGetKlines=self.klines)
 
     async def coin_perps(self):
         return {s: {} for s in (A, B, C)}
@@ -33,9 +33,11 @@ class Ex:
         self.seen.append(("tickers", weight.current()))
         return {s: {"symbol": s, "quoteVolume": v} for s, v in self.vols.items()}
 
-    async def fetch_ohlcv(self, sym, tf, since=None, limit=None):
-        self.seen.append(("ohlcv", weight.current(), asyncio.get_running_loop(), threading.get_ident()))
-        return [[since, 1.0, 1.0, 1.0, 1.0, 1.0]]
+    async def klines(self, params):
+        """Raw /fapi/v1/klines rows (12 fields, numbers as strings), as Binance answers."""
+        self.seen.append(("klines", weight.current(), asyncio.get_running_loop(), threading.get_ident(), params))
+        t = params["startTime"]
+        return [[t, "1", "1", "1", "1", "1", t + 899_999, "1", 3, "0.5", "0.5", "0"]]
 
 
 async def test_liquid_universe_is_the_5m_volume_floor_tagged_research():
@@ -69,8 +71,9 @@ async def test_collector_runs_in_its_own_thread_and_backfills_on_the_guardian_lo
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    _, cls, loop, tid = next(s for s in ex.seen if s[0] == "ohlcv")
-    assert got["symbols"] == [A] and got["rows"] == [[123, 1.0, 1.0, 1.0, 1.0, 1.0]]
+    _, cls, loop, tid, params = next(s for s in ex.seen if s[0] == "klines")
+    assert got["symbols"] == [A] and got["rows"][0][:6] == [123, "1", "1", "1", "1", "1"]
+    assert params == {"symbol": "AAAUSDT", "interval": "15m", "startTime": 123, "limit": 99}
     assert cls == weight.RESEARCH and loop is asyncio.get_running_loop() and tid == threading.get_ident()
     assert got["thread"] != threading.get_ident() and isinstance(got["store"], S.StreamStore)
 
@@ -99,11 +102,11 @@ async def test_the_real_collector_fills_the_store_from_its_thread(tmp_path):
     ex, db = Ex({A: 6e6}), tmp_path / "streams.db"
     task = asyncio.create_task(T.StreamTask(ex, db, collector=collector).run())
     await until(lambda: S.fresh_symbols("kline_15m", 90, db) == ["AAAUSDT"] and S.latest("mark", db), timeout=5)
-    await until(lambda: any(s[0] == "ohlcv" for s in ex.seen))      # the gap backfill, via the guardian's loop
+    await until(lambda: any(s[0] == "klines" for s in ex.seen))     # the gap backfill, via the guardian's loop
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert all(s[1] == weight.RESEARCH and s[3] == threading.get_ident() for s in ex.seen if s[0] == "ohlcv")
+    assert all(s[1] == weight.RESEARCH and s[3] == threading.get_ident() for s in ex.seen if s[0] == "klines")
 
 
 async def test_a_universe_change_restarts_the_collector(tmp_path):
@@ -245,9 +248,9 @@ async def test_housekeeping_prunes_the_stream_store(tmp_path, monkeypatch):
     step = S.TF_MS["15m"]
     now = int(time.time() * 1000) // step * step
     st = S.StreamStore(g.streams_db)
-    st.bars("AAA/USDT:USDT", "15m", [[now - k * step, 1, 1, 1, 1, 1] for k in range(S.KEEP_BARS + 10)], now)
+    st.bars("AAA/USDT:USDT", "15m", [[now - k * step, 1, 1, 1, 1, 1] for k in range(S.KEEP["15m"] + 10)], now)
     await g.housekeeping()
     n = st.db.execute("SELECT COUNT(*), MIN(ts) FROM candles").fetchone()
-    assert n[0] == S.KEEP_BARS and n[1] > now - S.KEEP_BARS * step
+    assert n[0] == S.KEEP["15m"] and n[1] > now - S.KEEP["15m"] * step
     g.streams_db = None
     await g.housekeeping()                                # no store: nothing to prune, no error

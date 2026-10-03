@@ -172,5 +172,5 @@ def test_readers_never_return_rows_written_after_now(tmp_path):
 def test_path_for_and_prune_count(tmp_path):
     assert S.path_for(":memory:") is None and S.path_for("") is None and S.path_for(None) is None
     assert S.path_for(tmp_path / "shortbot.db") == tmp_path / "streams.db"
-    st = fill(tmp_path, rows=bars(n=S.KEEP_BARS + 30))
+    st = fill(tmp_path, rows=bars(n=S.KEEP["1h"] + 30))
     assert st.prune(NOW) == 30 and st.prune(NOW) == 0

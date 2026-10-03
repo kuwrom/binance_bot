@@ -105,8 +105,9 @@ async def evaluate(ctx: MarketContext, groups: tuple[str, ...] | None = None,
 
     await asyncio.gather(*(run(s) for s in first))
     merged: dict[str, Any] = {"symbol": ctx.symbol}
-    for o in outs.values():
-        merged.update(o.features)
+    for s in first:   # registry order, not completion order: a shared key and the logged JSON stay deterministic
+        if s.name in outs:
+            merged.update(outs[s.name].features)
     for g in guards:
         await run(g, dict(merged))
         merged.update(outs.get(g.name, SignalOut()).features)

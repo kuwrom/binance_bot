@@ -9,7 +9,7 @@ stays there.
 - Universe: coin perps with 24h quote volume >= LIQUID_MIN_QV ($5M, ~183 coins; below that the backtest loses,
   docs/BACKTEST.md). It is refreshed every UNIVERSE_REFRESH_S, and the collector restarts only when the set changed.
   A failed refresh keeps the current set.
-- Backfill after each (re)connect: `ex.public.fetch_ohlcv`, tagged research. ccxt's client lives on the guardian's
+- Backfill after each (re)connect: raw `/fapi/v1/klines` (taker volumes included), tagged research. ccxt's client lives on the guardian's
   loop, so the call is sent there (run_coroutine_threadsafe) and the collector's thread awaits the answer.
 - The store (data/streams.db beside the journal) is opened inside the thread; housekeeping prunes it (`prune`).
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from . import weight
-from .market.streams import StreamCollector, StreamStore
+from .market.streams import StreamCollector, StreamStore, raw_id
 
 log = logging.getLogger("shortbot.streams")
 LIQUID_MIN_QV = 5e6
@@ -146,10 +146,12 @@ class StreamTask:
             return await asyncio.wrap_future(fut)
         return backfill
 
-    async def _fetch(self, symbol: str, tf: str, since_ms: int, limit: int) -> list[list[float]]:
-        """On the guardian's loop (ccxt's client is bound to it): research, yielding to protective calls."""
+    async def _fetch(self, symbol: str, tf: str, since_ms: int, limit: int) -> list[list[Any]]:
+        """On the guardian's loop (ccxt's client is bound to it): research, yielding to protective calls. Raw klines,
+        so backfilled bars carry their quote and taker-buy volumes (the flow features read them)."""
         with weight.tagged(weight.RESEARCH, wait_s=BACKFILL_WAIT_S):
-            return await self.ex.public.fetch_ohlcv(symbol, tf, since=since_ms, limit=limit)
+            return await self.ex.public.fapiPublicGetKlines({"symbol": raw_id(symbol), "interval": tf,
+                                                             "startTime": since_ms, "limit": limit})
 
     async def _universe(self) -> list[str] | None:
         try:
@@ -167,7 +169,7 @@ class StreamTask:
 
 
 def prune(path: Path | str | None, now_ms: int | None = None) -> int:
-    """Housekeeping: drop bars older than KEEP_BARS on a connection of its own (run it in a worker thread)."""
+    """Housekeeping: drop bars older than KEEP[tf] on a connection of its own (run it in a worker thread)."""
     if path is None or not Path(path).exists():
         return 0
     st = StreamStore(path)

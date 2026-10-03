@@ -6,8 +6,9 @@ fail closed). Adding a new data source = adding one getter here; every signal ca
     ctx = hub.context("SUI/USDT:USDT", ticker)      # cheap; nothing fetched yet
     c1h = await ctx.candles("1h", 60)                 # fetched once, cached on the context
 
-Candles for the streamed timeframes (15m, 1h) come from the guardian's stream store (market/streams.py, #72) when
-they are fresh for the caller, else REST; `ctx.sources` records which, per timeframe (features.candle_source).
+Candles (1m, 5m, 15m, 30m, 1h, 4h, 1d) and flow candles (with taker-buy volume) come from the guardian's stream
+store (market/streams.py, #72) when they are fresh for the caller, else REST; `ctx.sources` records which, per
+timeframe (features.candle_source; flow under "flow_<tf>").
 """
 
 from __future__ import annotations
@@ -70,11 +71,19 @@ class DataHub:
     async def stream_candles(self, symbol: str, tf: str, limit: int,
                              max_age_s: float | None = None) -> list[list[float]] | None:
         """The store's bars when fresh for the caller (max_age_s, default by weight class), else None (use REST)."""
-        if self.streams_db is None or tf not in streams.TFS:
+        return await self._stream(streams.candles, symbol, tf, limit, max_age_s)
+
+    async def stream_flow(self, symbol: str, tf: str, limit: int,
+                          max_age_s: float | None = None) -> list[list[float]] | None:
+        """[ts, o, h, l, c, v, taker_buy_vol] from the store when fresh and complete, else None (use REST)."""
+        return await self._stream(streams.flow_candles, symbol, tf, limit, max_age_s)
+
+    async def _stream(self, reader, symbol: str, tf: str, limit: int, max_age_s: float | None):
+        if self.streams_db is None or tf not in streams.READABLE:
             return None
         age = max_age_s if max_age_s is not None else STREAM_MAX_AGE_S.get(weight.current(), 15.0)
         try:   # off the event loop: a busy store must not stall the guardian's lanes
-            return await asyncio.to_thread(streams.candles, symbol, tf, limit, self.streams_db, clock.now_ms(), age)
+            return await asyncio.to_thread(reader, symbol, tf, limit, self.streams_db, clock.now_ms(), age)
         except Exception:  # noqa: BLE001 - an unreadable cache is a miss
             return None
 
@@ -192,8 +201,14 @@ class MarketContext:
 
     # ---------------------------------------------------------------- tape feeds
     async def flow_candles(self, tf: str = "5m", limit: int = 288) -> list[list[float]]:
-        """[ts, o, h, l, c, vol, taker_buy_vol] - CVD / taker imbalance / sweeps with volume."""
-        return await self._get(("flow", tf, limit), f"flow_{tf}", lambda: self.ex.flow_klines(self.symbol, tf, limit), [])
+        """[ts, o, h, l, c, vol, taker_buy_vol] - CVD / taker imbalance / sweeps with volume: the stream store's when
+        fresh (module doc), else REST."""
+        async def fetch():
+            rows = await self.hub.stream_flow(self.symbol, tf, limit)
+            src, prev, key = ("stream" if rows else "rest"), self.sources.get(f"flow_{tf}"), f"flow_{tf}"
+            self.sources[key] = src if prev in (None, src) else "mixed"
+            return rows or await self.ex.flow_klines(self.symbol, tf, limit)
+        return await self._get(("flow", tf, limit), f"flow_{tf}", fetch, [])
 
     async def mark_candles(self, tf: str = "5m", limit: int = 96) -> list[list[float]]:
         """MARK-price klines (index-anchored; what our stops trigger on): [ts, o, h, l, c, 0]."""

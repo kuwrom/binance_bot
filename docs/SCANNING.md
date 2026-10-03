@@ -189,6 +189,45 @@ The estimate above (6-8 weight per coin) assumed every kline came from streams. 
 
 The store serves only `ctx.candles` for 15m and 1h: its reader returns OHLCV, not the taker-buy volume the flow candles need, and 5m/1m, mark, premium, 4h and 1d aren't streamed. `TIER2_CAP` is therefore 600 (20 coins). The tiered scan measures the real spend per window (`scan_windows.tier2_weight`) and plans the next batch with its EWMA. Re-set the cap from those rows.
 
+## Timeframes (2026-10-03)
+**What the code reads**, from a full inventory of signals, setups, guardian jobs, the scanner and research:
+
+| timeframe | live readers | depth |
+|---|---|---|
+| 1m | close quality and painted closes (every deep score), sweep acceptance, BTC/ETH 15-min impulse (market pause), warm-up | 60 (16 for BTC/ETH) |
+| 5m | taker imbalance, volume heat, mark-gap, volatility (σ), squeeze watch on open positions, scan labels | 288 (labels 864) |
+| 15m | sweep / CVD signals, tier-1 triggers, snapshot | 96-120 |
+| 30m | none live: only the untested intraday_tsmom card (first 30 min) | — |
+| 1h | core stretch / structure (critical input), pump, perp-vs-spot, market map (every coin ≥ $10M, every 10 min) | 60-170 |
+| 4h | hype fade, snapshot, BTC regime | 18-60 |
+| 1d | lifecycle, controller, BTC risk-budget regime, long shadow | 200-400 |
+
+**What the evidence says about resolution:**
+- **Speed matters for pump fades at the minute scale.** In the live-pipeline replay, 725 episodes entered 5-15 min late lost another 0.02-0.03 R (paired t ≈ −3; BACKTEST.md replay table).
+- **The trailing verdict is the same on 5m and 1h bars** (≤ 0.008 R apart; ROUND4.md §4).
+- **Close-only checks miss touches:** 23% of them on 15m closes and 38% on 1h closes (PROBABILITY.md).
+- **Hourly long triggers fail; daily ones work** (LONG_PLAYBOOK.md).
+
+**What is streamed (market/streams.py):**
+- **Streamed:** 1m, 5m, 15m, 1h, 4h and 1d for the liquid universe. ~182 coins × 6 = ~1,100 streams on 6 sockets, ~4,200 msg/s. At 3.2 µs per message that is ~13 ms of CPU per second, on the collector's thread.
+- **30m is built from 5m on read.** 1m bars aggregate exactly to Binance's own 5m / 15m / 30m / 1h: 84 of 84 bars identical, taker-buy volume included (BTC, SOL, BAT, 2026-10-02).
+- **Taker-buy base volume is stored**, so `ctx.flow_candles` (1m, 5m, 15m, 1h) reads the store too. Backfills use raw `/fapi/v1/klines` for the same reason.
+- **Backfill depth per timeframe** covers the deepest live reader: 1m 99, 5m 300, 15m 130, 1h 200, 4h 99, 1d 400. That is weight 1-2 per call, ~1,800 weight for a cold start, yielding to protective calls.
+
+**Still REST:**
+- order book (10);
+- mark klines (5m × 288: 2; 1m after a sweep: 1);
+- premium 1h (1);
+- OI and ratio history (~7);
+- funding tables (~2);
+- spot 1h on the spot host.
+
+Mark and premium klines have no kline stream. Building them from `!markPrice@arr@1s` is possible but unverified against Binance's own mark klines.
+
+**Expected tier-2 cost:** ~20 weight per coin, down from ~29. The 1d, 4h, 5m / 1m / 15m / 1h flow and 1h candle reads move to the store. Confirm from `scan_windows.tier2_weight` after the restart, then re-set `TIER2_CAP`.
+
+**Cadence (next, task #40):** tier 1 still evaluates at 15m closes, with the fast events every 15 s. With 1m bars in the store, the same rules can run on windows ending at every minute. The replay's latency cost says that should pay. The pre-registered study on 93 days of 1m replay bars decides the cadence before it is wired.
+
 ## Tier-2 order book: depth stays at limit 500 (measured 2026-10-02)
 The depth signal (`signals/depth.py`) sums the book within ±1% of mid. A 500-level book costs 10 weight; 100 levels cost 5. Of the ~29 weight a deep score costs (binance-bot-99's #72 measurement), 10 is the book.
 - Live books for 57 coins, limit 500 against its first 100 levels: the first 100 levels miss part of the ±1% band on **10 of the 15 top-volume coins**, capturing BTC 13%, ETH 12%, HYPE 7%, ENA 32%.
