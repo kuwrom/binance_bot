@@ -45,11 +45,16 @@ class NoStream:
 
 
 def fast_guardian(monkeypatch, research_delay=0.0):
+    """A guardian on 10 ms ticks whose slow jobs are no-ops: for real they reach the network (announcements, social,
+    calendar, supply, market map) or spawn the weekly refresh (#80). A test sets its own over them."""
     monkeypatch.setattr(gmod, "TICK_S", 0.01)
     monkeypatch.setattr(gmod, "RESEARCH_START_DELAY_S", research_delay)
     monkeypatch.setattr(gmod, "PROTECTIVE", {"entries": (0.01, 5), "positions": (0.01, 5)})
     monkeypatch.setattr(gmod, "LiquidationRecorder", NoStream)
-    return guardian_with(FakeCcxt())
+    g = guardian_with(FakeCcxt())
+    for name in SLOW_JOBS:
+        setattr(g, name, noop)
+    return g
 
 
 async def test_hung_slow_jobs_never_delay_the_protective_lane(monkeypatch):

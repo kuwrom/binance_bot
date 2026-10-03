@@ -15,8 +15,10 @@ journal's, so a Docker install writes to /app/data/research):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -27,6 +29,39 @@ KV_KEY = "research_refresh_at"
 EVERY_S = 7 * 86_400
 RETRY_S = 6 * 3600
 HIST_DAYS = 64
+CMD = (sys.executable, "-m", "shortbot.refresh")   # what the guardian spawns
+STOP_GRACE_S = 5.0                                 # SIGTERM to the group, then SIGKILL
+
+
+async def spawn() -> asyncio.subprocess.Process:
+    """Start the refresh as the leader of a new process group (#80): the histdata and backtest steps it runs join that
+    group, so stop() ends them all. Started in the guardian's group, they outlived a guardian that stopped."""
+    return await asyncio.create_subprocess_exec(*CMD, stdout=asyncio.subprocess.DEVNULL,
+                                                stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:   # the group is gone
+        pass
+
+
+async def stop(proc: asyncio.subprocess.Process | None, grace_s: float = STOP_GRACE_S) -> bool:
+    """End a spawned refresh and every process in its group: SIGTERM, then SIGKILL after grace_s for anything left (a
+    step that ignored SIGTERM, or one its leader left behind). True when the refresh was still running, i.e. its run
+    was cut short. A refresh that already finished is left alone: it waited for its steps and wrote its own next run,
+    and its pid may belong to another process by now."""
+    if proc is None or proc.returncode is not None:
+        return False
+    _signal_group(proc.pid, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), grace_s)
+    except TimeoutError:
+        pass
+    _signal_group(proc.pid, signal.SIGKILL)
+    await proc.wait()
+    return True
 
 
 def due(journal, now: float | None = None) -> bool:

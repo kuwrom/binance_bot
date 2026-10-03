@@ -123,6 +123,7 @@ def test_outputs_go_under_the_journals_data_dir_and_never_overwrite(tmp_path, mo
     assert P.rerun_args(["--days60", "--out", "x", "--no-save", "--out=y", "--round3"]) == ["--days60", "--round3"]
 
 
+@pytest.mark.spawns_shortbot   # the recorded rerun command in a fresh process: a local backtest on tmp_path's hist.db
 def test_backtest_results_carry_sha_fingerprint_config_and_rerun_reproduces(tmp_path, monkeypatch, capsys):
     from shortbot.backtest import run
     monkeypatch.setenv("SHORTBOT_DB", str(tmp_path / "data" / "shortbot.db"))

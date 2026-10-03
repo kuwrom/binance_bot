@@ -15,7 +15,18 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+NO_DOTENV = "SHORTBOT_NO_DOTENV"   # set (the test suite sets it before importing shortbot): .env is never loaded
+
+
+def load_env() -> bool:
+    """The checkout's .env into os.environ, once, at import; variables already set win. python-dotenv finds it by
+    walking up from this file, not from the working directory, so any process importing shortbot from the checkout
+    loads it: the guardian, MCP servers, the CLI, and every module that reads os.getenv (provenance, backup) after
+    this import. Skipped under NO_DOTENV, which the processes a test run starts inherit too (#80)."""
+    return False if os.getenv(NO_DOTENV) else load_dotenv()
+
+
+load_env()
 
 LIVE_CONFIRM_PHRASE = "I_ACCEPT_REAL_MONEY_RISK"
 

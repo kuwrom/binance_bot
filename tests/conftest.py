@@ -5,25 +5,38 @@ from pathlib import Path
 
 import pytest
 
-from tests import data_guard
+from tests import data_guard, net_guard
+
+# Before anything imports shortbot.config, whose import loads the checkout's .env (the desk's keys and Telegram token):
+# with this set it doesn't, here or in any process a test starts (#80).
+os.environ["SHORTBOT_NO_DOTENV"] = "1"
+assert "shortbot.config" not in sys.modules, "shortbot was imported before tests/conftest.py: .env may be loaded"
 
 _GUARD = data_guard.SESSION
+_NET = net_guard.SESSION
 _BEFORE = pytest.StashKey[dict]()
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", f"{net_guard.SPAWN_MARK}: the test starts a shortbot module or script in a "
+                            "child process on purpose (tests/net_guard.py)")
 
 
 def pytest_sessionstart(session):
     session.config.stash[_BEFORE] = data_guard.snapshot(data_guard.REPO_DATA)
     sys.addaudithook(_GUARD)
+    sys.addaudithook(_NET)
 
 
 def pytest_runtest_logstart(nodeid, location):
-    _GUARD.test = nodeid
+    _GUARD.test = _NET.test = nodeid
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Fail the run if it wrote under data/ (tests/data_guard.py)."""
+    """Fail the run if it wrote under data/ (tests/data_guard.py) or reached the network outside a test
+    (tests/net_guard.py: a background thread still running after its test ended)."""
     changed = data_guard.changes(session.config.stash[_BEFORE], data_guard.snapshot(data_guard.REPO_DATA))
-    lines = [f"blocked: {s}" for s in _GUARD.seen]
+    lines = [f"blocked: {s}" for s in _GUARD.seen + _NET.seen]   # _NET: attempts no test's teardown reported
     if changed and (os.getenv("CI") or _GUARD.seen):
         lines += [f"changed: {c}" for c in changed]
     elif changed:
@@ -32,28 +45,46 @@ def pytest_sessionfinish(session, exitstatus):
     if lines:
         tr = session.config.pluginmanager.get_plugin("terminalreporter")
         if tr:
-            tr.write_sep("=", "data guard (#43)", red=bool(_GUARD.seen or os.getenv("CI")))
+            red = bool(_GUARD.seen or _NET.seen or os.getenv("CI"))
+            tr.write_sep("=", "data and network guards (#43, #80)", red=red)
             for line in lines:
                 tr.write_line(line)
-    if _GUARD.seen or (changed and os.getenv("CI")):
+    if _GUARD.seen or _NET.seen or (changed and os.getenv("CI")):
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture(autouse=True)
 def isolated_data(tmp_path_factory, monkeypatch):
-    """No test touches the live desk (#43). The journal (SHORTBOT_DB, hence provenance.data_dir() and every store beside
-    it: research/*.db incl. long_shadow and trials, locks, backups) lives in a fresh temp dir, which is also the working
-    directory, so a relative "data/..." default (streams.db, hist.db, daily.db, logs, charts) lands there too. .env is
-    loaded first (config import), so a path it sets can't come back mid-test; the ones derived from the journal are
-    dropped. A test that needs a path sets it itself."""
-    importlib.import_module("shortbot.config")
+    """No test touches the live desk (#43) or holds its secrets (#80). The journal (SHORTBOT_DB, hence
+    provenance.data_dir() and every store beside it: research/*.db incl. long_shadow and trials, locks, backups) lives in
+    a fresh temp dir, which is also the working directory, so a relative "data/..." default (streams.db, hist.db,
+    daily.db, logs, charts) lands there too. .env is never loaded (SHORTBOT_NO_DOTENV, above); what the shell exported is
+    dropped: every BINANCE_* / TELEGRAM_* key and token, LIVE_CONFIRM, and every SHORTBOT_* setting but the journal path
+    and the flag. A test that needs one sets it itself. The app singleton starts empty: a keyed app one test built via
+    get_app() never reaches the next."""
     root = tmp_path_factory.mktemp("desk")
     (root / "data").mkdir()
+    for k in [k for k in os.environ if k.startswith(("BINANCE_", "TELEGRAM_", "SHORTBOT_")) or k == "LIVE_CONFIRM"]:
+        if k != "SHORTBOT_NO_DOTENV":
+            monkeypatch.delenv(k)
     monkeypatch.setenv("SHORTBOT_DB", str(root / "data" / "shortbot.db"))
-    for k in ("SHORTBOT_TRIALS_DB", "SHORTBOT_BACKUP_DIR", "SHORTBOT_BACKUP_OFFBOX"):
-        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(importlib.import_module("shortbot.app"), "_app", None)
     monkeypatch.chdir(root)
     return root
+
+
+@pytest.fixture(autouse=True)
+def no_network(request):
+    """No test reaches the network or starts a shortbot process (#80, tests/net_guard.py): an attempt fails the test
+    that made it, even when the code under test swallowed the refusal."""
+    n = len(_NET.seen)
+    _NET.spawn_ok = request.node.get_closest_marker(net_guard.SPAWN_MARK) is not None
+    yield
+    _NET.spawn_ok = False
+    hits = _NET.seen[n:]
+    del _NET.seen[n:]   # reported here; the session summary keeps only attempts made outside a test
+    if hits:
+        pytest.fail("\n".join(hits), pytrace=False)
 
 
 @pytest.fixture(autouse=True)

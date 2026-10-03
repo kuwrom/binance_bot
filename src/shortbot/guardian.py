@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 from pathlib import Path
 
 from . import audit, procs
@@ -198,9 +199,13 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await self.stop_refresh()   # after the lanes: none can start another one now
 
 
 async def _main() -> None:
+    main_task = asyncio.current_task()
+    if main_task:   # `kill` / `docker stop` (SIGTERM) cancel the guardian, so its shutdown runs (#80)
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, main_task.cancel)
     try:
         await Guardian().run()
     finally:
@@ -212,7 +217,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     install_log_redaction()   # a traceback of a signed ccxt call carries its URL (#66)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    asyncio.run(_main())
+    try:
+        asyncio.run(_main())
+    except asyncio.CancelledError:   # SIGTERM, after a clean shutdown: exit as a terminated process does
+        raise SystemExit(128 + signal.SIGTERM) from None
 
 
 if __name__ == "__main__":

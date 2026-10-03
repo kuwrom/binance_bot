@@ -7,7 +7,6 @@ import asyncio
 import importlib
 import logging
 import re
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,7 +14,7 @@ from typing import Any
 from . import killswitch as ks
 from . import entry_gates, news, procs, research, scan_job, setup_ladder, stream_task
 from .exchange import to_raw
-from .guardian_loop import guarded
+from .guardian_loop import guarded, send_safe
 from .market.regime import market_regime
 from .market.social import snapshot as social_snapshot
 from .probability.labels import label_due as label_predictions
@@ -99,11 +98,21 @@ class MarketJobs:
         if (self._refresh_proc and self._refresh_proc.returncode is None) or not refresh.due(self.j):
             return
         self.j.set(refresh.KV_KEY, str(time.time()))   # claim the week now, so a restart doesn't spawn twice
-        self._refresh_proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "shortbot.refresh", stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL)
+        self._refresh_proc = await refresh.spawn()     # its own process group: stop_refresh ends it with its steps
         await self.n.send("research_refresh", "weekly research refresh started (data, backtest ledger, registry)",
                           None, cooldown_s=3600)
+
+    async def stop_refresh(self) -> None:
+        """Shutdown (#80): the refresh child and every step it started end with the guardian. A run cut short is
+        retried in RETRY_S, as a failed run is (the week was claimed when it started)."""
+        from . import refresh
+        proc, self._refresh_proc = self._refresh_proc, None
+        try:
+            if await refresh.stop(proc):
+                self.j.set(refresh.KV_KEY, str(time.time() - refresh.EVERY_S + refresh.RETRY_S))
+        except Exception as e:  # noqa: BLE001 - shutdown goes on; the human is told
+            await send_safe(self.n, "research_refresh_stop_failed", f"the research refresh (pid {proc and proc.pid}) "
+                            f"may still be running: {type(e).__name__}: {e}", cooldown_s=0)
 
     async def check_processes(self) -> None:
         """Hourly (#58): live shortbot-mcp / shortbot-guardian processes that are unregistered or run code older than
