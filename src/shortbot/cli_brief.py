@@ -63,6 +63,11 @@ async def brief(app) -> str:
         lines.append(f"### entry orders on the book ({len(orders)})")
         lines += [f"- #{e['id']} {e['symbol']} {e['status']}: {e['amount']} @ {e['limit_price']}, stop "
                   f"{e['stop_price'] or 'NONE'}" + (f" ⚠️ {e['hint']}" if e.get("hint") else "") for e in orders]
+    try:   # focus coins (coin_memory.py): state, read age and bias, events; never third-party text
+        from .coin_memory import brief_lines as coin_lines
+        lines += coin_lines(j)
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- ⚠️ could not load coin memory: {type(e).__name__}: {e}")
     try:
         lines += alerts_view.brief_lines(j)
     except Exception as e:  # noqa: BLE001

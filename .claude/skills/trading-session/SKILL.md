@@ -26,6 +26,9 @@ The shortbot state was injected at session start: kill switch, stale processes, 
   - Cold means idle ≥ 6h or the first session of the UTC day. Run `warmup_start`, study the tape for 15 minutes (regime, governor, charts), then run `warmup_check`. Trade only coins that persisted.
   - Warm: skip the warm-up.
   - Time predicts volatility, not direction: widen stops or cut size in soft-warning windows. Macro windows are hard vetoes (docs/SESSIONS.md).
+- **Coin memory** (docs/COIN_MEMORY.md): the brief's `### focus coins` lines come from the guardian's 15-min pass over open trades, resting entries, the watchlist and the last hour's top candidates. Run `coin_memory` for the full list and `coin_memory COIN` for one coin: its state against its own 3 days, its events, the break score of an open short, the current read and how earlier reads scored.
+  - A coin with `no read`, or whose read has expired, needs reading again before you lean on it: tells lasted about a day (#79, #80).
+  - During a warm-up, `coin_memory refresh=True` measures the focus coins now instead of waiting for the next pass.
 
 ## 2. Regime
 - Run `market_regime`.
@@ -48,13 +51,25 @@ The shortbot state was injected at session start: kill switch, stale processes, 
 Load the `manage-position` skill, then for each position:
 - `positions` shows the plan, MAE/MFE and the stop on the exchange.
 - `coin_snapshot` shows what changed since entry. Compare it with the plan's invalidation and kill conditions.
+- `coin_memory COIN` shows the break score (#81's 4 machine checks), the events since the last pass and the current read.
 - Decide: hold / tighten (`move_stop`) / partial (`close_position` with a fraction and the `expect_contracts` you saw, or `of_original` for a plan target) / exit / change the plan (`update_plan`). Log the reasoning.
+
+### Coin memory alerts: noise or a real break?
+- **`break_watch`** (urgent) means an open short's break score reached 2 of the 4 machine checks:
+  - *beyond noise*: the move up from its low since entry is larger than the coin's noise band (the larger of its fake-out p90 and its median swing);
+  - *accepted*: 2 closed 15m blocks above the prior high, or above the read's invalidation;
+  - *participation*: price up with OI up and taker buyers ahead (price up with OI down is covering);
+  - *source*: BTC up ≥ 0.8% in 15m.
+
+  Two or more true means a real break; one alone is noise, so wait. Then judge the fifth check yourself: new information (news, a catalyst outcome). Nothing was closed. Decide in manage-position (hold, reduce, breakeven or exit) with a stated reason and probability, log it, and rewrite the read (`update_coin_read`).
+- **`coin_event`** (routine) means new events on a focus coin (`flush`, `retail_flip`, `oi_surge`, `level_accepted`, `entry_near`, `headline`). An event is not a trigger. Re-read the coin (`coin_memory COIN`, `read_coin`, the chart) and rewrite its read if the picture changed. `entry_near` means a resting entry is within half a median swing: check it still fits the plan.
 
 ## 4. Scan and shortlist
 - `scan_shorts`: every scored coin is logged for research automatically. Keep scanning (about every 30 min) while positions are open, not only when flat.
 - Pick 5-10: the top tradable candidates plus anything interesting from `new_listings_30d` or announcements.
 - `book_plan` (`shortbot book-plan`) ranks which candidates fit the open + resting book: free slots, slots 4-5 for event setups only, half size for a repeated setup+sector (learning #30). Pass its `size_mult` on.
 - `coin_snapshot` each one. Load the skill of each candidate's detected setup (`pump-fade`, `listing-fade`, `delisting-short`, `unlock-short`) and apply its checklist.
+- **Coin memory** for each one (`coin_memory COIN`): its scale (median swing, fake-out p90) sizes stops and levels; its regime and events say what it is doing against its own days. Its current read, if any, is where you start; how its earlier reads scored (`read_score`) says how much to trust them.
 - **Read the tape** (docs/TAPE.md). Every row has a `tape` block with `state`, `stance` and `playbooks`:
   - `stand_aside`: no entry. This covers pump in progress, liquidation cascade, accepted breakout and spot-led rally.
   - `fade`: failed sweep.
@@ -78,6 +93,11 @@ Load the `manage-position` skill, then for each position:
   - `live` = evidence-backed. `shadow` = hypothesis.
   - Episodes from `forensics` were picked in hindsight: treat them as anecdotes.
   - Say which card supports the trade. If none does, size as C.
+- **Write the read down** after reading a coin you hold or shortlisted: `update_coin_read` (`shortbot coin-read COIN "<gist>" --bias down --levels '{"resistance": 251.2}' --invalidation 252`).
+  - The gist (≤ 1200 chars) covers what game the coin plays, who is offside and what would change your mind.
+  - The invalidation is a price. An open short's break score checks 2 closes above it.
+  - It replaces the current read and expires in 24h. Expired reads are scored against the move.
+- `watch COIN --reason ... --days N` keeps a forming setup in focus (state every 15 min, events alerted) until it confirms or dies. `watch COIN --remove` takes it off.
 
 ## 5. Prefer limit entries at levels (docs/POSITION_MANAGEMENT.md §c)
 Unless the trigger needs an immediate market entry, place a **group of 3-5 limit shorts**:

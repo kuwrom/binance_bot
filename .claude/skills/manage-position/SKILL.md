@@ -1,7 +1,7 @@
 ---
 name: manage-position
 description: Manage an open short according to its own trade plan - re-check thesis, invalidation, kill conditions, targets, time stop, trailing; decide hold / tighten / partial / exit / update plan.
-when_to_use: Reviewing open positions, a guardian alert (squeeze_risk, stop_near, time stop, review due, target reached, funding_negative, news_on_position, close_incomplete, plan_stop_unreachable, adl_risk, margin_thin), or the user asks "how is my QNT short".
+when_to_use: Reviewing open positions, a guardian alert (squeeze_risk, stop_near, time stop, review due, target reached, funding_negative, news_on_position, close_incomplete, plan_stop_unreachable, adl_risk, margin_thin, break_watch, coin_event), or the user asks "how is my QNT short".
 ---
 
 # Manage a position (per its plan)
@@ -13,6 +13,14 @@ Each trade carries a **plan** (from its setup's defaults plus the entry decision
 - `coin_snapshot <coin>`: structure, funding trend, OI, taker flow, news now.
 - `journal`: the entry thesis (and the learnings for this setup).
 - Deeper, ad-hoc questions: `shortbot.lab` via Bash (see `research-review`).
+
+**Coin memory** (`coin_memory <coin>`, docs/COIN_MEMORY.md) shows:
+- the coin's noise band (fake-out p90, median swing), which sizes stops and the "is this noise?" question;
+- its events since the last pass;
+- the break score of this short;
+- the current read and its invalidation, and how earlier reads scored.
+
+After the review, rewrite the read (`update_coin_read`) if the picture changed.
 
 ## Start zero-based: `.venv/bin/shortbot reassess <coin>`
 Re-plan from the CURRENT price, as if entering now; the entry price is irrelevant (disposition effect, Odean 1998).
@@ -37,6 +45,18 @@ ideal size for today's risk budget, and ranked actions. Rules: docs/POSITION_MAN
    - funding moved to 1h settlement
    - a bullish catalyst in the news
    Any of these: cut or tighten.
+   - `break_watch` (urgent): the break score reached 2 of #81's 4 machine checks:
+     - beyond the noise band;
+     - accepted (2 closed 15m blocks above the prior high, or above the read's invalidation);
+     - participation (price and OI up with taker buyers);
+     - source (BTC +0.8% in 15m).
+
+     Two or more true means a real break; one alone is noise, so don't act on it. The guardian closed nothing. Judge the fifth check yourself: new information (news, a catalyst outcome). Then decide with a stated reason and probability:
+     - hold: you judge it a fake-out and say why;
+     - reduce or breakeven: a real break you're not sure of;
+     - exit: a real break plus new information.
+
+     Log the decision so it can be scored against holding to the plan.
 4. **Targets**: the guardian executes these only if `auto.targets` is set; otherwise it alerts.
    - With an auto flag on (targets, breakeven, trail, time stop), don't do the guardian's job by hand: a manual partial races it. Wait at least 2 min, check `targets_hit` and the `plan_close` alert, and act only if the guardian visibly failed.
    - Without it, take the partial close from the plan with `of_original` (`--of-original`): the fraction is then of the ORIGINAL size, as the plan counts it, so a target the guardian already took closes nothing more (STX 2026-10-01).
