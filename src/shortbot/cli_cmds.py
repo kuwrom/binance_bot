@@ -1,5 +1,5 @@
-"""CLI-only commands (commands.py declarations, no MCP tool): the session brief, studies, the pattern registry, the macro
-calendar, exchange probes, the audit view, backups and the SessionStart hook."""
+"""CLI-only commands (commands.py declarations, no MCP tool): the session brief, studies, the pattern registry, the
+macro calendar, exchange probes, the audit view, backups and the SessionStart hook."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ async def brief() -> str:
     return await session_brief(get_app())
 
 
-@command(mcp=False, cli="study", weight=RESEARCH, help="shadow study results: ladder variants vs hold | laggard catch-up | "
-         "sweeps | patterns (week event study: pumps, sweeps, squeezes, funding x liquidity)", args=(
+@command(mcp=False, cli="study", weight=RESEARCH, help="shadow study results: ladder variants vs hold | laggard "
+         "catch-up | sweeps | patterns (week event study: pumps, sweeps, squeezes, funding x liquidity)", args=(
     Arg("name", choices=("ladder", "laggard", "sweeps", "patterns")),
     Arg("fetch", "--fetch", "patterns: refresh 10 days of hourly data for every perp")))
 async def study(name: str, fetch: bool = False) -> dict[str, Any]:
@@ -56,8 +56,8 @@ async def sweeps(action: str, days: float = 3, top: int = 60) -> dict[str, Any]:
     return sw.report(app.journal)
 
 
-@command(mcp=False, cli="registry", write=True, help="pattern registry: tree | card ID | search TEXT | seed | status ID "
-         "--status S | forward [ID] (the pre-registered forward test of every non-draft node)", args=(
+@command(mcp=False, cli="registry", write=True, help="pattern registry: tree | card ID | search TEXT | seed | status "
+         "ID --status S | forward [ID] (the pre-registered forward test of every non-draft node)", args=(
     Arg("action", choices=("tree", "card", "search", "seed", "status", "forward")), Arg("arg", nargs="?"),
     Arg("status", "--status", choices=("draft", "shadow", "live", "probation", "retired")), Arg("reason", "--reason"),
     Arg("bt_dir", "--bt-dir", "seed: backtest output dir (results.json + trades.json)")))
@@ -94,7 +94,8 @@ async def macro_add(name: str, when: str, kind: str, source: str) -> dict[str, A
     return {"ok": True}
 
 
-@command(mcp=False, cli="macro-refresh", write=True, help="pull BLS + ForexFactory + FOMC dates into the macro calendar")
+@command(mcp=False, cli="macro-refresh", write=True,
+         help="pull BLS + ForexFactory + FOMC dates into the macro calendar")
 async def macro_refresh() -> Any:
     from .market.calendar import MacroCalendar
     return await MacroCalendar(get_app().settings.db_path).refresh()
@@ -117,7 +118,8 @@ async def probe(name: str | None = None, symbol: str = probes.DEFAULT_SYMBOL, al
     return await probes.run(tr, name, symbol)
 
 
-@command(mcp=False, cli="audit", help="who did what: decisions and tool/CLI calls with actor, Claude session, code", args=(
+@command(mcp=False, cli="audit", help="who did what: decisions and tool/CLI calls with actor, Claude session, code",
+         args=(
     Arg("since", "--since", "24h, 7d, 30m or an ISO time (UTC)"),
     Arg("actor", "--actor", "prefix: mcp, cli, guardian, admin, hook, or e.g. mcp:open_short"),
     Arg("action", "--action", "one action, e.g. call, rejected, open"), Arg("limit", "--limit")))

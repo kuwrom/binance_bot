@@ -109,15 +109,6 @@ def _args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return p
 
 
-def add_cli(sub) -> None:
-    """`shortbot book-plan`: registered by cli.py (parsing stays here)."""
-    _args(sub.add_parser("book-plan", help="which scan candidates to work next, given the open + resting book"))
-
-
-async def run_cli(app, args) -> dict[str, Any]:
-    return await book_plan(app, args.top, args.min_change, args.direction)
-
-
 def main() -> None:
     a = _args(argparse.ArgumentParser(prog="python -m shortbot.allocator")).parse_args()
 

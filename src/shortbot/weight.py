@@ -158,11 +158,6 @@ def lane_job(lane: str, job: str, timeout_s: float):
     return tagged(class_for(lane, job), wait_s=max(0.0, timeout_s - JOB_MARGIN_S))
 
 
-def pick(name: str, protective: frozenset[str], research: frozenset[str]) -> str | None:
-    """The class of an MCP tool or CLI command: protective / research by name, else untagged (desk)."""
-    return PROTECTIVE if name in protective else RESEARCH if name in research else None
-
-
 # ------------------------------------------------------------------ responses
 def _header(headers: dict | None, name: str) -> str | None:
     for k, v in (headers or {}).items():

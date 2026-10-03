@@ -85,15 +85,16 @@ async def test_add_learning_tool_requires_a_kind_and_stores_the_sample(monkeypat
 
 
 async def test_cli_learn_takes_the_same_fields(monkeypatch):
-    from shortbot import cli
-    from shortbot.cli_args import build_parser
+    from shortbot import cli, mcp_research
+    from shortbot.commands import build_parser
     j = Journal(":memory:")
-    monkeypatch.setattr(cli, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
+    monkeypatch.setattr(mcp_research, "get_app", lambda *a, **k: SimpleNamespace(journal=j))
 
     async def no_close():
         return None
     monkeypatch.setattr(cli, "close_app", no_close)
-    learn = ["learn", "pumps fade in Asia", "--evidence", "research_report by_session"]
+    learn = ["learn", "pumps fade in Asia", "--evidence", "research_report by_session", "--provenance",
+             "research_report"]
     args = build_parser().parse_args(learn + ["--kind", "statistical", "--n", "41", "--days", "12", "--sample",
                                               "research_report:2026-10-02", "--review-by", "2026-10-20"])
     assert (await cli._run(args))["ok"]
@@ -102,9 +103,9 @@ async def test_cli_learn_takes_the_same_fields(monkeypatch):
     with pytest.raises(SystemExit):
         build_parser().parse_args(learn + ["--kind", "vibes"])
     with pytest.raises(ValueError, match="review_by"):
-        await cli._run(build_parser().parse_args(learn + ["--review-by", "next week"]))
-    await cli._run(build_parser().parse_args(["learn", "no kind given", "--evidence", "e"]))   # optional: flagged
-    assert [r["kind"] for r in j.learnings() if r["statement"] == "no kind given"] == [None]
+        await cli._run(build_parser().parse_args(learn + ["--kind", "process", "--review-by", "next week"]))
+    with pytest.raises(SystemExit):   # required, as add_learning requires it (the CLI used to store kind NULL)
+        build_parser().parse_args(["learn", "no kind given", "--evidence", "e", "--provenance", "trade:1"])
 
 
 @pytest.mark.parametrize("bad", [{"kind": "vibes"}, {"n": -1}, {"n": "many"}, {"days": 1.5}, {"days": -2},

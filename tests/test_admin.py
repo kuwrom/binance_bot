@@ -144,7 +144,7 @@ async def test_peak_reset_fails_if_the_peak_moves_while_the_human_types(monkeypa
 
 
 async def test_peak_reset_is_human_only_never_the_shortbot_cli_or_mcp():
-    from shortbot.cli_args import build_parser
+    from shortbot.commands import build_parser
     from shortbot.mcp_server import mcp
     assert not [x.name for x in await mcp.list_tools() if "peak" in x.name or "clear" in x.name]
     sub = next(a for a in build_parser()._actions if a.dest == "cmd")

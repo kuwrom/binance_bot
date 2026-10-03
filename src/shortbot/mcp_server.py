@@ -4,17 +4,18 @@ Design (see CLAUDE.md): MCP holds the small, safety-critical surface (orders, st
 journal, learnings). Ad-hoc analysis goes through `shortbot.lab` via Bash (code mode), and setup
 playbooks live in .claude/skills/. No tool asks for per-call approval: the owner runs an autonomous agent
 (2026-10-02). Money-at-risk tools are bounded in code instead (vetoes, risk budget, account lock, kill switch,
-stale-code guard, audit trail). The tools live in mcp_trade, mcp_research, mcp_book, mcp_desk and mcp_kill,
-registered by import below (import order = tools/list order).
+stale-code guard, audit trail). Every tool is a commands.py declaration (the same one its `shortbot` subcommand
+comes from), registered below in declaration order (= tools/list order).
 
-Audit (#24): every tool call runs as actor mcp:<tool>, and each one not in UNLOGGED (reads, and log_decision, whose
-row is the record) leaves a `call` decision row: args, outcome (ok / refused / unknown / error), error."""
+Audit (#24): every tool call runs as actor mcp:<tool>, under its #70 weight class, and each write (not the reads, nor
+log_decision, whose row is the record) leaves a `call` decision row: args, outcome (ok / refused / unknown / error)."""
 
 from __future__ import annotations
 
 import functools
 import logging
 from contextlib import asynccontextmanager
+from typing import Callable
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -59,7 +60,7 @@ def _journal(f):
     return getattr(get(), "journal", None)
 
 
-TOOLS: dict = {}   # name -> the registered wrapper (what an MCP call runs: audit, stale guard, weight class)
+TOOLS: dict[str, Callable] = {}   # name -> the registered wrapper (what an MCP call runs: audit, stale guard, weight class)
 
 
 def tool(cmd: Command):
@@ -84,7 +85,7 @@ def tool(cmd: Command):
                 bound = audit.bound_args(sig, args, kwargs)
                 if not code.ok and not cmd.stale_exempt:   # refused: nothing sent, the call row says so
                     return await audit.called(lambda: _journal(f), name, bound,
-                                              stale_guard.refuse(name, code, cmd.cli_form() or stale_guard.CLI.get(name)))
+                                              stale_guard.refuse(name, code, cmd.cli_form()))
                 return stale_guard.annotate(await audit.called(lambda: _journal(f), name, bound,
                                                                run(*args, **kwargs)), code)
             except Exception as e:  # noqa: BLE001

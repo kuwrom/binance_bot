@@ -4,6 +4,7 @@ sessions."""
 
 from __future__ import annotations
 
+import argparse
 from typing import Any
 
 from . import alerts_view, learnings_view, research
@@ -11,6 +12,7 @@ from .app import get_app
 from .commands import Arg, CommandError, command
 from .entries import EntryDesk
 from .exchange import to_symbol
+from .journal_research import CONFIDENCE, LEARNING_KINDS, LEARNING_STATUS
 from .weight import PROTECTIVE
 
 
@@ -52,7 +54,11 @@ async def calibration_report() -> dict[str, Any]:
     return prob_report(get_app().journal)
 
 
-@command(write=True)
+@command(cli="unlock-add", write=True, help="record a token unlock (source required)", args=(
+    Arg("base"), Arg("date", "--date", "ISO date/time, UTC (e.g. 2026-10-20 or 2026-10-20T12:00)"),
+    Arg("pct_supply", "--pct", "%% of circulating supply unlocking"),
+    Arg("recipient", "--recipient", choices=("team", "investor", "cliff", "ecosystem", "community", "other")),
+    Arg("source", "--source", "URL or document the date came from"), Arg("notes", "--notes")))
 async def add_unlock(base: str, date: str, recipient: str, source: str, pct_supply: float | None = None,
                      notes: str = "") -> dict[str, Any]:
     """Record a token unlock (strategy #1: supply-shock shorts). recipient: team|investor|cliff|ecosystem|community|
@@ -77,13 +83,27 @@ async def list_signals() -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------------------ research params
+def _pair(s: str) -> tuple[str, float]:
+    """`set-params max_leverage=3`: one KEY=VALUE pair of the changes dict."""
+    k, _, v = s.partition("=")
+    try:
+        if k.strip():
+            return k.strip(), float(v)
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(f"{s!r}: expected KEY=VALUE with a number, e.g. max_leverage=3")
+
+
 @command(cli="params")
 async def risk_params() -> dict[str, Any]:
     """Effective risk limits, fixed .env baseline, AI overrides, research bounds and active experiment."""
     return _params().describe()
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="set-params", write=True, weight=PROTECTIVE, help="research: change risk limits within the human-set "
+         "bounds (set_risk_params); `params` shows them", args=(
+    Arg("changes", nargs="+", type=_pair, metavar="KEY=VALUE", convert=dict),
+    Arg("experiment", "--experiment", "tag that owns the params it sets"), Arg("reasoning", "--reason")))
 async def set_risk_params(changes: dict[str, float], reasoning: str, experiment: str) -> dict[str, Any]:
     """Research: change risk limits within the human-set bounds; tell the human. Tunable: max_leverage,
     max_position_notional, max_total_notional, max_positions, risk_per_trade_pct, daily_loss_limit_pct,
@@ -94,7 +114,8 @@ async def set_risk_params(changes: dict[str, float], reasoning: str, experiment:
     return _params().set(changes, reasoning, experiment)
 
 
-@command(write=True)
+@command(cli="reset-params", write=True, help="drop every research override: back to the .env baseline",
+         args=(Arg("reasoning", "--reason"),))
 async def reset_risk_params(reasoning: str) -> dict[str, Any]:
     """Drop all research overrides and return to the .env baseline (always allowed: it only reduces risk)."""
     return _params().reset(reasoning)
@@ -128,7 +149,18 @@ async def journal(limit: int = 20) -> dict[str, Any]:
             "learnings": learnings_view.annotate(j, j.learnings())}
 
 
-@command(write=True)
+@command(cli="learn", write=True, help="record a research finding (same as the add_learning MCP tool)", args=(
+    Arg("statement"), Arg("evidence", "--evidence", "trade ids, data, sources"), Arg("setup", "--setup"),
+    Arg("status", "--status", choices=LEARNING_STATUS), Arg("confidence", "--confidence", choices=CONFIDENCE),
+    Arg("provenance", "--provenance", "where the evidence came from (repeatable): trade:12, research_report, "
+        "coin_news:QNT", action="append"),
+    Arg("kind", "--kind", "engineering (a fix, backed by a test) | statistical (a claim about outcomes) | process",
+        choices=LEARNING_KINDS),
+    Arg("n", "--n", "independent observations (episodes, trades, events), never scan rows"),
+    Arg("days", "--days", "distinct days the observations span"),
+    Arg("sample", "--sample", "where the sample lives: research_report:2026-10-02, registry:lib.x, data/..."),
+    Arg("review_by", "--review-by", "YYYY-MM-DD the brief resurfaces it (default: 14 days for a hypothesis, 30 for a "
+        "supported statistical learning)")))
 async def add_learning(statement: str, evidence: str, provenance: list[str], kind: str, setup: str | None = None,
                        status: str = "hypothesis", confidence: str = "low", n: float | None = None,
                        days: int | None = None, sample: str | None = None,
@@ -149,7 +181,13 @@ async def add_learning(statement: str, evidence: str, provenance: list[str], kin
         review_by=review_by)}
 
 
-@command(write=True)
+@command(cli="update-learning", write=True, help="update a learning: evidence and provenance are appended, the rest "
+         "replaced (update_learning)", args=(
+    Arg("learning_id"), Arg("status", "--status", choices=LEARNING_STATUS), Arg("evidence", "--evidence"),
+    Arg("confidence", "--confidence", choices=CONFIDENCE),
+    Arg("provenance", "--provenance", "repeatable", action="append"),
+    Arg("kind", "--kind", choices=LEARNING_KINDS), Arg("n", "--n"), Arg("days", "--days"), Arg("sample", "--sample"),
+    Arg("review_by", "--review-by")))
 async def update_learning(learning_id: int, status: str | None = None, evidence: str | None = None,
                           confidence: str | None = None, provenance: list[str] | None = None, kind: str | None = None,
                           n: float | None = None, days: int | None = None, sample: str | None = None,
@@ -173,7 +211,8 @@ async def research_report(min_n: int = 5) -> dict[str, Any]:
     return {**research.report(j, min_n), "forward": summary(j.db)}
 
 
-@command(write=True)
+@command(cli="start-session", write=True, help="start a trading session; acknowledges the alerts the brief listed "
+         "(start_session)", args=(Arg("notes", "--notes"),))
 async def start_session(notes: str = "") -> dict[str, Any]:
     """Start a trading session in the journal: call it FIRST, once per session. Acknowledges the alerts the brief listed
     as unacknowledged and returns them (count by kind + the urgent ones), so none is acknowledged unseen. Every row

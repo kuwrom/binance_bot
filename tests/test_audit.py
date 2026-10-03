@@ -117,9 +117,10 @@ async def test_mcp_cli_and_guardian_rows_all_carry_actor_code_version_and_mode(t
         return None
     monkeypatch.setattr(cli, "close_app", no_close)
     await cli._audited(_ns("log", action="skip", reasoning="too thin", symbol="ABC"))
+    monkeypatch.setattr(mcp_research, "get_app", lambda: _app(jc))   # the CLI runs the same declared bodies
     await cli._audited(_ns("learn", statement="s", evidence="e", setup=None, status="hypothesis",
-                           confidence="low", provenance=None, kind=None, n=None, days=None, sample=None,
-                           review_by=None))
+                           confidence="low", provenance=["trade:2"], kind="statistical", n=None, days=None,
+                           sample=None, review_by=None))
     # the guardian, started from that session's Bash, so it inherited CLAUDE_CODE_SESSION_ID
     audit.set_process("guardian", claude=False)
     jg = Journal(db)
@@ -198,7 +199,8 @@ async def test_the_writes_are_the_logged_tools():
         assert callable(getattr(mod, "get_app", None)), mod.__name__
 
 
-def test_every_cli_read_is_a_subcommand():
-    from shortbot.cli_args import build_parser
-    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
-    assert cli.READS <= set(sub.choices) and not {"open", "close", "move-stop", "propose"} & cli.READS
+def test_the_cli_order_paths_are_logged_writes():
+    from shortbot import commands
+    reads = {c.cli for c in commands.load() if c.cli and not c.write}
+    assert {"positions", "scan", "log", "brief", "audit"} <= reads
+    assert not {"open", "close", "move-stop", "propose", "flatten", "kill-switch", "ladder", "probe"} & reads

@@ -82,12 +82,12 @@ About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
 
 No aliases are left. `tests/test_trader_public.py` fails if a module outside `trading*.py` touches a private `Trader` member. Tests are exempt.
 
-**MCP/CLI duplication.** There are 47 MCP tools and 123 argparse arguments. Six parallel name tables must agree:
-- `mcp_server.UNLOGGED` and `PROTECTIVE_TOOLS`/`RESEARCH_TOOLS` (:39-49);
-- `cli.READS` (:25) and `PROTECTIVE_CMDS`/`RESEARCH_CMDS` (:245-247);
-- `stale_guard.CLI` and `EXEMPT` (:34-39).
+**MCP/CLI duplication** (fixed by step 1). There were 47 MCP tools and 123 argparse arguments, and six parallel name tables had to agree:
+- `mcp_server.UNLOGGED` and `PROTECTIVE_TOOLS`/`RESEARCH_TOOLS`;
+- `cli.READS` and `PROTECTIVE_CMDS`/`RESEARCH_CMDS`;
+- `stale_guard.CLI` and `EXEMPT`.
 
-`cli.tool_body` (:229) reuses some tool bodies; the rest call `Trader` directly with re-declared arguments. The two lists already differ: the CLI tags `set-params` protective; MCP tags `flatten_all` and `halt_trading` protective.
+`cli.tool_body` reused some tool bodies; the rest called `Trader` directly with re-declared arguments. The lists had already drifted: the CLI tagged `set-params` protective, MCP tagged `flatten_all` and `halt_trading` protective. Now `commands.py` holds one declaration per command, and both surfaces are generated from it.
 
 ### 1.4 How the flock, the #9 client ids and the #13 write-ahead intents work together
 Each mechanism covers one part:
@@ -324,7 +324,7 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 | # | step | flock | tests | size |
 |---|---|---|---|---|
 | 0 | **Public `Trader`** (done). Public names for the 8 privates used elsewhere (`place_close_stop`, `close_market`, `open_market`, `prepare`, `raw_positions`, `verified_position`, `find_stop`, `set_alert`); 5 more primitives (`cancel`, `place_limit`, `edit_limit`, `place_reduce_stop`, `place_reduce_limit`) carry the raw `tr.t` writes of 8 modules; callers moved, wire and results unchanged. Probes stay raw (§1.2) | as today | existing suite; `test_trader_public.py`: no `Trader._` name outside trading*, no raw write outside the primitives and probes | ~300 |
-| 1 | **Command registry:** one `Command` per write (name, CLI name, typed args, human approval, weight class, logged, stale-exempt) generates the MCP tool and the argparse subcommand; the six tables and `stale_guard.CLI` are derived | as today | every write tool has a CLI form with the same args (extends test_cli_fallback); generated tools match today's names and metadata | ~400 |
+| 1 | **Command registry** (done). One declaration per command in `commands.py`: MCP name, CLI name, args typed by the body's signature, read / write, weight class, stale-exempt, CLI hint. It generates the MCP tool and the argparse subcommand. The six tables, `stale_guard.CLI` and `cli.tool_body` are gone. Pairs whose bodies differed now share the MCP body, and the weight classes agree (`set-params`, `flatten` and `kill-switch` are protective) | as today | `test_commands.py`; `test_cli_fallback.py` (every write has a CLI form the parser accepts); the `commands` block in `surface.json`; `tools/list` unchanged | ~400 |
 | 2 | **Intents in-process:** intent dataclasses, `Gateway` protocol, `LocalGateway` running today's flows; MCP, CLI, guardian, killswitch_ops and ladder_apply call `submit()`; `intents` + `intent_orders` tables (write-ahead, idempotent ids) | as today | resubmitting an id runs once; each intent kind maps to today's result dict | ~500 |
 | 3 | **Typed results + generic resolver** for market sends of unknown outcome (gap 3), on #37's types | as today | fakes: a close/add that times out is resolved by client id; nothing is re-sent | ~250 |
 | 4 | **Gateway process + socket client**, behind `SHORTBOT_GATEWAY=off\|session` (default off). With `session`, MCP and CLI go through the gateway; the guardian still writes directly. Break-glass for risk-reducing actions; `gateway_heartbeat`; global admission (gap 4); self-restart on a stale closure; launchd plist + compose service in DEPLOY.md | the gateway also takes it per sequence, so mixed writers stay serialised | a real socket in tests: deadline/expired, busy, disconnect mid-run, receipt-unknown → `status`, mode mismatch, break-glass only for the allowed set, peer-uid refusal | ~600 |

@@ -244,7 +244,7 @@ No table has a side column: `trades` (journal.py:52-61) and `entries` (entries.p
   - :168 / :175 `add_to_winner`, "ABOVE market" and `cancel_below`.
 - mcp_desk.py:19 and mcp_research.py:30-37 `short_bracket`.
 - mcp_server.py:29-49 instructions.
-- cli_args.py:28 / :40 / :160 and cli.py:147-204.
+- The `shortbot` subcommands are generated from the same declarations (`commands.py`), so they need no separate change.
 
 ### Fakes (no long support today)
 - **tests/fakes.py**

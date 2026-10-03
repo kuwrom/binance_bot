@@ -1,18 +1,14 @@
 """The CLI is the stale MCP server's fallback (#68 follow-up): every state-changing MCP tool has a CLI form, a refusal
-names it, and the commands added for it (update-plan, set-params, reset-params, update-learning, start-session) run
-the MCP tool's own code, so both paths leave the same journal effect."""
+names it, and both run the same declared body (commands.py), so both paths leave the same journal effect."""
 
 import json
-import os
 import re
-import subprocess
-import sys
 from types import SimpleNamespace
 
 import pytest
 
-from shortbot import audit, cli, mcp_research, mcp_trade, provenance, stale_guard
-from shortbot.cli_args import build_parser
+from shortbot import audit, cli, mcp_research, mcp_trade, stale_guard
+from shortbot.commands import build_parser
 from shortbot.config import ResearchBounds, RiskLimits, Settings
 from shortbot.journal import Journal
 from shortbot import commands
@@ -37,15 +33,27 @@ def _subparsers():
 
 
 # ------------------------------------------------------------ the map
-async def test_every_state_changing_tool_has_a_cli_form():
-    """A new write tool without a CLI form fails here: a stale server's agent would have no way to act."""
-    writes = {c.name for c in commands.REGISTRY if c.name and c.write}
-    assert set(stale_guard.CLI) - {"log_decision"} == writes
+def _forms() -> dict[str, str]:
+    """Each MCP write's CLI form, as its refusal names it."""
+    return {c.name: c.cli_form() for c in commands.load() if c.name and c.write}
+
+
+def test_every_state_changing_tool_has_a_cli_form():
+    """A new write tool without a CLI form fails at import (commands._check): a stale server's agent would have no
+    way to act. Most forms are generated from the tool's own subcommand; the rest are declared (hint=)."""
+    forms = _forms()
+    assert {"open_short", "close_position", "flatten_all", "halt_trading", "add_learning"} <= set(forms)
+    assert all(forms.values())
+    assert {n for n in forms if commands.by_name(n).hint} == {"halt_trading", "warmup_start"}
+    assert forms["move_stop"] == "move-stop SYMBOL PRICE --reason REASON"
+    assert forms["set_risk_params"] == "set-params KEY=VALUE [KEY=VALUE ...] --experiment EXPERIMENT --reason REASON"
+    assert forms["add_learning"].startswith("learn STATEMENT --evidence EVIDENCE [--setup SETUP] ")
+    assert "--provenance PROVENANCE [--provenance PROVENANCE ...] --kind KIND" in forms["add_learning"]
 
 
 def test_each_cli_form_is_a_real_command_with_its_required_flags():
     subs = _subparsers()
-    for tool, form in stale_guard.CLI.items():
+    for tool, form in _forms().items():
         cmd, *rest = form.split()
         assert cmd in subs, (tool, cmd)
         opts = {o for a in subs[cmd]._actions for o in a.option_strings}
@@ -57,23 +65,24 @@ def test_each_cli_form_is_a_real_command_with_its_required_flags():
 
 async def test_a_refusal_names_the_cli_command(monkeypatch):
     monkeypatch.setattr(stale_guard, "_disk", lambda: NEW)
-    for tool, form in stale_guard.CLI.items():
+    for tool, form in _forms().items():
         stale = await stale_guard.refuse(tool, stale_guard.Verdict(NEW), form)
         unverified = await stale_guard.refuse(tool, stale_guard.Verdict(error="OSError: gone"), form)
         for res in (stale, unverified):
             assert f"`.venv/bin/shortbot {form}`" in res["error"] and res["error"].endswith("Nothing was sent.")
     res = await TOOLS["move_stop"]("QNT", 1.1, "trail")   # end to end: a refused write
     assert "run the same action through the CLI" in res["error"]
-    assert "`.venv/bin/shortbot move-stop SYMBOL NEW_STOP --reason REASON`" in res["error"]
+    assert "`.venv/bin/shortbot move-stop SYMBOL PRICE --reason REASON`" in res["error"]
 
 
 def test_flatten_and_kill_switch_are_cli_commands():
     subs = _subparsers()
-    assert {"flatten", "kill-switch"} <= set(subs)   # registered by killswitch_ops.add_cli
+    assert {"flatten", "kill-switch"} <= set(subs)   # declared in mcp_kill
 
 
-def test_the_new_commands_are_logged_writes():
-    assert not {"update-plan", "set-params", "reset-params", "update-learning", "start-session"} & cli.READS
+def test_the_fallback_commands_are_logged_writes():
+    for name in ("update-plan", "set-params", "reset-params", "update-learning", "start-session", "flatten"):
+        assert commands.by_cli(name).write, name
 
 
 # ------------------------------------------------------------ parity: MCP and CLI leave the same journal effect
@@ -195,15 +204,3 @@ async def test_start_session_parity(tmp_path, monkeypatch):
         ["start-session", "--notes", "morning"])
     assert res_mcp == res_cli and res_mcp["alerts_acknowledged"]["count"] == 1
     assert calls["cli"] == [("cli:start-session", "ok")]
-
-
-def test_the_cli_keeps_its_own_logging_when_it_loads_a_tool_body():
-    """Importing the MCP modules runs MCPServer's logging.basicConfig (stderr, INFO); a CLI process keeps its own
-    root logger (no handlers: lastResort with redaction, #66). A fresh interpreter, as `shortbot` is."""
-    code = ("import logging; from shortbot import cli; fn = cli.tool_body('mcp_trade', 'update_plan'); "
-            "from shortbot import mcp_trade; assert fn is mcp_trade.update_plan; "
-            "print(logging.root.handlers, logging.root.level)")
-    env = {**os.environ, "PYTHONPATH": str(provenance.PKG.parent)}
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60)
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == "[] 30"

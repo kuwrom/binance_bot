@@ -29,7 +29,7 @@ async def session_clock() -> dict[str, Any]:
     return desk_clock(app.settings, app.journal)
 
 
-@command(write=True)
+@command(write=True, hint="warmup start [SYMBOL ...]")
 async def warmup_start(symbols: list[str] | None = None) -> dict[str, Any]:
     """Cold-desk warm-up, step 1: t0 snapshot (price, mark/index/basis, funding + interval, OI, spread, depth
     ±1%, 1m vol, BTC 15m) of the candidates (default: pending limit entries + top 5 gainers). Study the tape for
@@ -105,8 +105,8 @@ async def position_ladder(symbol: str) -> dict[str, Any]:
     return await build_ladder(app.ex, app.journal, pos[0], log=False) if pos else {"error": "no open position"}
 
 
-@command(mcp=False, cli="ladder", write=True, help="3-level ladder: per-level odds, edge score, exposure the rule wants "
-         "(shadow); --enable opts a trade into ladder_live_v1, --apply executes its decision", args=(
+@command(mcp=False, cli="ladder", write=True, help="3-level ladder: per-level odds, edge score, exposure the rule "
+         "wants (shadow); --enable opts a trade into ladder_live_v1, --apply executes its decision", args=(
     Arg("symbol"), Arg("enable", "--enable", "opt this trade into the live ladder (pins 1R, full size)"),
     Arg("apply", "--apply", "execute the decision: cut / add (<= 1R) / stop re-level"),
     Arg("dry_run", "--dry-run", "show what --apply would do, without orders")))

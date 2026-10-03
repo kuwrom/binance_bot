@@ -130,8 +130,7 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
 - **No resent 429s:** ccxt's own retry loop never resends a 418/429. The public client's `maxRetriesOnFailure` used to resend a 429 three times within 3 s, which is the "failing to back off" that earns a ban.
 - **Where the class is set:**
   - each guardian lane in `Lane._run` (a job's deadline is its timeout − 5 s), with governor and margin_mode protective;
-  - MCP tools in `mcp_server.PROTECTIVE_TOOLS` / `RESEARCH_TOOLS`;
-  - CLI commands in `cli.PROTECTIVE_CMDS` / `RESEARCH_CMDS`;
+  - MCP tools and CLI commands by the `weight` of their `commands.py` declaration, one class for both surfaces;
   - admin is protective; lab and histdata are research.
 - **Writes:** any write (non-GET) makes the rest of its scope protective.
 - **Shared locks:** markets reloads under `Exchanges`' shared locks always run as protective.

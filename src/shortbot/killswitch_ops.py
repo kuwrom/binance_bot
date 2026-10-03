@@ -1,6 +1,6 @@
 """Kill-switch actions (state and gate: killswitch.py): halt = trip + withdraw the resting entries; flatten = HALTED +
-market-close every short reduce-only. Neither ever cancels a protective stop on an open position. Also the
-`shortbot kill-switch` / `shortbot flatten` subcommands, registered from cli.py.
+market-close every short reduce-only. Neither ever cancels a protective stop on an open position. The halt_trading /
+flatten_all tools and the `shortbot kill-switch` / `shortbot flatten` subcommands are declared in mcp_kill.
 """
 
 from __future__ import annotations
@@ -74,14 +74,3 @@ async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:
                                                          "still_open": left, "resting": st.get("resting")})
     return {"ok": not failed and not left, "state": ks.read(tr.j)["state"], "closed": closed, "failed": failed,
             "still_open": left, "resting": st.get("resting")}
-
-
-# ------------------------------------------------------------ CLI (cli.py registers these)
-def add_cli(sub) -> None:
-    f = sub.add_parser("flatten", help="HALTED + market-close every short reduce-only; the state stays HALTED")
-    f.add_argument("--reason", required=True)
-    f.add_argument("--lesson", default="")
-
-
-async def run_cli(app, args) -> dict[str, Any]:
-    return await flatten(app.trader, CLI_BY, args.reason, args.lesson)

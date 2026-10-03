@@ -1,7 +1,6 @@
 """Kill switch actions: HALTED withdraws entries (never a filled leg's stop), flatten-all, the guardian watchdog with its
 stale-heartbeat auto-clear, guardian auto-trip thresholds, brief/status, CLI and MCP surface."""
 
-import argparse
 import json
 import time
 from types import SimpleNamespace

@@ -283,23 +283,3 @@ async def run_all(tr, symbol: str = DEFAULT_SYMBOL) -> dict[str, Any]:
         if r.get("refused") or not r.get("clean"):
             break
     return {"ok": len(results) == len(ORDER) and all(r.get("clean") for r in results), "results": results}
-
-
-# ------------------------------------------------------------ CLI (cli.py / cli_args.py)
-def add_cli(sub) -> None:
-    p = sub.add_parser("probe", help="DEMO only: force one exchange behaviour the desk assumes, at minimum size, and "
-                                     "journal what Binance answered (probe_result)")
-    p.add_argument("name", nargs="?", choices=tuple(ORDER), help="the probe (or --all)")
-    p.add_argument("--symbol", default=DEFAULT_SYMBOL, help="a liquid perp the desk isn't using")
-    p.add_argument("--all", action="store_true", help="every probe in a safe order (about 3-4 minutes)")
-
-
-async def run_cli(app, args) -> dict[str, Any]:
-    """One probe prints in full; --all prints each probe without its call log (that is in its journal row)."""
-    if args.all:
-        out = await run_all(app.trader, args.symbol)
-        return {**out, "results": [{**r, "calls": f"{len(r['calls'])} calls: decision #{r['decision_id']}"}
-                                   if "decision_id" in r else r for r in out["results"]]}
-    if not args.name:
-        return {"ok": False, "error": f"name a probe ({', '.join(ORDER)}) or pass --all"}
-    return await run(app.trader, args.name, args.symbol)

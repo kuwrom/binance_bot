@@ -40,9 +40,10 @@ class CommandError(Exception):
 class Arg:
     """The CLI form of one argument. `name` is the body's keyword (and the MCP parameter unless cli_only); `flag` is the
     option ("--stop"), None for a positional. `dest` keeps the CLI's own spelling of a positional (`price` for
-    new_stop): the CLI's call rows record the parsed namespace. The rest is argparse's, derived from the body where
-    left out: type (float / int), default, required (a flag whose parameter has no default), store_true (a bool
-    defaulting to False). `convert` turns the parsed value into the body's (JSON text, KEY=VALUE pairs)."""
+    new_stop); a flag's comes from the flag (--stop: stop). The CLI's call rows record that parsed namespace. The rest
+    is argparse's, derived from the body where left out: type (float / int), default, required (a flag whose parameter
+    has no default), store_true (a bool defaulting to False). `convert` turns the parsed value into the body's (JSON
+    text, KEY=VALUE pairs)."""
     name: str
     flag: str | None = None
     help: str | None = None
@@ -189,6 +190,8 @@ def _check(cmd: Command) -> None:
         missing = set(cmd.mcp_signature().parameters) - {a.name for a in cmd.args if not a.cli_only}
         if missing:
             raise ValueError(f"{label}: the CLI form lacks {sorted(missing)}")
+    if cmd.name and cmd.write and not cmd.cli_form():
+        raise ValueError(f"{label}: a write needs a CLI form (cli= or hint=), a stale MCP server's way out (#68)")
 
 
 def load() -> list[Command]:

@@ -3,6 +3,8 @@ positions, orders, stops, plans and limit entries."""
 
 from __future__ import annotations
 
+import json
+import operator
 from typing import Any
 
 from . import news, scanner, setups, targets_sync
@@ -37,7 +39,8 @@ async def scan_shorts(min_change_24h: float = 10.0, top_n: int = 10, direction: 
     research candidate and labelled with its real outcome 72h later."""
     app = get_app()
     reg = await regime.market_regime(app.ex)
-    res = await scanner.scan_shorts(app.ex, min_change=min_change_24h, top_n=top_n, journal=app.journal if log else None,
+    res = await scanner.scan_shorts(app.ex, min_change=min_change_24h, top_n=top_n,
+                                    journal=app.journal if log else None,
                                     regime=reg["verdict_for_shorts"], direction=direction)
     return {"regime": reg["verdict_for_shorts"], **res}
 
@@ -84,7 +87,16 @@ async def positions() -> list[dict[str, Any]]:
     return await get_app().trader.positions()
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="open", write=True, weight=PROTECTIVE, help="open a short (all risk checks apply)", args=(
+    Arg("symbol"), Arg("stop_price", "--stop"), Arg("setup", "--setup"), Arg("thesis", "--thesis"),
+    Arg("plan", "--plan", "JSON trade plan (merged over the setup defaults)", metavar="JSON", convert=json.loads),
+    Arg("notional_usdt", "--notional", "USDT size; omit to auto-size to the risk cap", metavar="USDT"),
+    Arg("leverage", "--leverage"),
+    Arg("veto_override", "--veto-override", "research reason to trade despite vetoes/regime/cold desk"),
+    Arg("budget_override", "--budget-override",
+        "research reason for a --notional that risks more than the risk budget"),
+    Arg("conviction", "--conviction", "C 0.5x | B 1x | A 1.5x (needs a proven setup record) | M moonshot bucket",
+        choices=TIERS)))
 async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, plan: dict[str, Any] | None = None,
                      notional_usdt: float | None = None, leverage: int = 2,
                      veto_override: str | None = None, conviction: str = "B",
@@ -105,7 +117,11 @@ async def open_short(symbol: str, stop_price: float, setup: str, thesis: str, pl
                                              veto_override, conviction, budget_override)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="close", write=True, weight=PROTECTIVE, help="buy back all or part of a short", args=(
+    Arg("symbol"), Arg("reason", "--reason"), Arg("lesson", "--lesson"),
+    Arg("fraction", "--fraction", "of the CURRENT size (see --of-original)"),
+    Arg("expect_contracts", "--expect-contracts", "the size you saw: refused if it changed since"),
+    Arg("of_original", "--of-original", "fraction = share of the ORIGINAL size gone by the end")))
 async def close_position(symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,
                          expect_contracts: float | None = None, of_original: bool = False) -> dict[str, Any]:
     """Buy back all or a fraction of a short (reduce-only); executes on the exchange. A full close records
@@ -116,13 +132,17 @@ async def close_position(symbol: str, reason: str, lesson: str = "", fraction: f
     return await get_app().trader.close(symbol, reason, lesson, fraction, expect_contracts, of_original)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="move-stop", write=True, weight=PROTECTIVE, help="tighten a stop (down only)",
+         args=(Arg("symbol"), Arg("new_stop", dest="price"), Arg("reason", "--reason")))
 async def move_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]:
     """Tighten a short's exchange stop (move DOWN only). Widening is refused; a failed swap restores the old stop."""
     return await get_app().trader.move_stop(symbol, new_stop, reason)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="update-plan", write=True, weight=PROTECTIVE,
+         help="change an open trade's plan (the update_plan MCP tool)",
+         args=(Arg("symbol"), Arg("changes", "--changes", 'JSON plan fields, e.g. {"time_stop_hours": 30}',
+                                  metavar="JSON", convert=json.loads), Arg("reason", "--reason")))
 async def update_plan(symbol: str, changes: dict[str, Any], reason: str) -> dict[str, Any]:
     """Change an open trade's plan (targets, time stop, trailing, auto flags...). Auto flags let the
     guardian act on its own, so set them deliberately. The desk's pins (r1_usdt, full_size, ladder_live) are kept."""
@@ -164,21 +184,32 @@ async def risk_budget(symbol: str, conviction: str = "B", setup: str | None = No
     return await app.trader.budget(app.trader, to_symbol(symbol), reg, conviction, setup)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="widen-stop", write=True, weight=PROTECTIVE, help="widen once, with automatic size cut to keep <= 1R",
+         args=(Arg("symbol"), Arg("new_stop", dest="price"), Arg("reason", "--reason")))
 async def widen_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]:
     """Widen a stop ONCE per trade; size is cut automatically so the loss at the new stop stays ≤ the initial 1R."""
     return await PositionOps(get_app().trader).widen_stop(symbol, new_stop, reason)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="add", write=True, weight=PROTECTIVE,
+         help="pyramid into a winner; stop tightened first, total worst case <= 1R",
+         args=(Arg("symbol"), Arg("notional_usdt", "--notional", metavar="USDT"), Arg("new_stop", "--stop"),
+               Arg("reason", "--reason")))
 async def add_to_winner(symbol: str, notional_usdt: float, new_stop: float, reason: str) -> dict[str, Any]:
     """Pyramid into a profitable short: the stop is tightened first so total worst case after the add ≤ 1R."""
     return await PositionOps(get_app().trader).add_to_winner(symbol, notional_usdt, new_stop, reason)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="propose", write=True, weight=PROTECTIVE, help="limit-entry group: first fill cancels the rest", args=(
+    Arg("proposals", help="JSON list of {symbol, limit_price, stop_price, setup, thesis, plan?, leverage?, level_type, "
+        "level_reason, cancel_below?, conviction?, size_mult? (0.1-1, only shrinks: pass the read's size_mult), "
+        "tranches? [{limit_price, share}] = split entry (all-or-nothing), veto_override?}", metavar="PROPOSALS_JSON",
+        convert=json.loads),
+    Arg("ttl_hours", "--ttl-hours", "at most 24"),
+    Arg("prearm", "--no-prearm", action="store_true", convert=operator.not_, cli_only=True),
+    Arg("warmup_override", "--warmup-override", "reason to skip the cold-desk warm-up")))
 async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.0,
-                          warmup_override: str | None = None) -> dict[str, Any]:
+                          warmup_override: str | None = None, prearm: bool = True) -> dict[str, Any]:
     """Limit-entry GROUP (3-5 shorts at better levels). Each: {symbol, limit_price (ABOVE market), stop_price, setup,
     thesis, plan?, leverage?, level_type (round_number|prior_high|sweep|vwap_band|ema_retest), level_reason,
     cancel_below?, conviction? (C|B|A|M, default B), veto_override? (research reason; no budget override: always
@@ -186,7 +217,7 @@ async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.
     the guardian protects fills within 5 s and cancels the siblings of the first fill. Resting entries are withdrawn
     while the governor halts new entries or a market pause is on (one placed over that pause stays). A send whose
     outcome is unknown (timeout, 5xx) is listed under `unknown`: it may rest on the book, so don't re-propose it."""
-    return await EntryDesk(get_app().trader).propose_group(proposals, ttl_hours, True, warmup_override)
+    return await EntryDesk(get_app().trader).propose_group(proposals, ttl_hours, prearm, warmup_override)
 
 
 @command(cli="entries", help="pending limit entries")
@@ -198,7 +229,7 @@ async def pending_entries() -> list[dict[str, Any]]:
     return EntryDesk(get_app().trader).pending(all_orders=True)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="cancel-group", write=True, weight=PROTECTIVE, args=(Arg("group_id"), Arg("reason", "--reason")))
 async def cancel_entry_group(group_id: str, reason: str) -> dict[str, Any]:
     """Cancel all pending entries of a group (always allowed: removes risk). filled_first = filled before the cancel
     landed: they keep their stops and the guardian journals them within 5 s. cancel_failed (ok false) = still live:
@@ -206,7 +237,8 @@ async def cancel_entry_group(group_id: str, reason: str) -> dict[str, Any]:
     return await EntryDesk(get_app().trader).cancel_group(group_id, reason)
 
 
-@command(write=True, weight=PROTECTIVE)
+@command(cli="amend", write=True, weight=PROTECTIVE, help="move a pending limit once",
+         args=(Arg("entry_id"), Arg("new_limit", dest="price"), Arg("reason", "--reason")))
 async def amend_entry(entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
     """Move a pending limit ONCE (don't chase). Lowering it re-runs the risk check (more risk at the same size) and
     is refused for a split entry's leg; every amend is a logged decision."""

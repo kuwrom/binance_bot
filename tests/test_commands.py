@@ -118,3 +118,83 @@ def test_building_the_cli_loads_neither_the_mcp_sdk_nor_its_logging():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "[] 30"
+
+
+# ------------------------------------------------------------ one body: what the CLI gained from the MCP tool
+def test_the_weight_classes_agree_on_both_surfaces():
+    """#70: one class per command. The CLI tagged set-params protective while MCP left set_risk_params a desk read, and
+    MCP tagged flatten_all / halt_trading protective while `flatten` and `kill-switch` waited for budget like reads."""
+    from shortbot.weight import PROTECTIVE
+    assert _cmd("set_risk_params").weight == PROTECTIVE and _cmd("set_risk_params").cli == "set-params"
+    assert _cmd("flatten_all").weight == PROTECTIVE and _cmd("flatten_all").cli == "flatten"
+    assert commands.by_cli("kill-switch").weight == PROTECTIVE
+
+
+def test_learn_requires_provenance_and_kind_as_add_learning_does():
+    learn = ["learn", "pumps fade", "--evidence", "trades 1-3"]
+    for missing in (["--kind", "statistical"], ["--provenance", "trade:1"]):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(learn + missing)
+    cmd, kw = _parse(learn + ["--provenance", "trade:1", "--provenance", "research_report", "--kind", "statistical"])
+    assert cmd.name == "add_learning" and kw["provenance"] == ["trade:1", "research_report"]
+
+
+def test_every_subcommand_help_renders():
+    """`shortbot unlock-add --help` crashed: argparse read the % in "% of circulating supply" as a format code."""
+    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    for name, p in sub.choices.items():
+        assert p.format_help(), name
+
+
+async def test_scan_from_the_cli_labels_its_research_rows_with_the_regime(monkeypatch):
+    """One body: `scan --log` passes the regime to the research rows as scan_shorts does (they were unlabelled)."""
+    from types import SimpleNamespace
+
+    from shortbot import mcp_trade
+    seen = {}
+
+    async def market_regime(ex):
+        return {"verdict_for_shorts": "caution"}
+
+    async def scan(ex, **kw):
+        seen.update(kw)
+        return {"candidates": []}
+    monkeypatch.setattr(mcp_trade, "get_app", lambda: SimpleNamespace(ex=None, journal="J"))
+    monkeypatch.setattr(mcp_trade, "regime", SimpleNamespace(market_regime=market_regime))
+    monkeypatch.setattr(mcp_trade, "scanner", SimpleNamespace(scan_shorts=scan))
+    cmd, kw = _parse(["scan", "--log"])
+    assert await cmd.body(**kw) == {"regime": "caution", "candidates": []}
+    assert (seen["regime"], seen["journal"]) == ("caution", "J")
+    await cmd.body(**_parse(["scan"])[1])
+    assert seen["journal"] is None   # without --log nothing is logged; the MCP tool always logs
+
+
+async def test_one_body_keeps_who_acted_and_normalises_symbols(tmp_path, monkeypatch):
+    """flatten_all / `flatten` share a body; the kill-switch row still says whether the agent's MCP or the CLI flattened.
+    log_decision / `log` share one: both store the ccxt symbol (MCP stored what it was given) and answer ok."""
+    from types import SimpleNamespace
+
+    from shortbot import audit, cli, killswitch_ops, mcp_kill, mcp_research
+    from shortbot.journal import Journal
+    monkeypatch.setattr(audit, "_proc", {"kind": None, "claude_session": None})
+    seen = []
+
+    async def flatten(tr, by, reason, lesson=""):
+        seen.append(by)
+        return {"ok": True}
+    j = Journal(tmp_path / "j.db")
+    app = SimpleNamespace(trader=None, journal=j, settings=SimpleNamespace(mode="demo"))
+    monkeypatch.setattr(killswitch_ops, "flatten", flatten)
+    for mod in (mcp_kill, mcp_research, cli):
+        monkeypatch.setattr(mod, "get_app", lambda *a, **k: app)
+
+    async def no_close():
+        return None
+    monkeypatch.setattr(cli, "close_app", no_close)
+    await TOOLS["flatten_all"]("squeeze")
+    await cli._audited(build_parser().parse_args(["flatten", "--reason", "squeeze"]))
+    assert seen == [mcp_kill.MCP_BY, killswitch_ops.CLI_BY]
+    mcp_res = await TOOLS["log_decision"]("watch", "lower high", "QNT")
+    cli_res = await cli._audited(build_parser().parse_args(["log", "skip", "too thin", "--symbol", "qntusdt"]))
+    assert mcp_res["ok"] and cli_res["ok"]
+    assert [d["symbol"] for d in j.decisions() if d["action"] in ("watch", "skip")] == ["QNT/USDT:USDT"] * 2

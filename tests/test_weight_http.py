@@ -184,9 +184,7 @@ async def test_cli_commands_run_under_their_class(monkeypatch):
         seen[args.cmd] = weight.current()
     monkeypatch.setattr(cli, "_run", run)
     monkeypatch.setattr(cli, "get_app", lambda: SimpleNamespace(journal=None))
-    for cmd in ("scan", "positions", "close", "update-plan", "set-params"):
+    for cmd in ("scan", "positions", "close", "update-plan", "set-params", "flatten", "kill-switch", "study"):
         await cli._audited(SimpleNamespace(cmd=cmd))
     assert seen == {"scan": RESEARCH, "positions": DESK, "close": PROTECTIVE, "update-plan": PROTECTIVE,
-                    "set-params": PROTECTIVE}
-    from tests.test_cli_fallback import _subparsers
-    assert cli.PROTECTIVE_CMDS | cli.RESEARCH_CMDS <= set(_subparsers())   # no stale names
+                    "set-params": PROTECTIVE, "flatten": PROTECTIVE, "kill-switch": PROTECTIVE, "study": RESEARCH}
