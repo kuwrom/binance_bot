@@ -276,7 +276,7 @@ async def test_research_report_carries_each_nodes_forward_status(monkeypatch):
     from types import SimpleNamespace
 
     from shortbot import cmd_research
-    fresh = Journal(":memory:")                                    # no registry tables yet
+    fresh = Journal(":memory:")                                    # an empty registry
     monkeypatch.setattr(cmd_research, "get_app", lambda: SimpleNamespace(journal=fresh))
     out = (await cmd_research.research_report())["forward"]
     assert out["nodes"] == [] and out["family"]["M"] == 1 and "how_to_read" in out

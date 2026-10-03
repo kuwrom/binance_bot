@@ -24,7 +24,6 @@ from .exchange import to_raw
 from .gateway import handler
 from .guardian_loop import send_safe
 from .intents import Intent
-from .journal import Journal
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.guardian")
@@ -47,7 +46,7 @@ class MarginChecks:
             return {}, [], f"adl: adlQuantile read failed: {type(e).__name__}: {e}"
         if resp and self.j.get(ADL_SAMPLE_KEY) is None:   # the live shape, once (unverified on demo)
             raw = json.dumps(resp, default=str)[:4000]
-            self.j.post(Journal.set, ADL_SAMPLE_KEY, raw)
+            self.j.mark(ADL_SAMPLE_KEY, raw)
             log.info("adlQuantile first non-empty answer: %s", raw)
         got, bad = margin.parse_adl(resp)
         if bad:

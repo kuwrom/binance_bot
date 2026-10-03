@@ -23,7 +23,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import reconcile
-from .journal import Journal
 
 LATE_MARK_S = 15 * 60
 KV_PEAK = "equity_peak"
@@ -100,12 +99,12 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
                 if abs(pnl - b) > max(1.0, 0.001 * abs(equity)):
                     first = int(journal.get(pk) or 0) or now_ms
                     if first == now_ms:
-                        journal.post(Journal.set, pk, str(now_ms))
+                        journal.mark(pk, str(now_ms))   # its age must grow during a held lock too (#81)
                     young = now_ms - first < PENDING_MS
                     out["pending"][kind] = young
                     pnl = b if young else min(pnl, b)
                 elif journal.get(pk) not in (None, "0"):
-                    journal.post(Journal.set, pk, "0")
+                    journal.mark(pk, "0")
             late = ts - start_ms > LATE_MARK_S * 1000
             out["late"][kind] = late
             out[f"{kind}_pnl"] = round(min(pnl, old) if late else pnl, 4)

@@ -41,11 +41,11 @@ class MarketJobs:
                 continue
             key = f"ann_seen:{a['url']}"
             if self.j.get(key) is None:
-                self.j.post(lambda j, k=key: j.set(k, str(time.time())))
+                self.j.mark(key, str(time.time()))
                 fresh = datetime.fromisoformat(a["time"]) > datetime.now(timezone.utc) - timedelta(hours=24)
                 if not first_run and fresh:  # never alert on old items that merely re-appear in the list
                     await self._announce(a)
-        self.j.post(lambda j: j.set("ann_initialised", "1"))
+        self.j.mark("ann_initialised", "1")
 
     async def _announce(self, a: dict) -> None:
         """A delisting naming a coin on our book (an open short, or an entry that is or may be resting) is urgent, per

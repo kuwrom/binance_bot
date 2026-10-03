@@ -1,8 +1,10 @@
 """Telegram alerts with per-key cooldown; falls back to the log when Telegram isn't configured.
 Every alert is an alerts row first (posted: queued in order while another process holds the journal's write lock, #79).
-The cooldown is armed on the attempt, so a dead Telegram (a revoked token) never re-alerts every pass; a failed send
-shortens it to TELEGRAM_RETRY_S, so an outage doesn't swallow an alert for its whole cooldown either. A send is
-time-boxed, and no row, log line or message carries a secret (redact.py).
+The cooldown is per (kind, symbol) and its stamp is marked (Journal.mark): this process sees its own sends at once, also
+while their writes are queued behind a held lock (#81), and other processes' sends in the journal. It is armed on the
+attempt, so a dead Telegram (a revoked token) never re-alerts every pass; a failed send shortens it to
+TELEGRAM_RETRY_S, so an outage doesn't swallow an alert for its whole cooldown either. A send is time-boxed, and no
+row, log line or message carries a secret (redact.py).
 `forward` is the one Telegram-only path: for a row some other process journalled (setup_ladder_stop, #69)."""
 
 from __future__ import annotations
@@ -43,14 +45,14 @@ class Notifier:
         message = redact(message)
         self.j.log_alert(kind, message, symbol)   # posted, like its cooldown stamp: a locked journal never holds it
         now = time.time()
-        self.j.post(Journal.set, f"alert_ts:{key}", str(now))
+        self.j.mark(f"alert_ts:{key}", str(now))
         log.warning("ALERT %s %s: %s", kind, symbol or "", message)
         if not (self.s.telegram_token and self.s.telegram_chat_id):
             return True
         if await self._telegram(kind, message, symbol, urgent):
             return True
         if cooldown_s > TELEGRAM_RETRY_S:
-            self.j.post(Journal.set, f"alert_ts:{key}", str(now - (cooldown_s - TELEGRAM_RETRY_S)))
+            self.j.mark(f"alert_ts:{key}", str(now - (cooldown_s - TELEGRAM_RETRY_S)))
         return False
 
     async def forward(self, kind: str, message: str, symbol: str | None = None, urgent: bool = False) -> bool:

@@ -59,6 +59,8 @@ def _now() -> str:
 
 
 def ensure(db) -> None:
+    """The registry's tables, for a writer on a bare connection (seeders, tests). A Journal creates them when it opens,
+    so readers run no DDL: on a journal without them it waited for the write lock, on the guardian's loop (#81)."""
     db.executescript(SCHEMA)
 
 
@@ -68,7 +70,6 @@ def _fp(p: dict[str, Any]) -> str:
 
 
 def latest(db, pid: str) -> dict[str, Any] | None:
-    ensure(db)
     cur = db.execute("SELECT * FROM patterns WHERE id=? ORDER BY version DESC LIMIT 1", (pid,))
     row = cur.fetchone()
     return dict(zip([c[0] for c in cur.description], row)) if row else None
@@ -243,7 +244,6 @@ def duplicates(db, pid: str, window_ms: int = 6 * 3_600_000) -> list[dict[str, A
 
 
 def tree(db) -> dict[str, list[dict[str, Any]]]:
-    ensure(db)
     out: dict[str, list[dict[str, Any]]] = {}
     for r in db.execute("SELECT p.id, p.version, p.level, p.parent, p.status, (SELECT COUNT(*) FROM pattern_episodes e"
                         " WHERE e.pattern_id=p.id AND e.version=p.version) FROM patterns p WHERE p.version = (SELECT"
@@ -265,7 +265,6 @@ def reindex_lessons(db) -> int:
 
 
 def search(db, query: str, limit: int = 8) -> list[dict[str, Any]]:
-    ensure(db)
     q = fts_query(query)
     if not q:
         return []
@@ -292,13 +291,11 @@ def compact(c: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def node_cards(db, ids: list[str]) -> list[dict[str, Any]]:
-    ensure(db)
     return [x for pid in dict.fromkeys(ids) if (x := compact(card(db, pid)))]
 
 
 def decay_alarms(db, now_ms: int | None = None) -> list[dict[str, Any]]:
     """Live / probation patterns whose evidence now says probation or retire (checked by the guardian)."""
-    ensure(db)
     out = []
     for (pid,) in db.execute("SELECT DISTINCT id FROM patterns WHERE status IN ('live','probation')"):
         c = card(db, pid, now_ms)

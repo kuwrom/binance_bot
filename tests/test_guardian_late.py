@@ -37,8 +37,7 @@ async def test_a_fill_is_protected_under_a_held_lock_and_its_intent_lands_late(t
     g.entries._regime_fn = favorable
     g.j.set(ks.HEARTBEAT_KEY, str(time.time()))
     assert (await g.entries.propose_group([prop(1.04)]))["ok"]
-    await g.check_entries()                                      # a pass before the fill (the 5 s cadence): it rests
-    fake.fill_limit(oid_at(fake, 1.04))
+    fake.fill_limit(oid_at(fake, 1.04))                          # the first pass sees the fill: a cold ladder cache
     with HeldLock(tmp_path / "j.db", HOLD_S) as held:
         task = asyncio.create_task(g.check_entries())
         took = await until(lambda: fake.stops, HOLD_S - 0.5)

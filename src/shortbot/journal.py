@@ -13,7 +13,9 @@ the code version and the mode (+ the journal session and trade id on decisions, 
 alerts). Decisions are append-only; so are intents (intents.py, the record of every write).
 
 Writes on an event loop never wait for the write lock (#79, journal_writer.py): `await write(fn, *a)` and `post(fn, *a)`
-run fn(journal, *a) as one unit. Decisions and alerts are always posted: stamped at the call, written in order."""
+run fn(journal, *a) as one unit. Decisions and alerts are always posted: stamped at the call, written in order. A kv
+marker that guards a repeat (a cooldown stamp, a dedupe marker) is `mark`ed: this process reads it back at once, also
+while its write is queued behind another process's lock (#81)."""
 
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-from . import audit, fill_report, intents
+from . import audit, fill_report, intents, registry
 from .journal_learnings import LEARNINGS_SCHEMA, LearningStore
 from .journal_research import RESEARCH_SCHEMA, ResearchStore, add_columns
 from .journal_writer import Writer, connect
@@ -121,12 +123,14 @@ class Journal(ResearchStore, LearningStore):
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         self.mode = mode
         self.session_id: int | None = None   # the trading session this process started (start_session)
+        self._marks: dict[str, str] = {}      # kv this process marked whose write may not have landed yet (mark)
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
         self.db = connect(path)   # WAL: the guardian, MCP servers and CLI share this file
         self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + LEARNINGS_SCHEMA + intents.SCHEMA)
+        # every table at open: a reader never runs DDL, which waits for the write lock (registry, #81)
+        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + LEARNINGS_SCHEMA + intents.SCHEMA + registry.SCHEMA)
         self._migrate()
         self.w = Writer(self.db)
 
@@ -314,8 +318,23 @@ class Journal(ResearchStore, LearningStore):
 
     # ------------------------------------------------------------ kv
     def get(self, k: str) -> str | None:
+        if k in self._marks:
+            return self._marks[k]
         row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
         return row[0] if row else None
+
+    def mark(self, k: str, v: str) -> None:
+        """Set a kv marker that guards a repeat (alert_ts:, news_seen:...): posted, and read back by this process at
+        once. While another process holds the write lock the post waits in the queue, and a check reading only the
+        journal repeated what the marker guards on every pass (#81); get() answers from here until it lands.
+        Process-local: the journal stays the cross-process record."""
+        self._marks[k] = v
+        self.post(Journal._land_mark, k, v)
+
+    def _land_mark(self, k: str, v: str) -> None:
+        self.set(k, v)
+        if self._marks.get(k) == v:   # else a later mark of k is still on its way
+            del self._marks[k]
 
     def set(self, k: str, v: str) -> None:
         self.db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (k, v))

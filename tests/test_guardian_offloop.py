@@ -1,6 +1,7 @@
 """The guardian's event loop never waits for the journal's write lock (#79). Another process holding it for 5 s delays
-no protective pass; a missing stop is still restored within ~2 s (its intent journalled late, marked); strict intents
-still journal before they send; and no guardian job writes on the loop outside a unit (journal_writer.py)."""
+no protective pass, and the backlog drains in batches after it (#81); a pass reading a cold setup ladder runs no DDL
+(#81); a missing stop is still restored within ~2 s (its intent journalled late, marked); strict intents still journal
+before they send; and no guardian job writes on the loop outside a unit (journal_writer.py)."""
 
 import asyncio
 import sqlite3
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from shortbot import gateway, intents
+from shortbot import killswitch as ks
 from shortbot import guardian as gmod
 from shortbot.guardian import Guardian
 from shortbot.intents import Intent
@@ -21,6 +23,7 @@ from tests.loop_guard import connections, loop_writes
 from tests.test_entry_races import favorable, prop
 from tests.test_guardian import open_trade
 from tests.test_guardian_loop import SLOW_JOBS, NoStream, noop
+from tests.test_journal_writer import commits, ticking
 
 
 def guardian_on(path, fake: FakeCcxt | None = None) -> Guardian:
@@ -38,7 +41,8 @@ def guardian_on(path, fake: FakeCcxt | None = None) -> Guardian:
 
 
 @STALL_REPORT
-async def test_a_held_write_lock_delays_no_protective_pass(tmp_path, monkeypatch):
+async def test_a_held_write_lock_delays_no_protective_pass_and_its_backlog_drains_in_batches(tmp_path,
+                                                                                             monkeypatch):
     monkeypatch.setattr(gmod, "TICK_S", 0.01)
     monkeypatch.setattr(gmod, "RESEARCH_START_DELAY_S", 3600)
     monkeypatch.setattr(gmod, "PROTECTIVE", {"entries": (0.01, 5), "positions": (0.01, 5)})
@@ -56,19 +60,42 @@ async def test_a_held_write_lock_delays_no_protective_pass(tmp_path, monkeypatch
             passes[job].append(time.monotonic())
         setattr(g, {"entries": "check_entries", "positions": "check_positions", "watch": "watch_positions"}[job], timed)
     hb0 = g.j.get("guardian_heartbeat")
+    done = commits(g.j)
     with HeldLock(tmp_path / "j.db", 5.0) as held:
         task = asyncio.create_task(g.run())
         await asyncio.sleep(5.3)
-        held.wait()
-        await asyncio.sleep(0.3)
+        released = held.wait() - time.time() + time.monotonic()
+        while g.j.w.pending() and time.monotonic() < released + 30:   # a slow disk drains slower: not timed
+            await asyncio.sleep(0.01)
+        left, queued = g.j.w.pending(), g.j.w.stats["queued"]  # every unit queued since the hold began
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
     for job, ts in passes.items():
-        assert len(ts) > 100, job                              # ~every 13 ms, for 5.6 s
-        assert max(b - a for a, b in zip(ts, ts[1:])) < 0.1, job
-    assert g.j.w.pending() == 0 and g.j.get("guardian_heartbeat") != hb0   # the bookkeeping landed after the release
+        held_ts = [t for t in ts if t < released]
+        assert len(held_ts) > 100, job                         # ~every 13 ms, for 5 s
+        assert max(b - a for a, b in zip(held_ts, held_ts[1:])) < 0.1, job
+    batches = [n for n in done if n]                           # a COMMIT with units queued: one batch of them
+    assert left == 0 and len(batches) * 20 <= queued, (len(batches), queued)   # before #81: a COMMIT per unit
+    assert g.j.get("guardian_heartbeat") != hb0                # the bookkeeping landed after the release
     assert not [a for a in g.j.alerts(100) if a["kind"].startswith("guardian_error")]
+
+
+@STALL_REPORT
+async def test_a_pass_reading_a_cold_ladder_never_blocks_the_loop_under_a_held_lock(tmp_path):
+    g = guardian_on(tmp_path / "j.db")
+    g.entries._regime_fn = favorable
+    g.j.set(ks.HEARTBEAT_KEY, str(time.time()))
+    assert (await g.entries.propose_group([prop(1.04)]))["ok"]   # resting: the resize sweep reads its setup's ladder
+    gaps, stop = [], asyncio.Event()
+    with HeldLock(tmp_path / "j.db", 2.0):
+        tick = asyncio.create_task(ticking(gaps, stop))
+        await asyncio.sleep(0.02)
+        await g.check_entries()                                # the first pass: the ladder cache is cold
+        await asyncio.sleep(0.02)
+        stop.set()
+        await tick
+    assert max(gaps) < 0.1                                     # before #81: the registry's schema DDL waited 2 s
 
 
 @STALL_REPORT

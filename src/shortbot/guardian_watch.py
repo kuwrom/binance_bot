@@ -111,7 +111,7 @@ class WatchChecks:
             url, title = item.get("url", ""), item.get("title", "")
             key = f"news_seen:{url or title}"    # a link that failed safe_url() is "": the headline still alerts
             if (url or title) and self.j.get(key) is None:
-                self.j.post(lambda j, k=key: j.set(k, str(time.time())))
+                self.j.mark(key, str(time.time()))
                 await self.n.send("news_on_position", f"{title}\n{url}".strip(), sym, cooldown_s=0)
         if res.get("errors"):   # no news from a dead feed is not "no news" (#66); one alert for every short
             await send_safe(self.n, "news_feed_down", f"news sources failed: {', '.join(res['errors'])}. News on "
