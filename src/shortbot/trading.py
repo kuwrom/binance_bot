@@ -42,7 +42,6 @@ from .trading_orders import OrderFlow
 
 log = logging.getLogger("shortbot.trading")
 STOP_PARAMS = {"closePosition": True, "workingType": "MARK_PRICE"}
-DEAD = ("canceled", "expired", "rejected")   # final: an order found unfilled in one of these never fills
 Alert = Callable[[str, str, str | None, bool], Awaitable[Any]]
 Prechecks = Callable[[Exchanges, str, dict], Awaitable[dict[str, Any]]]
 ISOLATED_OK_KEY = "isolated_ok:"   # kv (per mode): when this desk last saw the symbol isolated (prepare)
@@ -213,6 +212,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
     async def prepare(self, symbol: str, leverage: int) -> None:
         """Before an entry: one-way mode (once per process), isolated margin confirmed, then `leverage`. Raises when
         the symbol can't be confirmed isolated (#64): nothing may be sent then."""
+        intents.sent()
         if not self._one_way_ok:
             mode = await self.t.fetch_position_mode(symbol)
             if mode.get("hedged"):
@@ -273,8 +273,10 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         doubt = False
         for i in range(tries):
             try:
-                return await self.t.create_order(symbol, "STOP_MARKET", "buy", None, None,
-                                                 {**STOP_PARAMS, "triggerPrice": px, "clientOrderId": cid})
+                placed = await self.t.create_order(symbol, "STOP_MARKET", "buy", None, None,
+                                                   {**STOP_PARAMS, "triggerPrice": px, "clientOrderId": cid})
+                intents.settle(self.j, cid, "placed")
+                return placed
             except Exception as e:  # noqa: BLE001 - classified: a definite refusal raises, else found by its id
                 kind = errors.classify(e)
                 unknown = kind.unknown
@@ -283,7 +285,10 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
                 if unknown:
                     await _sleep(1)
                 if (unknown or doubt) and (found := await self.find_stop(symbol, cid)):
+                    intents.settle(self.j, cid, "placed")
                     return found
+                if not (unknown or doubt):   # nothing of it ever landed
+                    intents.settle(self.j, cid, "rejected")
                 if not unknown or i == tries - 1:
                     raise
                 doubt = True

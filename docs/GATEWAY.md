@@ -1,8 +1,7 @@
 # Order gateway (task #36, design, 2026-10-02)
 One process owns every exchange write. The MCP servers, the CLI and the guardian submit **intents** to it. It runs them one at a time per symbol, journals each one before acting, resolves unknown outcomes by client id, and answers with a typed result. It replaces the per-symbol flock (#21) as the serialiser, works when the desk runs on AWS Tokyo, gives `Trader` a public interface, and makes one command registry the source of both the MCP tools and the CLI.
 
-Status: steps 0 (public `Trader`, §1.2), 1 (command registry), 2a and 2b (in-process intents, every write of the
-sessions and the guardian, §8) built; the rest is design. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
+Status: steps 0 (public `Trader`, §1.2), 1 (command registry), 2a and 2b (in-process intents, every write of the sessions and the guardian) and 3 (typed results, the resolver) built (§8); the rest is design. Surveyed on master e45da38. Sources at the end, checked 2026-10-02.
 
 ## Recommendation in one screen
 - **Where:** its own small process, `shortbot-gateway`, on the desk host (the host with the journal and the guardian). The guardian becomes its first client. Not inside the guardian, and not a library with a leader lock (§2).
@@ -76,10 +75,7 @@ Every guardian flow below is an intent of its job since step 2b (§8); the kinds
 - `entry_reconcile` (60 s): `entry_intents.py:125/139/183/275`.
 - `tranches.cancel_legs` (:80) on a full close.
 
-**Private `Trader` methods called from other modules: resolved by step 0.** The survey found 18 call sites in 10 modules, plus 6 in the probes. Each now has a public name:
-- `_place_stop` → `place_close_stop`, `_market_close` → `close_market`, `_market_sell` → `open_market`;
-- `_prepare` → `prepare`, `_raw_positions` → `raw_positions`, `_verified_position` → `verified_position`, `_find_stop` → `find_stop`;
-- the guardian's assignment to `_alert` → `set_alert(fn)`.
+**Private `Trader` methods called from other modules: resolved by step 0.** The survey found 18 call sites in 10 modules, plus 6 in the probes. Each now has a public name: `_place_stop` → `place_close_stop`, `_market_close` → `close_market`, `_market_sell` → `open_market`, `_prepare` → `prepare`, `_raw_positions` → `raw_positions`, `_verified_position` → `verified_position`, `_find_stop` → `find_stop`, and the guardian's assignment to `_alert` → `set_alert(fn)`.
 
 No aliases are left. `tests/test_trader_public.py` fails if a module outside `trading*.py` touches a private `Trader` member. Tests are exempt.
 
@@ -111,7 +107,7 @@ Each mechanism covers one part:
 2. **A suspended process keeps its flock.** If the laptop sleeps mid-sequence:
    - the guardian gets `SymbolBusy` on that symbol every pass, so no pass verifies, and HALTED follows after 10 min;
    - the session wakes up mid-sequence, acting on hours-old decisions.
-3. **Market sends of unknown outcome outside entries have no resolver.** These are the `close_unknown` and `add` UNKNOWN decisions; a human re-reads the position.
+3. ~~**Market sends of unknown outcome outside entries have no resolver.**~~ Fixed by step 3: `resolver.py` settles every unknown or interrupted intent by its orders' client ids (`close_unknown`, `add` UNKNOWN, an entry's open) and alerts `intent_resolved`.
 4. ~~**Portfolio caps are checked per process.**~~ Fixed by #74: the account lock serialises every risk-adding flow across the processes on this host, and the caps count resting entries and entries of unknown outcome (`exposure.py`). Same-host only, like the symbol flock.
 5. **Account-level limits are invisible to any one process.** Order rate limits are counted per account (Binance General Info), weight per IP, and each process sees only its own responses.
 6. **Every writer runs its own copy of the order path.** #68 stops a stale MCP server from writing, but the guardian between a merge and its restart, or a stale lazily-imported module, still writes.
@@ -242,8 +238,8 @@ B is the same pattern, with the guardian as one more surface. A and B share step
 - **Built in step 2a** (`intents.py`, `gateway.py`):
   - one `Intent` dataclass. A command's kind is its MCP name (else its body's), and its args schema is the body's signature in the registry, so no per-kind class can drift from it;
   - the `intents` row replaces the write's #24 `call` decision row: it is written before the call runs, holds the request, actor and Claude session, then the status and today's result. Request columns are frozen and a final status is final (triggers), like decisions. Decision and alert rows written while an intent runs carry `intent_id`;
-  - `intent_orders(client_id, intent_id, kind, symbol, at)` is written by the primitives just before each send. `entries`, `target_orders` and the trade's open id keep their own state and are reached through the client id; nothing is copied. `outcome` comes with step 3's resolver;
-  - statuses keep today's outcomes until step 3 types them: done, refused (`ok: false`), unknown, failed (raised), busy (nothing sent: runs again under its id), interrupted, expired;
+  - `intent_orders(client_id, intent_id, kind, symbol, at, outcome)` is written by the primitives just before each send, its `outcome` once known (step 3: their answer, or the resolver). `entries`, `target_orders` and the trade's open id keep their own state and are reached through the client id; nothing is copied;
+  - statuses are §4.5's, exact by what the run sent (step 3, `results.py`): every primitive records its sends in the run's ledger (`intents.send` / `sent`);
   - guardian ids are one ULID per attempt for now: in-process there is no retry to collapse, and a fixed id would stop the next pass from retrying a failed restore. The fingerprint ids come with step 6's transport.
 
 ### 4.4 Ordering
@@ -261,10 +257,11 @@ Per-symbol FIFO within a class (§3.3), with one running sequence per symbol. Th
 | `pending` | yes | only for a caller whose wait ended mid-run | `status(id)` |
 
 Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe received: `status(id)`).
+**Built in step 3** (`results.py`): `Result(status, sent, side, body, error)`. `body` is today's result dict, unchanged on every surface. `refused` means nothing was sent; `failed` means a send, then nothing left changed; `partial` means an order part-filled or the answer reports what it kept (`closed`, `cancelled`, `unprotected`, a plan step's `done`); `unknown` means a client id is still in doubt. `pending` comes with step 4. The row keeps `status`, `sent`, `result` and `error` (`errors.OrderError.to_dict`).
 
 ## 5. Crash recovery and reconciliation
 - **The intent journal:** an intent goes `received` → `running` → a final status. Every transition is compare-and-set, and no write transaction spans an exchange call (symlock's rule stays).
-- **In-process (step 2a):** there is no gateway start. The guardian's `entry_reconcile` job ends the open intents of a process that is gone (pid check, one host per D2) or that have been open over an hour (pid reuse): received → expired, running → interrupted, alerted as `intent_interrupted` with their client ids. The existing reconcilers resolve the orders, as before.
+- **In-process (steps 2a, 3):** there is no gateway start. The guardian's `entry_reconcile` job (its first tick as the guardian starts) ends the open intents of a process that is gone (pid check, one host per D2) or that have been open over an hour (pid reuse): received → expired, running → interrupted, alerted as `intent_interrupted` with their client ids. Then `resolver.py` settles every unknown or interrupted intent: each order without an outcome is looked up by its client id (`not_found` 90 s after its send), and the intent ends done, refused or partial, once, with an `intent_resolved` alert. It never re-sends; trade state stays with the existing reconcilers.
 - **At start, before listening:**
   1. `received` rows from a previous run become `expired`. An intent never runs late on an old decision; the guardian re-issues its intents on its next pass.
   2. `running` rows become `interrupted`, and their `intent_orders` client ids are collected.
@@ -296,7 +293,7 @@ Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe rece
 
 ## 6. Error vocabulary (#37)
 The gateway needs these types. Each has a stable `code`, a tri-state `sent` (False / True / None = unknown), `retryable`, and `to_dict`/`from_dict` for the wire.
-#37 built `errors.classify` and the types; their `sent`, `retryable`, `to_dict`/`from_dict` and `wrap` had no caller yet and were removed in #77: the gateway adds them back with its first caller.
+#37 built `errors.classify` and the types. `sent`, `code`, `to_dict`/`from_dict` (with `retryable`) and `wrap` were removed in #77 and came back in step 3, with the intent's `error` column and the result's error as their callers.
 
 | family | `sent` | types |
 |---|---|---|
@@ -309,9 +306,8 @@ The gateway needs these types. Each has a stable `code`, a tri-state `sent` (Fal
 | client side | False / None | `GatewayUnavailable`, `ReceiptUnknown` |
 
 **What #37 must provide:**
-- one classifier (ccxt exception + Binance code → type) that replaces the string matching in the order path (done: `errors.classify`; the old helpers were removed in #77);
-- a mapping to and from today's result dicts (`ok`, `error`, `unknown`, `noop`, `rejected_by_*`), so steps 1-2 change no tool output;
-- `sent` named explicitly. It is the gateway's core question.
+- one classifier (ccxt exception + Binance code → type) that replaces the string matching in the order path (done: `errors.classify`);
+- a mapping to and from today's result dicts (`ok`, `error`, `unknown`, `noop`, `rejected_by_*`), so no step changes tool output (done in step 3: `results.Result.of` / `from_row`), with `sent` named explicitly (the gateway's core question).
 
 ## 7. Side-awareness (LONG_BUILD.md phase 1 → 2)
 - **Every intent carries `side`** (`short` until phase 2). The gateway takes order sides from phase 1's `Side` helper:
@@ -336,7 +332,7 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 | 1 | **Command registry** (done). One declaration per command in `commands.py`: MCP name, CLI name, args typed by the body's signature, read / write, weight class, stale-exempt, CLI hint. It generates the MCP tool and the argparse subcommand. The six tables, `stale_guard.CLI` and `cli.tool_body` are gone. Pairs whose bodies differed now share the MCP body, and the weight classes agree (`set-params`, `flatten` and `kill-switch` are protective) | as today | `test_commands.py`; `test_cli_fallback.py` (every write has a CLI form the parser accepts); the `commands` block in `surface.json`; `tools/list` unchanged | ~400 |
 | 2a | **Intents in-process** (done). `Intent`, the `Gateway` protocol, `LocalGateway` running today's code; every MCP and CLI write submits one intent (killswitch_ops and ladder_apply run inside their command's); the guardian's `restore_stop`, `force_close`, `cap_stop` and `plan_step` are intents of its jobs; `intents` + `intent_orders` tables; the interrupted-intent sweep | as today | `test_intents.py`: journal first, a resubmitted id runs once, in progress, busy re-runs, status mapping, append-only rows, sweep; `test_intent_paths.py`: one intent per write on both surfaces, linked orders and decisions, a crash mid-send resolved as before, guardian actors | ~600 + tests |
 | 2b | **The guardian's other writes as intents** (done). The fill poll (protect a fill with its OCO siblings and tranche joins, expiry and cancel rules, a forgotten entry), the HALTED and governor/pause/resize sweeps, `entry_intents.reconcile`'s resolutions, the orphan sweep, a flat symbol's targets, and the session watchdog's withdrawal (from a read: an intent of the reader; from a write's gate: inside that write's). Each caller decides from reads; a handler sends (`entries_acts.py`, ctx = the `EntryDesk`; `pull_targets`, ctx = the guardian). A withdrawal that keeps failing is resubmitted 5, 10, 20, 40, then 60 s apart (`entry_gates.Retry`), not every 5 s pass. The listen key is the one allowlisted exception (§1.2). After it, step 6 is a transport change only | as today | the lock audit fails any write reached from the guardian (or the watchdog) outside an intent; `test_guardian_intents*.py`: each site's kind and actor, stored requests re-bind their handlers, a quiet pass submits none, 10 failing passes ≤ 5 rows; `test_guardian_late.py`: late_ok kinds send under a held lock, a strict one journals first | ~450 + tests |
-| 3 | **Typed results + generic resolver** for market sends of unknown outcome (gap 3), on #37's types | as today | fakes: a close/add that times out is resolved by client id; nothing is re-sent | ~250 |
+| 3 | **Typed results + generic resolver** (done). `results.py`: statuses exact by what was sent; each primitive records its sends and their outcomes (`intent_orders.outcome`); the error wire helpers are back. `resolver.py` settles unknown and interrupted intents by client id from `entry_reconcile` (gap 3). `plan_step` answers `ok: false` when an action failed | as today | `test_results.py`: every result shape round-trips; `test_intent_status.py`: refused, failed (a stop swap after its bridge), partial (a short fill; T1 then a failed breakeven swap), unknown; `test_resolver.py`: filled, not found, an add never placed, never re-sent | ~550 + tests |
 | 4 | **Gateway process + socket client**, behind `SHORTBOT_GATEWAY=off\|session` (default off). With `session`, MCP and CLI go through the gateway; the guardian still writes directly. Break-glass for risk-reducing actions; `gateway_heartbeat`; global admission (gap 4); self-restart on a stale closure; launchd plist + compose service in DEPLOY.md. The per-symbol queues split the cross-symbol intents into a parent plus one step per symbol: `protect_fill` (its OCO siblings), `cancel_entry_group`, `flatten_all` (in-process each holds one symbol lock at a time) | the gateway also takes it per sequence, so mixed writers stay serialised | a real socket in tests: deadline/expired, busy, disconnect mid-run, receipt-unknown → `status`, mode mismatch, break-glass only for the allowed set, peer-uid refusal | ~600 |
 | 5 | **Sessions on by default** after a demo soak (D6). The stale guard for writes becomes a protocol check (D5) | belt and braces | the stale-guard tests are rewritten for intents | ~100 |
 | 6 | **The guardian becomes a client:** its writes are intents; startup reconciliation runs in the gateway (§5) | break-glass only | guardian suites against a gateway fixture; kill -9 mid-swap, mid-open and mid-close, then restart → reconciled and alerted | ~500 |
@@ -346,7 +342,7 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 
 - **Reads stay in-process everywhere.** Positions, account, stop listings, pending entries, journal, governor/budget and scans don't serialise behind the writer, which is also how NautilusTrader and Freqtrade read. Only the re-reads inside a sequence move into the gateway.
 - **The flock stays for good.** Through steps 0-5 it is the belt-and-braces guard (the gateway takes it per sequence, at microseconds). From step 6 its only job is break-glass against the gateway. It is 200 lines with tests. Retiring it would only make sense if break-glass is dropped (D3).
-- **Order against parallel work.** Step 0 after #37 (both touch the order-path modules); step 4 after #72 (guardian wiring); step 3 uses #55's probe results for the Query Algo Order not-found answer.
+- **Order against parallel work.** Step 0 after #37 (both touch the order-path modules); step 4 after #72 (guardian wiring). The resolver checks a stop's not-found Query Algo Order answer against the open conditional orders (#55 hasn't verified it).
 
 ## 9. Risks, open questions, decisions
 **Risks:**

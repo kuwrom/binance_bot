@@ -41,9 +41,9 @@ import ccxt.async_support as ccxt
 
 from . import entries_acts  # noqa: F401 - registers the entry handlers this desk's intents run
 from . import entries_fills as fills
-from . import errors
+from . import clientid, errors
 from .entries_amend import EntryAmend
-from .entries_cancel import DEAD, EntryCancel
+from .entries_cancel import EntryCancel
 from .entries_place import EntryPlacement
 from .entry_gates import STAMPED, Retry
 from .entry_intents import HINTS, ON_BOOK, resolve
@@ -191,7 +191,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                                   reason="tranche trade already closed") == "unfilled":
                     return {"entry_id": e["id"], "event": "cancelled", "why": "tranche trade closed"}
                 return None
-        if o.get("status") in DEAD or now_ms > e["expires_ms"]:
+        if o.get("status") in clientid.DEAD or now_ms > e["expires_ms"]:
             if await self.act("cancel_entry", e, status="expired",
                               reason=f"exchange status {o.get('status')}") == "unfilled":
                 return {"entry_id": e["id"], "event": "expired"}

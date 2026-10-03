@@ -24,7 +24,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import ccxt.async_support as ccxt
 
@@ -34,13 +34,32 @@ log = logging.getLogger("shortbot.errors")
 
 
 class OrderError(Exception):
-    """One outcome of an exchange call; `cause`: the original error."""
+    """One outcome of an exchange call (the base type: a generic one, nothing ran). `cause`: the original error; `code`:
+    its Binance code, if the answer had one; `sent` (docs/GATEWAY.md §6): None = unknown, it may have run; True =
+    Binance answered, nothing ran; False = it never reached Binance (a definite type without a code: ccxt's own checks;
+    the gateway also sets it when the intent sent nothing). to_dict / from_dict: the wire form, kept in an intent's
+    error column (intents.py) and carried as a result's error (results.py)."""
     unknown: ClassVar[bool] = False
     transient: ClassVar[bool] = False
 
     def __init__(self, cause: BaseException | None = None, msg: str | None = None):
         super().__init__(msg or (str(cause) if cause is not None else type(self).__name__))
         self.cause = cause
+        self.code = code(cause)
+        self.sent: bool | None = None if self.unknown else self.code is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        """The wire form; `type` is the vocabulary's (clientid.Unknown is an OutcomeUnknown)."""
+        kind = next(k for k in type(self).__mro__ if k in TYPES or k is OrderError)
+        return {"type": kind.__name__, "code": self.code, "message": str(self), "sent": self.sent,
+                "unknown": self.unknown, "retryable": self.transient}
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> OrderError:
+        kinds: tuple[type[OrderError], ...] = (OrderError, *TYPES)
+        e = next((k for k in kinds if k.__name__ == d.get("type")), Unexpected)(None, d.get("message"))
+        e.code, e.sent = d.get("code"), d.get("sent", e.sent)
+        return e
 
 
 class Gone(OrderError):
@@ -147,6 +166,14 @@ def classify(e: BaseException) -> type[OrderError]:
     if isinstance(e, ccxt.ExchangeError) and type(e) is not ccxt.ExchangeError:
         return Refused
     return Unexpected
+
+
+def wrap(e: BaseException) -> OrderError:
+    """This error as its type, the original as `cause`. A non-exchange error keeps its own name in the message
+    ('RuntimeError: ...'), as describe() shows it."""
+    if isinstance(e, OrderError):
+        return e
+    return classify(e)(e, str(e) if isinstance(e, ccxt.BaseError) else f"{type(e).__name__}: {e}")
 
 
 def transient(e: BaseException) -> bool:

@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_gates, entry_intents, errors, intents, reconcile, stops
+from . import entry_gates, entry_intents, errors, intents, reconcile, resolver, stops
 from .exchange import to_raw
 from .gateway import handler
 from .guardian_loop import guarded, send_safe
@@ -321,17 +321,19 @@ class PositionChecks:
         return {**st, "level": ks.LEVEL[st["state"]]} if st else None
 
     async def reconcile_entries(self) -> None:
-        """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts), and
-        intents whose process died mid-run: ended, and alerted with the orders they sent (the reconcilers resolve
-        those orders; a market close or add of unknown outcome is the human's until step 3's resolver)."""
+        """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts);
+        intents whose process died mid-run, ended and alerted with the orders they sent; then every intent of unknown
+        outcome, these included, settled by its orders' client ids (resolver.py; it alerts each resolution)."""
         if self.ex.trade:
             await entry_intents.reconcile(self.entries)
         for r in await self.j.write(intents.sweep):
-            sent = (f"orders it sent: {', '.join(r['orders'])}. Re-read the position and orders" if r["orders"]
+            sent = (f"orders it sent: {', '.join(r['orders'])}, settled by client id (intent_resolved)" if r["orders"]
                     else "it sent nothing")
             await send_safe(self.n, "intent_interrupted", f"intent {r['id']} ({r['kind']}, {r['actor']}) "
                             f"{r['status']}: its process died mid-run; {sent}", r["symbol"], urgent=bool(r["orders"]),
                             cooldown_s=0)
+        if self.ex.trade:
+            await resolver.resolve(self.app.trader)
 
 
 # ------------------------------------------------------------ intent handlers (gateway.py): ctx = the guardian

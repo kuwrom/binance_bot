@@ -11,14 +11,13 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import errors
+from . import clientid, errors
 from .entry_gates import RESTING
 from .entry_intents import GRACE_S, located
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.entries")
 
-DEAD = ("canceled", "expired", "rejected")
 CANCEL_FAILS_ALERT = 3   # sibling-retry cancels failed in a row before a human is told (once per streak)
 LIVE = ("pending", "placing", "unknown")   # the desk's rows that are or may be on the book (RESTING)
 
@@ -62,7 +61,7 @@ async def withdraw(tr, e: dict[str, Any], alert=None) -> str:
             o = await tr.t.fetch_order(e["order_id"], e["symbol"])
         except Exception:  # noqa: BLE001 - unread: "unknown", the caller retries next pass (and streak-alerts)
             return "unknown"
-        if not float(o.get("filled") or 0) and o.get("status") not in DEAD:
+        if not float(o.get("filled") or 0) and o.get("status") not in clientid.DEAD:
             return "unknown"
     except Exception:  # noqa: BLE001 - not sent, or sent with the outcome unknown: the order may still rest
         return "unknown"

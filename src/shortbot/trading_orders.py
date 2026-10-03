@@ -6,11 +6,12 @@ is then matched in trade history by id, not by time.
 The resting ones (cancel, place_limit, edit_limit, place_reduce_stop, place_reduce_limit) send ONE request and return
 ccxt's answer, or raise its error, as is: the flows that call them (entries_*, stops, targets_sync, orphans) journal
 first, classify the error and resolve an ambiguous answer by its client id. They are the only way any other module
-writes to the exchange (#36 gateway step 0; GATEWAY.md §7 makes them side-aware later). Each order sent under a client
-id is linked to the intent it belongs to just before the send (intents.link, #36 step 2).
+writes to the exchange (#36 gateway step 0; GATEWAY.md §7 makes them side-aware later). Each one tells the intent it
+runs in what it sends (#36 steps 2-3): an order under a client id is linked just before the send and settled with
+what Binance answered (intents.send / settle); an id-less write is marked sent (intents.sent).
 
-trading.py imports this module, so `DEAD`, `_f` and `_sleep` are imported inside each method at call time: a
-module-level import would be circular, and would bind `_sleep` before the tests patch `shortbot.trading._sleep`.
+trading.py imports this module, so `_f` and `_sleep` are imported inside each method at call time: a module-level
+import would be circular, and would bind `_sleep` before the tests patch `shortbot.trading._sleep`.
 """
 
 from __future__ import annotations
@@ -76,10 +77,9 @@ class OrderFlow:
         for i in range(tries):
             if whole or not doubt:
                 cid = clientid.new("close", clientid.tag(symbol))
-                intents.link(self.j, cid, symbol)
                 try:
-                    return await self.t.create_order(symbol, "market", "buy", amount, None,
-                                                     {"reduceOnly": True, "clientOrderId": cid})
+                    return await intents.send(self.j, cid, symbol, self.t.create_order(
+                        symbol, "market", "buy", amount, None, {"reduceOnly": True, "clientOrderId": cid}))
                 except Exception as e:  # noqa: BLE001 - this is the last line of defence: classified, then retried
                     last, kind = e, errors.classify(e)
                     if kind is errors.ClockDrift:
@@ -118,15 +118,17 @@ class OrderFlow:
     async def _close_outcome(self, symbol: str, doubt: list[str]) -> Order | None:
         """Settle close sends of unknown outcome: the newest one found with a fill; one found dead and unfilled leaves
         `doubt`; {"flat": True} when the position reads flat; None while still in doubt."""
-        from .trading import DEAD, _f
+        from .trading import _f
         for cid in reversed(list(doubt)):
             try:
                 o = await clientid.lookup(self.t, symbol, cid)
             except Exception:  # noqa: BLE001 - still unknown
                 continue
             if o and _f(o.get("filled")) > 0:
+                intents.settle(self.j, cid, clientid.outcome(cid, o))
                 return o
-            if o and o.get("status") in DEAD:
+            if o and o.get("status") in clientid.DEAD:
+                intents.settle(self.j, cid, "unfilled")
                 doubt.remove(cid)
         try:
             pos = await self.position(symbol)
@@ -147,10 +149,10 @@ class OrderFlow:
         return order
 
     async def _sell_once(self, symbol: str, amount: float, cid: str, lookups: int) -> Order:
-        from .trading import DEAD, _f, _sleep
-        intents.link(self.j, cid, symbol)
+        from .trading import _f, _sleep
         try:
-            return await self.t.create_order(symbol, "market", "sell", amount, None, {"clientOrderId": cid})
+            return await intents.send(self.j, cid, symbol, self.t.create_order(symbol, "market", "sell", amount,
+                                                                                None, {"clientOrderId": cid}))
         except Exception as e:  # noqa: BLE001 - classified: a definite refusal raises as is, else looked up by its id
             kind = errors.classify(e)
             if not kind.unknown:
@@ -163,40 +165,42 @@ class OrderFlow:
                     o = await clientid.lookup(self.t, symbol, cid)
                 except Exception:  # noqa: BLE001 - look again
                     continue
-                if o is not None and (_f(o.get("filled")) > 0 or o.get("status") in DEAD):
+                if o is not None and (_f(o.get("filled")) > 0 or o.get("status") in clientid.DEAD):
+                    intents.settle(self.j, cid, clientid.outcome(cid, o))
                     return o
             raise clientid.Unknown(cid, e) from e
 
     async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order:
         """Cancel one order: a conditional one (trigger=True: a stop, bridge or pre-arm) or a limit (entry, target).
         -2011 (ccxt OrderNotFound) means it is off the book: filled, triggered or cancelled before."""
+        intents.sent()
         if trigger:
             return await self.t.cancel_order(order_id, symbol, params={"trigger": True})
         return await self.t.cancel_order(order_id, symbol)
 
     async def place_limit(self, symbol: str, amount: float, price: float, expires_ms: int, cid: str) -> Order:
         """A GTD limit SELL that opens a short when it fills (an entry, entries_place.py), resting to `expires_ms`."""
-        intents.link(self.j, cid, symbol)
-        return await self.t.create_order(symbol, "limit", "sell", amount, price,
-                                         {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
+        return await intents.send(self.j, cid, symbol, self.t.create_order(
+            symbol, "limit", "sell", amount, price,
+            {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid}))
 
     async def edit_limit(self, symbol: str, order_id: str, amount: float, price: float) -> Order:
         """Move a resting entry limit SELL to `price` (Modify Order: same order id)."""
+        intents.sent()
         return await self.t.edit_order(order_id, symbol, "limit", "sell", amount, price)
 
     async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> Order:
         """A reduce-only STOP_MARKET BUY of `amount` (mark price): the bridge that covers a stop swap (stops.py) or an
         entry's pre-armed stop (entries_place.py). Unlike place_close_stop it has a size; a side may hold several."""
-        intents.link(self.j, cid, symbol)
-        return await self.t.create_order(symbol, "STOP_MARKET", "buy", amount, None, {
-            "triggerPrice": float(self.t.price_to_precision(symbol, trigger)), "reduceOnly": True,
-            "workingType": "MARK_PRICE", "clientOrderId": cid})
+        return await intents.send(self.j, cid, symbol, self.t.create_order(
+            symbol, "STOP_MARKET", "buy", amount, None, {
+                "triggerPrice": float(self.t.price_to_precision(symbol, trigger)), "reduceOnly": True,
+                "workingType": "MARK_PRICE", "clientOrderId": cid}))
 
     async def place_reduce_limit(self, symbol: str, qty: float, price: float, cid: str) -> Order:
         """A reduce-only GTC limit BUY: a plan target resting on the book (targets_sync.py)."""
-        intents.link(self.j, cid, symbol)
-        return await self.t.create_order(symbol, "limit", "buy", qty, price,
-                                         {"reduceOnly": True, "timeInForce": "GTC", "clientOrderId": cid})
+        return await intents.send(self.j, cid, symbol, self.t.create_order(
+            symbol, "limit", "buy", qty, price, {"reduceOnly": True, "timeInForce": "GTC", "clientOrderId": cid}))
 
     async def listen_key(self) -> str:
         """POST /fapi/v1/listenKey (weight 1): the account's user-data stream key (user_stream.py, #54). "If the

@@ -99,7 +99,7 @@ ignore_missing_imports = true
 module = [
     "shortbot.errors", "shortbot.commands", "shortbot.weight", "shortbot.symlock", "shortbot.exposure",
     "shortbot.steps", "shortbot.trading_orders", "shortbot.stale_guard", "shortbot.journal_writer",
-    "shortbot.wal_holder",
+    "shortbot.wal_holder", "shortbot.results",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true

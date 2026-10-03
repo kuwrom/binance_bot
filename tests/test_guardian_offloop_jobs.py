@@ -178,8 +178,10 @@ class _Offline:
 
 
 def test_intents_columns_are_migrated(tmp_path):
-    assert "journal_late" in {r[1] for r in Journal(tmp_path / "j.db").db.execute("PRAGMA table_info(intents)")}
-    assert intents.COLUMNS == {"journal_late": "INTEGER"}
+    j = Journal(tmp_path / "j.db")
+    for table, cols in intents.COLUMNS.items():
+        assert set(cols) <= {r[1] for r in j.db.execute(f"PRAGMA table_info({table})")}
+    assert intents.COLUMNS["intents"]["journal_late"] == "INTEGER"
 
 
 @STALL_REPORT

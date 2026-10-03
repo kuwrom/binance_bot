@@ -151,8 +151,9 @@ class Journal(ResearchStore, LearningStore):
         await self.w.flush()
 
     def _migrate(self) -> None:
-        for table, cols in {"trades": TRADE_COLUMNS, "intents": intents.COLUMNS, **AUDIT_COLUMNS}.items():
+        for table, cols in {"trades": TRADE_COLUMNS, **intents.COLUMNS, **AUDIT_COLUMNS}.items():
             add_columns(self.db, table, cols)
+        intents.migrate(self.db)
         self._migrate_research()
         self.db.commit()
         self._migrate_learnings()   # its index is built in a transaction of its own

@@ -186,7 +186,7 @@ class OpenFlow:
 
     async def _enter(self, tid: int, cid: str, symbol: str, amount: float, stop_price: float, sized: bool,
                      leverage: int, lim, equity: float) -> dict:
-        from .trading import DEAD, _f, _sleep
+        from .trading import _f, _sleep
         try:
             order = await self.open_market(symbol, amount, cid)
         except clientid.Unknown as e:
@@ -201,7 +201,7 @@ class OpenFlow:
             why = errors.describe(e)   # InsufficientMargin, MarketClosed, Precision...: what to change
             self.j.abort_trade(tid, f"entry order refused: {why}")
             return {"ok": False, "error": f"entry order refused, no position: {why}"}
-        if not _f(order.get("filled")) and order.get("status") in DEAD:
+        if not _f(order.get("filled")) and order.get("status") in clientid.DEAD:
             self.j.abort_trade(tid, f"entry order {order['status']}, unfilled")
             return {"ok": False, "error": f"entry order {order['status']} unfilled; no position"}
         ref = fill_quality.snap(self.ex, symbol)   # mainnet at the fill, beside the stop (#35): never awaited here
@@ -230,7 +230,8 @@ class OpenFlow:
                     self.j.activate_trade(tid, fill, size, round(size * fill, 2))
                 await self.alert("NAKED_POSITION", f"stop failed ({e}) AND close failed ({e2}). Position is "
                                  "UNPROTECTED. Guardian will retry; check Binance now.", symbol, True)
-                return {"ok": False, "error": "UNPROTECTED POSITION: stop and close both failed", "trade_id": tid}
+                return {"ok": False, "error": "UNPROTECTED POSITION: stop and close both failed", "trade_id": tid,
+                        "unprotected": True}
             await self.alert("stop_failed", f"stop placement failed ({e}); position closed", symbol, True)
             return {"ok": False, "error": f"stop placement failed ({e}); position closed", "closed": res}
         warnings = [] if pos else [f"position unread after the fill ({unread or 'reads flat'}): " + (

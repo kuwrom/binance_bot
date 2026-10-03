@@ -15,6 +15,7 @@ from shortbot.commands import CommandError
 from shortbot.gateway import LocalGateway
 from shortbot.intents import Intent
 from shortbot.journal import Journal
+from shortbot.results import Result
 from shortbot.symlock import SymbolBusy
 
 SYM = "QNT/USDT:USDT"
@@ -86,7 +87,7 @@ async def test_a_resubmitted_failure_answers_its_stored_error(j, monkeypatch):
     it = Intent("t_boom", {})
     with pytest.raises(RuntimeError, match="exchange down"):
         await g.submit(it)
-    assert await g.submit(it) == {"ok": False, "intent_id": it.id, "status": "failed",
+    assert await g.submit(it) == {"ok": False, "intent_id": it.id, "status": "refused",   # it sent nothing
                                   "error": "RuntimeError: exchange down"}
     assert runs == [1]
 
@@ -184,27 +185,34 @@ async def test_a_nested_submit_is_a_bug(j, monkeypatch):
     it = Intent("t_outer", {})
     with pytest.raises(RuntimeError, match="nested"):
         await g.submit(it)
-    assert intents.get(j, it.id)["status"] == "failed" and count(j) == 1
+    assert intents.get(j, it.id)["status"] == "refused" and count(j) == 1
 
 
-# ------------------------------------------------------------ status: today's outcomes under §4.5's names
-@pytest.mark.parametrize("outcome, status", [
-    ({"ok": True}, "done"),
-    ({"ok": False, "noop": True, "error": "already there"}, "refused"),
-    ({"ok": False, "vetoed": ["hostile"]}, "refused"),
-    ({"ok": False, "unknown": True}, "unknown"),
-    ({"ok": True, "unknown": [{"entry_id": 3}]}, "unknown"),
-    ({"ok": False, "busy": True, "error": "another session is adding risk"}, "busy"),
-    (CommandError("no open journal trade"), "refused"),
-    (SymbolBusy(SYM, 5, "held"), "busy"),
-    (clientid.Unknown("sb-cQNT-1", TimeoutError()), "unknown"),
-    (ccxt.RequestTimeout("binanceusdm timed out"), "unknown"),
-    (ccxt.InsufficientFunds('binanceusdm {"code":-2019}'), "failed"),
-    (RuntimeError("bug"), "failed"),
-    (asyncio.CancelledError(), "interrupted"),
+# ------------------------------------------------------------ status: exact by what the run sent (results.py)
+@pytest.mark.parametrize("outcome, sends, status", [
+    ({"ok": True}, (), "done"),
+    ({"ok": False, "noop": True, "error": "already there"}, (), "refused"),
+    ({"ok": False, "vetoed": ["hostile"]}, (), "refused"),
+    ({"ok": False, "error": "entry order refused"}, ("rejected",), "failed"),
+    ({"ok": False, "unknown": True}, (None,), "unknown"),
+    ({"ok": True, "unknown": [{"entry_id": 3}]}, (None,), "unknown"),
+    ({"ok": True}, ("part_filled",), "partial"),
+    ({"ok": False, "busy": True, "error": "another session is adding risk"}, (), "busy"),
+    (CommandError("no open journal trade"), (), "refused"),
+    (SymbolBusy(SYM, 5, "held"), (), "busy"),
+    (clientid.Unknown("sb-cQNT-1", TimeoutError()), (None,), "unknown"),
+    (ccxt.RequestTimeout("binanceusdm timed out"), (), "refused"),    # a read: nothing was sent
+    (ccxt.InsufficientFunds('binanceusdm {"code":-2019}'), ("rejected",), "failed"),
+    (RuntimeError("bug"), (), "refused"),
+    (RuntimeError("bug"), ("filled",), "partial"),
+    (asyncio.CancelledError(), (), "interrupted"),
 ])
-async def test_status_of_each_outcome(j, monkeypatch, outcome, status):
+async def test_status_of_each_outcome(j, monkeypatch, outcome, sends, status):
     async def act(ctx):
+        for i, got in enumerate(sends):   # what a Trader primitive records around each send
+            intents.link(j, f"sb-cQNT-{i}", SYM)
+            if got is not None:
+                intents.settle(j, f"sb-cQNT-{i}", got)
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
@@ -217,6 +225,7 @@ async def test_status_of_each_outcome(j, monkeypatch, outcome, status):
         assert await g.submit(it) == outcome
     row = intents.get(j, it.id)
     assert row["status"] == status and (row["error"] is not None) == isinstance(outcome, BaseException)
+    assert [o["outcome"] for o in intents.orders(j, it.id)] == list(sends)
 
 
 # ------------------------------------------------------------ links: orders by client id, decisions by intent id
@@ -242,13 +251,57 @@ async def test_orders_and_rows_written_inside_an_intent_link_to_it(j, monkeypatc
 def test_intent_rows_are_append_only(j):
     it = Intent("t_act", {"symbol": SYM}, SYM)
     assert intents.receive(j, it) is None and intents.start(j, it.id)
-    intents.finish(j, it.id, "done", {"ok": True})
+    intents.finish(j, it.id, Result("done", False, {"ok": True}))
     for sql in ("DELETE FROM intents", "UPDATE intents SET args='{}'", "UPDATE intents SET status='failed'",
                 "UPDATE intents SET actor='x'"):
         with pytest.raises(sqlite3.DatabaseError, match="intent"):
             j.db.execute(sql)
     intents.link(j, "sb-cQNT-1", SYM)   # not inside an intent: ignored
     assert intents.get(j, it.id)["status"] == "done"
+
+
+def test_an_unknown_intent_is_resolved_once_and_its_orders_outcome_set_once(j):
+    it = Intent("t_act", {"symbol": SYM}, SYM)
+    intents.receive(j, it)
+    intents.start(j, it.id)
+    with audit.within(it.id):
+        intents.link(j, "sb-cQNT-1", SYM)
+    intents.finish(j, it.id, Result("unknown", None, {"ok": False, "unknown": True}))
+    for sql in ("UPDATE intents SET result='{}'", "UPDATE intents SET status='failed', resolved_at='x'",
+                "UPDATE intents SET status='done'"):   # only resolved: done | refused | partial, stamped
+        with pytest.raises(sqlite3.DatabaseError, match="intent"):
+            j.db.execute(sql)
+    assert intents.record(j, "sb-cQNT-1", "filled") and not intents.record(j, "sb-cQNT-1", "not_found")
+    with pytest.raises(sqlite3.DatabaseError, match="outcome"):
+        j.db.execute("UPDATE intent_orders SET outcome='not_found'")
+    assert intents.resolve(j, it.id, "unknown", "done", intents.now_ms())
+    assert not intents.resolve(j, it.id, "unknown", "refused", intents.now_ms())
+    row = intents.get(j, it.id)
+    assert (row["status"], row["result"], bool(row["resolved_at"])) == ("done", {"ok": False, "unknown": True}, True)
+    with pytest.raises(sqlite3.DatabaseError, match="intent"):
+        j.db.execute("UPDATE intents SET status='partial'")
+
+
+def test_an_old_journal_gets_the_new_columns_and_triggers(tmp_path):
+    db = sqlite3.connect(tmp_path / "old.db")
+    db.executescript("""
+        CREATE TABLE intents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, symbol TEXT, side TEXT NOT NULL,
+            args TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, trade_id INTEGER, actor TEXT NOT NULL,
+            claude_session TEXT, session_id INTEGER, code_version TEXT, mode TEXT NOT NULL, pid INTEGER NOT NULL,
+            received_at TEXT NOT NULL, started_at TEXT, finished_at TEXT);
+        CREATE TABLE intent_orders (client_id TEXT PRIMARY KEY, intent_id TEXT NOT NULL, kind TEXT NOT NULL,
+            symbol TEXT NOT NULL, at TEXT NOT NULL);
+        CREATE TRIGGER intents_final BEFORE UPDATE ON intents WHEN OLD.status IN ('done', 'unknown')
+            BEGIN SELECT RAISE(ABORT, 'a finished intent never changes'); END;
+        CREATE TRIGGER intent_orders_frozen BEFORE UPDATE ON intent_orders
+            BEGIN SELECT RAISE(ABORT, 'an intent''s order link never changes'); END;""")
+    db.close()
+    j = Journal(tmp_path / "old.db")
+    names = {r[0] for r in j.db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    assert {"intents_settled", "intent_orders_settled"} <= names and not names & set(intents.RETIRED)
+    assert {"sent", "resolved_at", "journal_late"} <= {r[1] for r in j.db.execute("PRAGMA table_info(intents)")}
+    assert "outcome" in {r[1] for r in j.db.execute("PRAGMA table_info(intent_orders)")}
+    Journal(tmp_path / "old.db")   # a second open changes nothing
 
 
 # ------------------------------------------------------------ a process that died mid-intent (§5, in-process: D2)
@@ -266,7 +319,7 @@ def test_the_sweep_ends_the_intents_of_a_dead_process(j, tmp_path):
     assert swept[ran.id]["status"] == "interrupted" and swept[ran.id]["orders"] == ["sb-oQNT-1"]
     assert swept[waiting.id]["status"] == "expired" and swept[waiting.id]["orders"] == []
     assert intents.get(j, waiting.id)["status"] == "expired" and intents.get(j, ran.id)["status"] == "interrupted"
-    intents.finish(j, ran.id, "done", {"ok": True})                  # its owner was only suspended: the truth wins
+    intents.finish(j, ran.id, Result("done", True, {"ok": True}))     # its owner was only suspended: the truth wins
     assert intents.get(j, ran.id)["status"] == "done"
 
 

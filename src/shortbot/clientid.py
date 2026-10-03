@@ -30,6 +30,13 @@ KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "a
          "target": "t",   # targets.py: a plan target resting as a reduce-only limit, ref = the trade id
          "probe": "x"}    # probes.py: a demo exchange-behaviour probe's order (#55), never the desk's
 VALID = re.compile(r"^[\.A-Z\:/a-z0-9_-]{1,36}$")
+DEAD = ("canceled", "expired", "rejected")   # final: an order found unfilled in one of these never fills
+MARKET = ("open", "add", "close")            # kinds sent as market orders: their answer says what filled
+# What a send did (intent_orders.outcome, #36 step 3): Binance took it (acked: a market order whose answer doesn't say
+# yet; placed: a resting or conditional order reached the book), filled, part_filled (the rest expired), unfilled,
+# rejected (a definite refusal), not_found (the resolver: unknown to Binance GRACE_S after its send). In doubt: none.
+FULL = ("acked", "placed", "filled")
+RAN = (*FULL, "part_filled")
 
 
 class Unknown(errors.OutcomeUnknown):
@@ -64,6 +71,19 @@ def kind_of(cid: str) -> str:
 
 def ours(cid: Any) -> bool:
     return str(cid or "").startswith(PREFIX + "-")
+
+
+def outcome(cid: str, o: dict[str, Any]) -> str:
+    """What the order sent under `cid` did, from its answer or as found by the id: a market order filled, part-filled
+    or unfilled once its status is final (ccxt sends newOrderRespType=RESULT for swaps), else acked; any other order
+    placed (it reached the book; what happened to it later is its own row's: entries, targets, stops)."""
+    if kind_of(cid) not in MARKET:
+        return "placed"
+    if o.get("status") == "closed":
+        return "filled"
+    if o.get("status") in DEAD:
+        return "part_filled" if float(o.get("filled") or 0) > 0 else "unfilled"
+    return "acked"
 
 
 async def lookup(t, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:

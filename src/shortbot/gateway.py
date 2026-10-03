@@ -1,5 +1,6 @@
 """The order gateway's interface (#36, docs/GATEWAY.md §4): every write is an Intent submitted here, journalled on
-receipt, run once per id, and answered with today's result. Step 2 runs it in the caller's process (LocalGateway):
+receipt, run once per id, and answered with today's result; its row keeps the typed result (results.py, step 3: the
+status exact by what it sent, the error typed). Step 2 runs it in the caller's process (LocalGateway):
 MCP tools and `shortbot` subcommands that write (commands.py) and the guardian's protective actions all go through
 `submit`. Step 4 puts the same interface behind a socket.
 
@@ -26,13 +27,9 @@ import inspect
 import logging
 from typing import Any, Awaitable, Callable, Protocol
 
-import ccxt.async_support as ccxt
-
-from . import audit, commands, errors, intents
-from .commands import CommandError
+from . import audit, commands, intents
 from .intents import Intent
-from .redact import redact
-from .symlock import AccountBusy, SymbolBusy
+from .results import Result
 
 log = logging.getLogger("shortbot.gateway")
 HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {}
@@ -84,41 +81,23 @@ class Gateway(Protocol):
     def status(self, intent_id: str) -> dict[str, Any] | None: ...
 
 
-def status_of(res: Any) -> str:
-    """A returned result's status: today's outcome under §4.5's names (step 3 splits refused by what was sent)."""
-    if isinstance(res, dict):
-        if res.get("unknown"):
-            return "unknown"
-        if res.get("ok") is False:
-            return "busy" if res.get("busy") else "refused"
-    return "done"
-
-
-def failure_of(e: BaseException) -> str:
-    """A raised error's status: nothing sent (refused, busy), maybe sent (unknown), failed, or interrupted (cancelled:
-    the run stopped wherever it was)."""
-    if not isinstance(e, Exception):
-        return "interrupted"
-    if isinstance(e, (SymbolBusy, AccountBusy)):
-        return "busy"
-    if isinstance(e, CommandError):
-        return "refused"
-    if isinstance(e, (errors.OrderError, ccxt.BaseError)) and errors.classify(e).unknown:
-        return "unknown"
-    return "failed"
-
-
-def answer(row: dict[str, Any]) -> Any:
-    """What a resubmitted id gets: its stored result, else why there is none (still open, or it ended without one)."""
+def answer(j: Any, row: dict[str, Any]) -> Any:
+    """What a resubmitted id gets: its stored result, else why there is none (still open, or it ended without one). A
+    resolved one (resolver.py) says how, and is no longer unknown."""
     st, iid = row["status"], row["id"]
-    if st in ("done", "refused", "unknown", "busy") and row["result"] is not None:
-        return row["result"]
     if st in intents.OPEN:
         return {"ok": False, "unknown": True, "in_progress": True, "intent_id": iid, "status": st,
                 "error": f"intent {iid} ({row['kind']}) is still {st}: it may be sending orders. Ask again later and "
                          "never resend it under a new id; re-read positions and pending_entries"}
-    return {"ok": False, "intent_id": iid, "status": st, "error": row["error"] or f"intent {iid} ended {st}",
-            **({"unknown": True} if st in ("unknown", "interrupted") else {})}
+    r = Result.from_row(row)
+    out = r.body if r.body is not None else {
+        "ok": False, "intent_id": iid, "status": st, "error": str(r.error) if r.error else f"intent {iid} ended {st}",
+        **({"unknown": True} if st in intents.UNRESOLVED else {})}
+    if not row["resolved_at"]:
+        return out
+    return {**{k: v for k, v in (out if isinstance(out, dict) else {"result": out}).items() if k != "unknown"},
+            "status": st, "resolved": {"at": row["resolved_at"],
+                                       "orders": {o["client_id"]: o["outcome"] for o in intents.orders(j, iid)}}}
 
 
 class LocalGateway:
@@ -153,14 +132,13 @@ class LocalGateway:
             verdict = await claim
         if verdict is not None:
             return verdict[0]
-        with audit.within(intent.id):
+        with audit.within(intent.id), intents.recording() as led:
             try:
                 res = await run(self.ctx, **intent.args)
             except BaseException as e:
-                j.post(intents.finish, intent.id, failure_of(e), None, redact(f"{type(e).__name__}: {e}"),
-                       intents.now_ms())
+                j.post(intents.finish, intent.id, Result.failure(e, led, intent.side), intents.now_ms())
                 raise
-        j.post(intents.finish, intent.id, status_of(res), res, None, intents.now_ms())
+        j.post(intents.finish, intent.id, Result.of(res, led, intent.side), intents.now_ms())
         return res
 
 
@@ -172,11 +150,11 @@ def _claim(j: Any, intent: Intent, refusal: Any) -> tuple[Any] | None:
         if intents.dumps(intent.args) != intents.dumps(seen["args"]) or intent.kind != seen["kind"]:
             raise ValueError(f"intent id {intent.id} reused for another request ({seen['kind']})")
         if seen["status"] != "busy":
-            return (answer(seen),)
+            return (answer(j, seen),)
     elif refusal is not None:
         return (refusal,)
     if not intents.start(j, intent.id):   # another caller started it first
         row = intents.get(j, intent.id)
         assert row is not None   # journalled above, in this unit
-        return (answer(row),)
+        return (answer(j, row),)
     return None

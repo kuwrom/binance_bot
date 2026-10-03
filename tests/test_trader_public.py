@@ -93,6 +93,23 @@ def test_inside_the_mixins_only_the_primitives_send():
     assert {n for n in SENDERS if not n.startswith("_")} <= set(dir(Trader))
 
 
+def test_every_primitive_tells_the_running_intent_what_it_sends():
+    """#36 step 3: an intent's status is exact by what it sent (results.py), so every send is recorded: an order under a
+    client id through intents.send (or intents.link, then its answer), an id-less write (cancel, edit, the account
+    settings) through intents.sent. The listen key changes no order or position (NO_INTENT)."""
+    marks = {"send", "link", "sent"}
+    found = {}
+    for p in mixins():
+        for f in ast.walk(ast.parse(p.read_text())):
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name in SENDERS:
+                found[f.name] = {n.func.attr for n in ast.walk(f) if isinstance(n, ast.Call)
+                                 and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+                                 and n.func.value.id == "intents"} & marks
+    assert set(found) == SENDERS
+    bad = sorted(n for n, m in found.items() if not m and n not in NO_INTENT)
+    assert not bad, "record the send in the running intent (intents.send / intents.sent):\n" + "\n".join(bad)
+
+
 def test_the_guards_catch_each_shape():
     names = {"_place_stop", "_alert"}
     src = '''

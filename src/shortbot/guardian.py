@@ -62,8 +62,9 @@ FAILING = {
                "unknown outcome has none) until the positions pass restores one, and isn't journalled; the "
                "withdrawal sweeps aren't running either. Check resting entries on Binance; " + UNVERIFIED,
     "entry_reconcile": "Bookkeeping only: sends still 'placing' aren't timed out, unresolved pre-armed stops aren't "
-                       "matched and open orders aren't swept for external ones. Fills, stops and plans ARE still "
-                       "checked (the fill poll resolves unknown sends itself): the heartbeat and entries are "
+                       "matched, open orders aren't swept for external ones and intents of unknown outcome aren't "
+                       "resolved (re-read the position after an unknown close or add). Fills, stops and plans ARE "
+                       "still checked (the fill poll resolves unknown sends itself): the heartbeat and entries are "
                        "unaffected.",
     "watch": "Squeeze, funding, news and ADL alerts on open shorts are NOT running: watch the positions yourself.",
 }

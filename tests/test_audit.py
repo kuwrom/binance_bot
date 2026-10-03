@@ -176,7 +176,8 @@ async def test_a_failed_tool_call_is_logged(tmp_path, monkeypatch):
     assert (plan_call["kind"], plan_call["actor"], plan_call["symbol"]) == ("update_plan", "mcp:update_plan",
                                                                             "QNT/USDT:USDT")
     assert plan_call["status"] == "refused" and "no open journal trade" in plan_call["error"]   # nothing was sent
-    assert stop_call["status"] == "failed" and stop_call["error"] == "RuntimeError: exchange down"
+    assert stop_call["status"] == "refused" and stop_call["sent"] == 0   # it raised before sending anything
+    assert json.loads(stop_call["error"])["message"] == "RuntimeError: exchange down"
     assert json.loads(stop_call["args"]) == {"symbol": "QNT", "new_stop": 1.2, "reason": "trail"}
     assert j.decisions(calls=True) == []   # the intent row is the call's record
 

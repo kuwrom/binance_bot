@@ -101,7 +101,8 @@ async def pull_targets(g, symbol: str) -> bool:
 @handler("plan_step")
 async def plan_step(g, symbol: str, trade_id: int, seen: dict) -> dict:
     """PlanStep (GATEWAY.md §4.2): the plan's due actions and the target sync, under the symbol lock, decided again on
-    what is true NOW (a session may have closed, added or moved the stop since the pass saw `seen`)."""
+    what is true NOW (a session may have closed, added or moved the stop since the pass saw `seen`). ok: false when an
+    action failed (its status is then partial or failed, results.py)."""
     tr = g.app.trader
     async with tr.symbol_lock(symbol, "guardian plan"):
         pos = await tr.position(symbol)
@@ -116,4 +117,6 @@ async def plan_step(g, symbol: str, trade_id: int, seen: dict) -> dict:
         trade = {**fresh, **excursions(fresh, p["mark"])}
         done = await g._apply_plan(trade, p, plan_actions(trade, p))
         await g._targets(targets_sync.sync(tr, symbol, "guardian pass"), symbol)
-    return {"ok": True, "trade_id": trade_id, "done": done}
+    failed = [d for d in done if isinstance(d.get("result"), dict) and d["result"].get("ok") is False
+              and not d["result"].get("noop")]
+    return {"ok": not failed, "trade_id": trade_id, "done": done}   # an action that failed: the step is partial
