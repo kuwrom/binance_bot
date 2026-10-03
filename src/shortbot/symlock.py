@@ -41,12 +41,15 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
+
+if TYPE_CHECKING:
+    import sqlite3
 
 from .exchange import to_raw
 
@@ -75,10 +78,10 @@ class AccountBusy(RuntimeError):
         self.holder = holder
 
 
-def busy_refusal(f: Callable) -> Callable:
+def busy_refusal[**P, R](f: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R | dict[str, Any]]]:
     """A risk-adding flow's AccountBusy becomes its refusal: {"ok": False, "busy": True, "error": ...}."""
     @functools.wraps(f)
-    async def inner(*a: Any, **k: Any) -> Any:
+    async def inner(*a: P.args, **k: P.kwargs) -> R | dict[str, Any]:
         try:
             return await f(*a, **k)
         except AccountBusy as e:
@@ -88,7 +91,7 @@ def busy_refusal(f: Callable) -> Callable:
 
 @dataclass
 class _Hold:
-    task: asyncio.Task | None
+    task: asyncio.Task[Any] | None
     action: str
     depth: int = 1
 
@@ -98,7 +101,7 @@ _MEM_ROOT: str | None = None
 _RO_WARNED = False
 
 
-def lock_dir_for(db) -> Path:
+def lock_dir_for(db: sqlite3.Connection) -> Path:
     """Next to the journal file the processes share (SHORTBOT_DB may be relative to each one's working directory).
     An in-memory journal (tests) gets a private directory, with real flocks all the same, removed at exit."""
     global _MEM_ROOT
@@ -138,13 +141,13 @@ class SymbolLocks:
     def holds(self, symbol: str) -> bool:
         """True if the current task holds this symbol's lock (the lock-audit tests use it)."""
         h = self._held.get(_key(symbol))
-        return bool(h) and h.task is asyncio.current_task()
+        return h is not None and h.task is asyncio.current_task()
 
     def holds_account(self) -> bool:
         """True if the current task holds the account lock (the lock-audit tests use it)."""
-        return bool(self._account) and self._account.task is asyncio.current_task()
+        return self._account is not None and self._account.task is asyncio.current_task()
 
-    def _symbol_of(self, task: asyncio.Task | None) -> str | None:
+    def _symbol_of(self, task: asyncio.Task[Any] | None) -> str | None:
         return next((k for k, h in self._held.items() if h.task is task), None)
 
     @asynccontextmanager

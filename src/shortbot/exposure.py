@@ -16,15 +16,19 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 from .entry_intents import ON_BOOK
 from .risk import AccountState
 
+if TYPE_CHECKING:
+    from .journal import Journal
+
 Unit = tuple[str, float]   # (symbol, USDT notional that may still become exposure)
 
 
-def pending_units(j, live: Iterable[str], max_notional: float, group: str | None = None, symbol: str | None = None,
-                  own_resting: bool = True) -> list[Unit]:
+def pending_units(j: Journal, live: Iterable[str], max_notional: float, group: str | None = None,
+                  symbol: str | None = None, own_resting: bool = True) -> list[Unit]:
     """Exposure that may still appear, in this journal's mode. `group`: the group being placed (its own legs share one
     budget). `symbol`: the caller's own symbol; an entry of unknown outcome there is refused under its symbol lock (a
     second trade), so it isn't counted here, nor its resting entries with own_resting=False (open_short refuses those
@@ -35,7 +39,7 @@ def pending_units(j, live: Iterable[str], max_notional: float, group: str | None
                 if (r.get("mode") or "demo") == j.mode]
     except sqlite3.OperationalError:   # no entries table yet: nothing rests
         rows = []
-    by_group: dict[str, list[dict]] = {}
+    by_group: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         g = f"external{r['id']}" if r["status"] == "external" else r["group_id"]
         if g != group and (own_resting or r["symbol"] != symbol):
@@ -61,7 +65,7 @@ def with_pending(acct: AccountState, units: list[Unit]) -> AccountState:
                         acct.total_open_notional + sum(n for _, n in units), acct.day_pnl)
 
 
-def counted(j, acct: AccountState, max_notional: float, group: str | None = None, symbol: str | None = None,
+def counted(j: Journal, acct: AccountState, max_notional: float, group: str | None = None, symbol: str | None = None,
             own_resting: bool = True) -> AccountState:
     """`acct` with everything that may still fill (pending_units) counted in."""
     return with_pending(acct, pending_units(j, acct.open_symbols, max_notional, group, symbol, own_resting))

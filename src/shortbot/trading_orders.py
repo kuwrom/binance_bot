@@ -15,13 +15,48 @@ module-level import would be circular, and would bind `_sleep` before the tests 
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Protocol
+
 from . import clientid, errors, intents, order_ids
+
+if TYPE_CHECKING:
+    from .exchange import Exchanges
+    from .journal import Journal
+
+Order = dict[str, Any]   # ccxt's unified order structure
+
+
+class Client(Protocol):
+    """The ccxt binanceusdm calls these primitives make, as ccxt 4.5.84 declares them (ccxt ships no type information,
+    so to mypy the real client is Any: this is the boundary its answers cross)."""
+
+    async def create_order(self, symbol: str, type: str, side: str, amount: float, price: float | None = None,
+                           params: dict[str, Any] = ...) -> Order: ...
+
+    async def cancel_order(self, id: str, symbol: str | None = None, params: dict[str, Any] = ...) -> Order: ...
+
+    async def edit_order(self, id: str, symbol: str, type: str, side: str, amount: float | None = None,
+                         price: float | None = None, params: dict[str, Any] = ...) -> Order: ...
+
+    def price_to_precision(self, symbol: str, price: object) -> str: ...
+
+    async def fapiPrivatePostListenKey(self, params: dict[str, Any] = ...) -> dict[str, Any] | None: ...
+
+    async def fapiPrivatePutListenKey(self, params: dict[str, Any] = ...) -> dict[str, Any] | None: ...
 
 
 class OrderFlow:
     """Uses Trader's exchange client, journal and position()."""
+    ex: Exchanges
+    j: Journal
 
-    async def close_market(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> dict:
+    if TYPE_CHECKING:   # Trader's
+        @property
+        def t(self) -> Client: ...
+
+        async def position(self, symbol: str) -> dict[str, Any] | None: ...
+
+    async def close_market(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> Order:
         """Reduce-only market BUY of `amount`, each send under its own client id. A definite refusal is retried (nothing
         ran), except ReduceOnlyRejected (-2022) on a flat position: the close is done ({"flat": True, "filled": 0.0,
         "rejected": why}: a stop or target closed it first; after a send of unknown outcome, the flat answer below). An
@@ -34,7 +69,7 @@ class OrderFlow:
         order_ids.note(self.j, symbol, "exit", order)
         return order
 
-    async def _close_sends(self, symbol: str, amount: float, tries: int, whole: bool) -> dict:
+    async def _close_sends(self, symbol: str, amount: float, tries: int, whole: bool) -> Order:
         from .trading import _sleep
         doubt: list[str] = []
         last: Exception | None = None
@@ -68,7 +103,7 @@ class OrderFlow:
         except Exception:  # noqa: BLE001 - unreadable counts as not flat: the caller's refusal stands
             return False
 
-    async def _flat_first(self, symbol: str, cid: str, e: Exception, doubt: list[str]) -> dict | None:
+    async def _flat_first(self, symbol: str, cid: str, e: Exception, doubt: list[str]) -> Order | None:
         """-2022: the reduce-only close would reduce nothing. Flat now: closed before it landed, so done: by a stop or a
         target ("rejected": nothing of ours filled), or by an earlier send of ours whose answer was lost (`doubt`: the
         unknown-outcome flat answer). Not flat, or unreadable: None, the refusal stands."""
@@ -80,7 +115,7 @@ class OrderFlow:
         return {"id": None, "clientOrderId": cid, "flat": True, "status": "rejected", "filled": 0.0, "average": None,
                 "rejected": errors.describe(e)}
 
-    async def _close_outcome(self, symbol: str, doubt: list[str]) -> dict | None:
+    async def _close_outcome(self, symbol: str, doubt: list[str]) -> Order | None:
         """Settle close sends of unknown outcome: the newest one found with a fill; one found dead and unfilled leaves
         `doubt`; {"flat": True} when the position reads flat; None while still in doubt."""
         from .trading import DEAD, _f
@@ -102,7 +137,7 @@ class OrderFlow:
                     "filled": None, "average": None}
         return None
 
-    async def open_market(self, symbol: str, amount: float, cid: str, lookups: int = 3) -> dict:
+    async def open_market(self, symbol: str, amount: float, cid: str, lookups: int = 3) -> Order:
         """A market SELL that opens or adds to the short, sent ONCE under client id `cid` (journalled by the caller).
         Returns the order as acked, or as found settled by `cid` after an ambiguous answer, journalled as an entry of
         the symbol's trade. Raises a definite refusal as is, or clientid.Unknown when `cid` stays unsettled: it may
@@ -111,7 +146,7 @@ class OrderFlow:
         order_ids.note(self.j, symbol, "entry", order)
         return order
 
-    async def _sell_once(self, symbol: str, amount: float, cid: str, lookups: int) -> dict:
+    async def _sell_once(self, symbol: str, amount: float, cid: str, lookups: int) -> Order:
         from .trading import DEAD, _f, _sleep
         intents.link(self.j, cid, symbol)
         try:
@@ -132,24 +167,24 @@ class OrderFlow:
                     return o
             raise clientid.Unknown(cid, e) from e
 
-    async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> dict:
+    async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order:
         """Cancel one order: a conditional one (trigger=True: a stop, bridge or pre-arm) or a limit (entry, target).
         -2011 (ccxt OrderNotFound) means it is off the book: filled, triggered or cancelled before."""
         if trigger:
             return await self.t.cancel_order(order_id, symbol, params={"trigger": True})
         return await self.t.cancel_order(order_id, symbol)
 
-    async def place_limit(self, symbol: str, amount: float, price: float, expires_ms: int, cid: str) -> dict:
+    async def place_limit(self, symbol: str, amount: float, price: float, expires_ms: int, cid: str) -> Order:
         """A GTD limit SELL that opens a short when it fills (an entry, entries_place.py), resting to `expires_ms`."""
         intents.link(self.j, cid, symbol)
         return await self.t.create_order(symbol, "limit", "sell", amount, price,
                                          {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid})
 
-    async def edit_limit(self, symbol: str, order_id: str, amount: float, price: float) -> dict:
+    async def edit_limit(self, symbol: str, order_id: str, amount: float, price: float) -> Order:
         """Move a resting entry limit SELL to `price` (Modify Order: same order id)."""
         return await self.t.edit_order(order_id, symbol, "limit", "sell", amount, price)
 
-    async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> dict:
+    async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> Order:
         """A reduce-only STOP_MARKET BUY of `amount` (mark price): the bridge that covers a stop swap (stops.py) or an
         entry's pre-armed stop (entries_place.py). Unlike place_close_stop it has a size; a side may hold several."""
         intents.link(self.j, cid, symbol)
@@ -157,7 +192,7 @@ class OrderFlow:
             "triggerPrice": float(self.t.price_to_precision(symbol, trigger)), "reduceOnly": True,
             "workingType": "MARK_PRICE", "clientOrderId": cid})
 
-    async def place_reduce_limit(self, symbol: str, qty: float, price: float, cid: str) -> dict:
+    async def place_reduce_limit(self, symbol: str, qty: float, price: float, cid: str) -> Order:
         """A reduce-only GTC limit BUY: a plan target resting on the book (targets_sync.py)."""
         intents.link(self.j, cid, symbol)
         return await self.t.create_order(symbol, "limit", "buy", qty, price,

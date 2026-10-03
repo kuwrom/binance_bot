@@ -53,10 +53,10 @@ class Arg:
     help: str | None = None
     dest: str | None = None
     metavar: str | None = None
-    choices: tuple | None = None
+    choices: tuple[Any, ...] | None = None
     nargs: str | None = None
     action: str | None = None
-    type: Callable | None = None
+    type: Callable[[str], Any] | None = None
     default: Any = _UNSET
     required: bool | None = None
     convert: Callable[[Any], Any] | None = None
@@ -71,7 +71,7 @@ class Arg:
 
 @dataclass(frozen=True)
 class Command:
-    body: Callable
+    body: Callable[..., Any]
     name: str | None = None
     cli: str | None = None
     args: tuple[Arg, ...] = ()
@@ -91,14 +91,22 @@ class Command:
     def intent(self, kwargs: dict[str, Any]) -> Intent:
         """This write as an intent: the body's keyword arguments with its defaults applied, the same from both
         surfaces (CLI-only arguments included)."""
-        b = self.sig.bind(**kwargs)
+        b = self.signature.bind(**kwargs)
         b.apply_defaults()
         return Intent(self.kind, dict(b.arguments), intents.symbol_of(b.arguments))
 
+    @property
+    def signature(self) -> inspect.Signature:
+        """The body's, annotations evaluated. A raw command has none: its body takes the parsed namespace."""
+        if self.sig is None:
+            raise ValueError(f"{self.name or self.cli}: a raw command has no signature")
+        return self.sig
+
     def mcp_signature(self) -> inspect.Signature:
-        """The MCP tool's signature: the body's, annotations evaluated, without the CLI-only parameters."""
+        """The MCP tool's signature: the body's without the CLI-only parameters."""
         cli_only = {a.name for a in self.args if a.cli_only}
-        return self.sig.replace(parameters=[p for n, p in self.sig.parameters.items() if n not in cli_only])
+        sig = self.signature
+        return sig.replace(parameters=[p for n, p in sig.parameters.items() if n not in cli_only])
 
     def cli_kwargs(self, ns: argparse.Namespace) -> dict[str, Any]:
         """The body's keyword arguments from a parsed command line."""
@@ -132,7 +140,7 @@ class Command:
         return " ".join(parts)
 
     def _spec(self, a: Arg) -> dict[str, Any]:
-        return spec(a, None if a.cli_only or self.raw else self.sig.parameters[a.name])
+        return spec(a, None if a.cli_only or self.raw else self.signature.parameters[a.name])
 
 
 def spec(a: Arg, p: inspect.Parameter | None) -> dict[str, Any]:
@@ -170,11 +178,12 @@ _BY_CLI: dict[str, Command] = {}
 _BY_KIND: dict[str, Command] = {}   # writes only
 
 
-def command(*, cli: str | None = None, mcp: bool = True, args: tuple[Arg, ...] = (), write: bool = False,
-            weight: str | None = None, stale_exempt: bool = False, help: str | None = None, hint: str | None = None,
-            raw: bool = False) -> Callable[[Callable], Callable]:
+def command[F: Callable[..., Any]](*, cli: str | None = None, mcp: bool = True, args: tuple[Arg, ...] = (),
+                                   write: bool = False, weight: str | None = None, stale_exempt: bool = False,
+                                   help: str | None = None, hint: str | None = None,
+                                   raw: bool = False) -> Callable[[F], F]:
     """Declare a command; the body comes back unchanged (the MCP tool and the subcommand are generated from it)."""
-    def register(body: Callable) -> Callable:
+    def register(body: F) -> F:
         name = body.__name__ if mcp else None
         sig = None if raw else inspect.signature(body, eval_str=True)
         cmd = Command(body, name, cli, tuple(args), write, weight, stale_exempt, help, hint, raw, sig)
@@ -201,7 +210,7 @@ def _check(cmd: Command) -> None:
         if cmd.name or not cmd.cli:
             raise ValueError(f"{label}: a raw command is CLI only")
         return
-    params = cmd.sig.parameters
+    params = cmd.signature.parameters
     for a in cmd.args:
         if a.name not in params:
             raise ValueError(f"{label}: {a.name} is not a parameter of the body")
@@ -248,5 +257,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
     for cmd in load():
         if cmd.cli:
-            add_arguments(sub.add_parser(cmd.cli, **({"help": cmd.help} if cmd.help else {})), cmd)
+            kw: dict[str, Any] = {"help": cmd.help} if cmd.help else {}   # help=None would still list it in -h
+            add_arguments(sub.add_parser(cmd.cli, **kw), cmd)
     return p

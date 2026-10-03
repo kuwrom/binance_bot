@@ -23,6 +23,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import ClassVar
 
 import ccxt.async_support as ccxt
@@ -163,7 +164,8 @@ REPORT_EVERY_S = 3600.0
 _reported: dict[tuple[str, str], float] = {}
 
 
-async def report(alert, where: str, e: BaseException, symbol: str | None = None) -> None:
+async def report(alert: Callable[[str, str, str | None, bool], Awaitable[object]] | None, where: str,
+                 e: BaseException, symbol: str | None = None) -> None:
     """A site that carries on after an error it did not expect (not transient): the traceback is logged every time, and
     a human is told once per REPORT_EVERY_S per (site, error type) in this process. `alert`: Trader.alert's shape
     (kind, message, symbol, urgent), or None. Never raises: telling must not cost the caller its pass."""

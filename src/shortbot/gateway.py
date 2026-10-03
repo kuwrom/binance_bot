@@ -47,8 +47,8 @@ def handler_for(kind: str) -> Callable[..., Awaitable[Any]]:
 
     async def run(ctx: Any, **args: Any) -> Any:
         return await cmd.body(**args)
-    run.__signature__ = inspect.Signature([inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD),
-                                           *cmd.sig.parameters.values()])
+    run.__signature__ = inspect.Signature([  # type: ignore[attr-defined]  # inspect reads it; typeshed has no such attr
+        inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD), *cmd.signature.parameters.values()])
     return run
 
 
@@ -123,7 +123,9 @@ class LocalGateway:
         elif refusal is not None:
             return refusal
         if not intents.start(j, intent.id):   # another caller started it first
-            return answer(intents.get(j, intent.id))
+            if (row := intents.get(j, intent.id)) is None:
+                raise RuntimeError(f"intent {intent.id} is not in the journal it was just received in")
+            return answer(row)
         with audit.within(intent.id):
             try:
                 res = await run(self.ctx, **intent.args)

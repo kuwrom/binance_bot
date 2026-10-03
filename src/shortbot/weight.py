@@ -27,8 +27,8 @@ import logging
 import math
 import re
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -153,13 +153,13 @@ def class_for(lane: str, job: str) -> str | None:
     return GUARDIAN_JOBS.get(job) or GUARDIAN_LANES.get(lane)
 
 
-def lane_job(lane: str, job: str, timeout_s: float):
+def lane_job(lane: str, job: str, timeout_s: float) -> AbstractContextManager[None]:
     """A guardian job's scope: its lane's class, and a deadline JOB_MARGIN_S before the job's own timeout."""
     return tagged(class_for(lane, job), wait_s=max(0.0, timeout_s - JOB_MARGIN_S))
 
 
 # ------------------------------------------------------------------ responses
-def _header(headers: dict | None, name: str) -> str | None:
+def _header(headers: Mapping[str, str] | None, name: str) -> str | None:
     for k, v in (headers or {}).items():
         if k.lower() == name:
             return v
@@ -175,7 +175,7 @@ def _learn_limit(b: HostBudget, body: str) -> None:
             b.limit = int(r["limit"])
 
 
-def record(url: str, status: int | None, headers: dict | None, body: str | None) -> None:
+def record(url: str, status: int | None, headers: Mapping[str, str] | None, body: str | None) -> None:
     """Every response of a guarded client: its usage reading, a 429/418/-1003, an exchangeInfo limit."""
     host = _guarded_host(url)
     if host is None:
