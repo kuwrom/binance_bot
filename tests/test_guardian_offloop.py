@@ -16,8 +16,8 @@ from shortbot.intents import Intent
 from shortbot.journal import Journal
 from shortbot.trading import Trader
 from tests.fakes import FakeCcxt, FakeEx, neutral_budget, ok_prechecks
-from tests.held_lock import HeldLock
-from tests.loop_guard import loop_writes
+from tests.held_lock import STALL_REPORT, HeldLock
+from tests.loop_guard import connections, loop_writes
 from tests.test_entry_races import favorable, prop
 from tests.test_guardian import open_trade
 from tests.test_guardian_loop import SLOW_JOBS, NoStream, noop
@@ -37,6 +37,7 @@ def guardian_on(path, fake: FakeCcxt | None = None) -> Guardian:
     return g
 
 
+@STALL_REPORT
 async def test_a_held_write_lock_delays_no_protective_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(gmod, "TICK_S", 0.01)
     monkeypatch.setattr(gmod, "RESEARCH_START_DELAY_S", 3600)
@@ -70,6 +71,7 @@ async def test_a_held_write_lock_delays_no_protective_pass(tmp_path, monkeypatch
     assert not [a for a in g.j.alerts(100) if a["kind"].startswith("guardian_error")]
 
 
+@STALL_REPORT
 async def test_a_missing_stop_is_restored_under_a_held_lock_and_its_intent_lands_late(tmp_path):
     fake = FakeCcxt()
     g = guardian_on(tmp_path / "j.db", fake)
@@ -89,6 +91,7 @@ async def test_a_missing_stop_is_restored_under_a_held_lock_and_its_intent_lands
     assert row["received_at"] < _iso(released)                 # stamped when it ran, not when it landed
 
 
+@STALL_REPORT
 async def test_a_strict_intent_journals_before_it_sends_even_under_a_held_lock(tmp_path):
     j = Journal(tmp_path / "j.db")
     seen = []
@@ -110,11 +113,12 @@ async def test_a_strict_intent_journals_before_it_sends_even_under_a_held_lock(t
     assert [r["status"] for r in _intents(j)] == ["done"]
 
 
-async def test_no_protective_or_watch_job_writes_on_the_loop_outside_a_unit(tmp_path):
+async def test_no_protective_or_watch_job_writes_on_the_loop_outside_a_unit(tmp_path, monkeypatch):
+    monkeypatch.setattr(gmod, "LiquidationRecorder", NoStream)   # the websocket: its flushes are test_journal_stores'
     fake = FakeCcxt()
     g = guardian_on(tmp_path / "a.db", fake)
     await open_trade(g, breakeven_at_pct=2)
-    with loop_writes(g) as bad:
+    with loop_writes(*connections(g)) as bad:
         for i in range(3):                                     # quiet passes, a move down (MAE/MFE, breakeven)
             fake.price = 1.0 - 0.02 * i
             await g.check_entries()
@@ -131,13 +135,13 @@ async def test_no_protective_or_watch_job_writes_on_the_loop_outside_a_unit(tmp_
     g2 = guardian_on(tmp_path / "b.db", fake2)
     g2.entries._regime_fn = favorable
     assert (await g2.entries.propose_group([prop(1.04)]))["ok"]   # a session's limit entry (not the guardian's)
-    with loop_writes(g2) as bad2:
+    with loop_writes(*connections(g2)) as bad2:
         fake2.price = 1.05                                     # it fills: the fill poll journals and protects it
         await g2.check_entries()
         await g2.check_positions()
         await g2.reconcile_entries()
     assert [t["status"] for t in g2.j.trades()] == ["open"]
-    with loop_writes(g2) as bad3:                              # the whole guardian: startup, every lane, its tasks
+    with loop_writes(*connections(g2)) as bad3:                # the whole guardian: startup, every lane, its tasks
         await running(g2, 0.5)
     assert not bad + bad2 + bad3, "\n".join(sorted({b.split(': ')[0] for b in bad + bad2 + bad3}))
 

@@ -161,12 +161,17 @@ def _save(journal, setup: str, ev: dict[str, Any]) -> None:
     journal.set(key(journal, setup), json.dumps(ev))
 
 
+def _record_stops(journal, setup: str, ev: dict[str, Any], new: list[str], dd: float, stop: float) -> None:
+    _save(journal, setup, ev)
+    for at in new:
+        _alert_stop(journal, setup, at, dd, stop)
+
+
 def _alert_stop(journal, setup: str, at: str, dd: float, stop: float) -> None:
     """One `setup_ladder_stop` alert per stop. The marker is claimed atomically, so readers that see the same new stop
     at once (guardian, brief, sizing) don't repeat it."""
     marker = journal.mode_key(f"setup_ladder_stop_alerted:{setup}:{at}")
     claimed = journal.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (marker, at)).rowcount
-    journal.db.commit()
     if claimed:
         journal.log_alert("setup_ladder_stop", f"{setup} hit its ladder stop: drawdown {dd}R >= {stop}R, SHADOW "
                           "(no new entries; scans keep logging). It returns only on the evidence frozen at the stop; "
@@ -193,10 +198,8 @@ def status(journal, setup: str | None, epoch: str | None = None, overlaps: dict[
     for at in new:                                   # freeze the criteria the moment a stop is first seen
         ev.setdefault("stops", []).append({"at": at, "criteria": dict(CRITERIA), "thresholds": th})
         ev.setdefault("log", []).append({"kind": "stop", "at": at, "dd_r": w["dd_r"]})
-    if new:
-        _save(journal, setup, ev)
-        for at in new:
-            _alert_stop(journal, setup, at, w["dd_r"], th["stop"])
+    if new:   # posted (#79): sizing and the governor read the ladder on an event loop, which never waits for it
+        journal.post(_record_stops, setup, ev, new, w["dd_r"], th["stop"])
     last = (ev.get("stops") or [None])[-1]
     rel = min((r for r in ev.get("reenables") or [] if last and r >= last["at"]), default=None)
     held = last is not None and rel is None

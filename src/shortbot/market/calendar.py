@@ -19,6 +19,7 @@ import httpx
 import truststore
 
 from .. import clock
+from ..journal_writer import Writer, connect
 
 NY = ZoneInfo("America/New_York")
 BLS_ICS = "https://www.bls.gov/schedule/news_release/bls.ics"
@@ -68,10 +69,10 @@ def parse_ff(rows: list[dict[str, Any]]) -> list[tuple[int, str, str]]:
 
 class MacroCalendar:
     def __init__(self, db_path: Path | str):
-        self.db = sqlite3.connect(str(db_path), check_same_thread=False, timeout=15)
+        self.db = connect(db_path)
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self.w = Writer(self.db)
 
     def add(self, ts_ms: int, name: str, kind: str, source: str) -> None:
         if kind not in WINDOWS:
@@ -83,8 +84,7 @@ class MacroCalendar:
     async def refresh(self) -> dict[str, Any]:
         """Pull BLS + ForexFactory (+ the known FOMC dates). Each source is optional."""
         got: dict[str, Any] = {}
-        for d in FOMC_2026:
-            self.add(_ny_ms(d), "FOMC statement", "fomc", FED_URL)
+        events = [(_ny_ms(d), "FOMC statement", "fomc", FED_URL) for d in FOMC_2026]
         async with httpx.AsyncClient(timeout=20, headers=UA,
                                      verify=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)) as c:
             for name, url, parse in (("bls", BLS_ICS, lambda r: parse_bls_ics(r.text)),
@@ -93,12 +93,16 @@ class MacroCalendar:
                     r = await c.get(url)
                     r.raise_for_status()
                     rows = parse(r)
-                    for ts, n, k in rows:
-                        self.add(ts, n, k, url)
+                    events += [(ts, n, k, url) for ts, n, k in rows]
                     got[name] = len(rows)
                 except Exception as e:  # noqa: BLE001 - calendar is best-effort; missing = no veto
                     got[name] = f"error: {type(e).__name__}"
+        await self.w.write(self._add_all, events)   # one unit (#79)
         return got
+
+    def _add_all(self, events: list[tuple[int, str, str, str]]) -> None:
+        for e in events:
+            self.add(*e)
 
     def around(self, now_ms: int | None = None, hours: float = 48) -> list[dict[str, Any]]:
         now_ms = now_ms or clock.now_ms()

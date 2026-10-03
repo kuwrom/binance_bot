@@ -51,7 +51,7 @@ async def fetch_mark_1m(ex, symbol: str, since_ms: int, hours: float) -> list[li
 
 async def label_due(ex, journal, now_ms: int, limit: int = 40) -> int:
     """Label predictions whose horizon has passed. Returns how many were labelled."""
-    n = 0
+    done = []
     for p in journal.due_predictions(now_ms, limit):
         try:
             candles = await fetch_mark_1m(ex, p["symbol"], p["ts_ms"], p["hours"])
@@ -61,6 +61,7 @@ async def label_due(ex, journal, now_ms: int, limit: int = 40) -> int:
             lab = label_bracket(candles, p["entry"], p["stop"], p["target"])
         else:
             lab = label_touch(candles, p["target"], above=p["target"] >= p["entry"])
-        journal.label_prediction(p["id"], lab["outcome"], lab.get("mfe_r"), lab.get("mae_r"))
-        n += 1
-    return n
+        done.append((p["id"], lab["outcome"], lab.get("mfe_r"), lab.get("mae_r")))
+    if done:   # one unit per run (#79)
+        await journal.write(lambda j: [j.label_prediction(*x) for x in done])
+    return len(done)

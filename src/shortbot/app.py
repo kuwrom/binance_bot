@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from dataclasses import dataclass
 
 from .config import Settings
@@ -24,8 +22,7 @@ class App:
 
 
 _app: App | None = None
-log = logging.getLogger("shortbot.app")
-FLUSH_S = 30.0
+FLUSH_S = 30.0   # how long an exiting process waits for its queued journal writes
 
 
 def get_app(research: bool = True) -> App:
@@ -48,16 +45,6 @@ async def close_app() -> None:
     if _app:
         from .fill_quality import drain
         await drain()   # a one-shot CLI's fill references (#35) finish before the clients close
-        await flush_journal(_app.journal)
+        await _app.journal.w.drain(FLUSH_S)   # writes queued behind another process's write lock (#79) land first
         await _app.ex.close()
         _app = None
-
-
-async def flush_journal(j: Journal) -> None:
-    """Writes still queued behind another process's write lock (#79) land before the process ends, or are logged
-    as lost after FLUSH_S."""
-    try:
-        await asyncio.wait_for(j.flush(), FLUSH_S)
-    except TimeoutError:
-        log.error("journal: %d queued write(s) lost: the write lock stayed held for %.0f s at exit", j.w.pending(),
-                  FLUSH_S)

@@ -11,7 +11,6 @@ wait on per-symbol calls. Red lines: no posting, no private/paid 'insider' group
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +18,7 @@ from typing import Any
 import httpx
 
 from .. import clock
+from ..journal_writer import Writer, connect
 from ..untrusted import token, wrap
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) shortbot-research"}
@@ -97,9 +97,9 @@ async def square_hashtag(base: str) -> dict[str, float] | None:
 
 class SocialStore:
     def __init__(self, db_path: Path | str):
-        self.db = sqlite3.connect(str(db_path), check_same_thread=False, timeout=15)
-        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db = connect(db_path)
         self.db.executescript(SCHEMA)
+        self.w = Writer(self.db)   # the guardian's snapshot is one unit (#79)
 
     def record(self, rows: list[tuple]) -> None:
         """rows: (ts_ms, symbol, source, metric, value)"""
@@ -137,5 +137,5 @@ async def snapshot(store: SocialStore, bases: list[str]) -> int:
         for k, v in (sq or {}).items():
             rows.append((now, base, "square", k, v))
     if rows:
-        store.record(rows)
+        await store.w.write(store.record, rows)
     return len(rows)

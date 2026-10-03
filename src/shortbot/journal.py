@@ -26,7 +26,7 @@ from typing import Any, Callable, TypeVar
 
 from . import audit, fill_report, intents
 from .journal_research import RESEARCH_SCHEMA, ResearchStore
-from .journal_writer import UnitConnection, Writer
+from .journal_writer import Writer, connect
 from .redact import redact
 from .sessions import session_bucket
 
@@ -123,9 +123,8 @@ class Journal(ResearchStore):
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=15, factory=UnitConnection)
+        self.db = connect(path)   # WAL: the guardian, MCP servers and CLI share this file
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")  # guardian + MCP server share this file
         self.db.executescript(SCHEMA + RESEARCH_SCHEMA + intents.SCHEMA)
         self._migrate()
         self.w = Writer(self.db)

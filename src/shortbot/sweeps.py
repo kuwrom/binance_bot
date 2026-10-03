@@ -184,14 +184,13 @@ async def run_study(ex, journal, days: float = 3, top: int = 60, now_ms: int | N
             except Exception:  # noqa: BLE001
                 return 0
         ev = await asyncio.to_thread(detect, last, mk)
-        journal.db.executemany("INSERT OR REPLACE INTO level_sweeps VALUES (?,?,?,?,?,?)",
-                               [(sym, e["ts"], e["kind"], e["tier"], e["level"], json.dumps(e)) for e in ev])
-        journal.db.commit()   # per coin: never hold the shared DB's write lock (the guardian writes to it too)
+        rows = [(sym, e["ts"], e["kind"], e["tier"], e["level"], json.dumps(e)) for e in ev]
+        await journal.write(lambda j: j.db.executemany("INSERT OR REPLACE INTO level_sweeps VALUES (?,?,?,?,?,?)",
+                                                       rows))   # a unit per coin (#79)
         return len(ev)
 
     for n in await asyncio.gather(*(one(s) for s in syms)):
         n_events += n
-    journal.db.commit()
     return {"coins": len(syms), "days": days, "events_logged": n_events, "report": report(journal)}
 
 

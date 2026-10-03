@@ -10,7 +10,7 @@ import pytest
 
 from shortbot import audit, journal_writer, wal_holder
 from shortbot.journal import Journal
-from tests.held_lock import HeldLock
+from tests.held_lock import STALL_REPORT, HeldLock
 
 
 async def ticking(gaps: list[float], stop: asyncio.Event) -> None:
@@ -38,6 +38,7 @@ async def test_a_unit_is_atomic_even_when_its_helpers_commit(tmp_path):
     assert await j.write(lambda j: j.set("b", "2") or 7) == 7 and j.get("b") == "2"
 
 
+@STALL_REPORT
 async def test_the_loop_never_waits_for_another_processs_write_lock(tmp_path):
     j = Journal(tmp_path / "j.db")
     gaps, stop = [], asyncio.Event()
@@ -66,6 +67,7 @@ async def test_posts_and_writes_land_in_order(tmp_path):
     assert [d["reasoning"] for d in j.decisions(limit=50)] == [f"#{i}" for i in reversed(range(20))]
 
 
+@STALL_REPORT
 async def test_a_queued_unit_runs_in_its_callers_context_and_keeps_its_time(tmp_path):
     j = Journal(tmp_path / "j.db")
     with HeldLock(tmp_path / "j.db", 1.2) as held:
@@ -132,6 +134,7 @@ async def test_an_in_memory_journal_writes_on_its_own_connection():
     assert isinstance(j.log_alert("x", "y"), int) and j.get("m") == "1"
 
 
+@STALL_REPORT
 async def test_a_long_wait_is_logged_with_the_process_holding_the_lock(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(journal_writer, "STALL_LOG_S", (0.2,))
     j = Journal(tmp_path / "j.db")
@@ -146,6 +149,7 @@ async def test_a_long_wait_is_logged_with_the_process_holding_the_lock(tmp_path,
     assert f"held by pid {held.p.pid}" in caplog.text and "free again" in caplog.text
 
 
+@STALL_REPORT
 def test_the_holder_query_takes_no_lock(tmp_path):
     j = Journal(tmp_path / "j.db")
     assert wal_holder.holder(tmp_path / "j.db") is None          # free

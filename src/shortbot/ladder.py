@@ -24,16 +24,19 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS ladder_shadow (id INTEGER PRIMARY KEY, ts
 CREATE TABLE IF NOT EXISTS trial_ledger (variant TEXT PRIMARY KEY, family TEXT, params TEXT, created TEXT)"""
 
 
-def ensure_schema(db) -> None:
+def ensure_schema(journal) -> None:
+    """Once per journal: the tables (DDL, never inside a unit) and the variants' trial-ledger rows (posted, #79)."""
+    if getattr(journal, "_ladder_ready", False):
+        return
+    db = journal.db
     db.executescript(SCHEMA)
     have = {r[1] for r in db.execute("PRAGMA table_info(ladder_shadow)")}
     for col, ddl in (("variant", "TEXT DEFAULT 'base'"), ("stop_v", "REAL"), ("entry", "REAL"), ("init_r", "REAL")):
         if col not in have:
             db.execute(f"ALTER TABLE ladder_shadow ADD COLUMN {col} {ddl}")
-    for name, prm in VARIANTS.items():
-        db.execute("INSERT OR IGNORE INTO trial_ledger VALUES (?,?,?,datetime('now'))",
-                   (name, "ladder", json.dumps(prm)))
-    db.commit()
+    rows = [(name, "ladder", json.dumps(prm)) for name, prm in VARIANTS.items()]
+    journal.post(lambda j: j.db.executemany("INSERT OR IGNORE INTO trial_ledger VALUES (?,?,?,datetime('now'))", rows))
+    journal._ladder_ready = True
 
 
 def race_with_edge(a: float, b: float, k: float) -> float:
@@ -203,11 +206,11 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
                                                         sig * math.sqrt(hours_left)), sig, hours_left, score)
     orig = plan.get("full_size") or trade.get("amount") or pos["contracts"]
     x_actual = round(pos["contracts"] / orig, 3) if orig else 1.0
-    ensure_schema(journal.db)
+    ensure_schema(journal)
     atr = (await ctx.candles("1h", 20))
     atr_v = sum(c[2] - c[3] for c in atr[-14:]) / max(len(atr[-14:]), 1) if atr else 0.0
     c1h4 = await ctx.candles("1h", 5)
-    rows = {}
+    rows, logged = {}, []
     for name, prm in VARIANTS.items():
         hist = [dict(zip(("ts", "x_star", "x_virtual", "action", "stop_v"), r)) for r in journal.db.execute(
             "SELECT ts, x_star, x_virtual, action, stop_v FROM ladder_shadow WHERE trade_id=? AND"
@@ -231,13 +234,12 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
         rows[name] = {"score": sc, "x_star": x_star, "x_virtual": x_new, "action": action, "stop_v": stop_v,
                       "relevel": note}
         if log and trade.get("id"):
-            journal.db.execute(
-                "INSERT INTO ladder_shadow (ts, trade_id, symbol, price, score, parts, levels, x_star, x_actual,"
-                " x_virtual, action, variant, stop_v, entry, init_r) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (now.isoformat(timespec="seconds"), trade["id"], sym, price, sc, json.dumps(parts),
-                 json.dumps(levels), x_star, x_actual, x_new, action, name, stop_v, entry, init_r))
-    if log:
-        journal.db.commit()
+            logged.append((now.isoformat(timespec="seconds"), trade["id"], sym, price, sc, json.dumps(parts),
+                           json.dumps(levels), x_star, x_actual, x_new, action, name, stop_v, entry, init_r))
+    if logged:   # one unit (#79)
+        await journal.write(lambda j: j.db.executemany(
+            "INSERT INTO ladder_shadow (ts, trade_id, symbol, price, score, parts, levels, x_star, x_actual,"
+            " x_virtual, action, variant, stop_v, entry, init_r) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", logged))
     b = rows["base"]
     return {"ts": now.isoformat(timespec="seconds"), "trade_id": trade.get("id"), "symbol": sym, "price": price,
             "stop": stop, "score": score, "parts": parts, "levels": levels, "x_star": b["x_star"],

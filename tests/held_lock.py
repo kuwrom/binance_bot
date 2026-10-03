@@ -7,6 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+# a writer kept waiting >= 1 s asks `python -m shortbot.wal_holder` who holds the lock (journal_writer.STALL_LOG_S): a
+# read-only child, no network, that tests/net_guard.py refuses unless the test says so
+STALL_REPORT = pytest.mark.spawns_shortbot
+
 _CHILD = """
 import sqlite3, sys, time
 d = sqlite3.connect(sys.argv[1], isolation_level=None)

@@ -128,19 +128,15 @@ async def reset_peak(j: Journal, s: Settings, reason: str, equity_fn) -> dict[st
                   f"reset the peak to {equity:.2f}, so drawdown is measured from here")
     if why:
         return {"ok": False, "error": why}
-    j.db.commit()
-    j.db.execute("BEGIN IMMEDIATE")   # check-and-reset under one write lock (adjusted_peak takes the same)
-    try:
+    def swap(j: Journal) -> dict[str, Any]:   # check-and-reset, one unit (adjusted_peak's unit takes the same lock)
         now = j.get(key)
         if now != shown:
-            j.db.rollback()
             return {"ok": False, "error": f"the equity peak changed while you were confirming ({shown} -> {now}): "
                                           "nothing changed, re-run"}
-        out = equity_marks.reset_peak(j, equity, f"{reason.strip()} ({_by()})")   # its first write commits
-    except Exception:
-        if j.db.in_transaction:
-            j.db.rollback()
-        raise
+        return equity_marks.reset_peak(j, equity, f"{reason.strip()} ({_by()})")
+    out = j.run(swap)
+    if not out["ok"]:
+        return out
     await ks.notify(j, s, "equity_peak_reset", f"equity peak {shown} -> {equity:.2f} by {_by()}: {reason}",
                     urgent=False)
     return out
@@ -167,16 +163,14 @@ async def ladder_clear(j: Journal, s: Settings, setup: str, reason: str) -> dict
     if why:
         return {"ok": False, "error": why}
     key = L.key(j, setup)
-    j.db.commit()
-    j.db.execute("BEGIN IMMEDIATE")   # check-and-re-enable under one write lock
-    try:
+
+    def swap(j: Journal) -> dict[str, Any] | None:   # check-and-re-enable, one unit
         if j.get(key) != p["raw"]:
-            return {"ok": False, "error": f"the {setup} ladder changed while you were confirming: nothing changed, "
-                                          "re-run"}
-        out = L.reenable(j, setup, p["episodes"], live=s.mode == "live", human_clear=True)   # its write commits
-    finally:
-        if j.db.in_transaction:
-            j.db.rollback()
+            return None
+        return L.reenable(j, setup, p["episodes"], live=s.mode == "live", human_clear=True)
+    out = j.run(swap)
+    if out is None:
+        return {"ok": False, "error": f"the {setup} ladder changed while you were confirming: nothing changed, re-run"}
     if not out["ok"]:
         return {"ok": False, "error": f"re-enable refused: {out['reason']}", "evidence": out}
     by, note = _by(), reason.strip()
@@ -205,16 +199,12 @@ async def ladder_reset(j: Journal, s: Settings, setup: str, reason: str) -> dict
     if why:
         return {"ok": False, "error": why}
     by, note = _by(), reason.strip()
-    j.db.commit()
-    j.db.execute("BEGIN IMMEDIATE")   # check-and-reset under one write lock
-    try:
-        if j.get(key) != shown:
-            return {"ok": False, "error": f"the {setup} ladder changed while you were confirming: nothing changed, "
-                                          "re-run"}
-        out = L.reset_epoch(j, setup, by, note)   # its write commits
-    finally:
-        if j.db.in_transaction:
-            j.db.rollback()
+
+    def swap(j: Journal) -> dict[str, Any] | None:   # check-and-reset, one unit
+        return L.reset_epoch(j, setup, by, note) if j.get(key) == shown else None
+    out = j.run(swap)
+    if out is None:
+        return {"ok": False, "error": f"the {setup} ladder changed while you were confirming: nothing changed, re-run"}
     before = {k: old.get(k) for k in ("state", "dd_r", "hwm_r", "cum_r", "epoch")}
     new = risk_budget._ladder(j, setup) or {}
     j.log_decision("setup_ladder_epoch_reset", f"{setup} ledger restarted by {by}: {note}", None,

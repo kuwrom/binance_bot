@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import clock
+from ..journal_writer import Writer, connect
 
 log = logging.getLogger("shortbot.liquidations")
 STREAM_URL = "wss://fstream.binance.com/market/ws/!forceOrder@arr"  # /market path since 2026-04-23
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS liquidations (
 CREATE INDEX IF NOT EXISTS idx_liq_sym_ts ON liquidations (symbol, ts_ms);
 """
 KEEP_DAYS = 30
+PRUNE_ROWS = 1000
 
 
 def raw_to_ccxt(raw: str) -> str:
@@ -35,11 +37,14 @@ def raw_to_ccxt(raw: str) -> str:
 
 
 class LiquidationStore:
+    """In the journal file. Its writes are units (journal_writer.py, #79): the recorder posts each flush and the prune
+    deletes PRUNE_ROWS at a time, so the guardian's loop never waits for another process's write lock."""
+
     def __init__(self, db_path: Path | str):
-        self.db = sqlite3.connect(str(db_path), check_same_thread=False, timeout=15)
+        self.db = connect(db_path)
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self.w = Writer(self.db)
 
     def record(self, rows: list[tuple]) -> None:
         self.db.executemany("INSERT INTO liquidations VALUES (?,?,?,?,?,?)", rows)
@@ -50,11 +55,19 @@ class LiquidationStore:
                               (symbol, since_ms, clock.now_ms()))   # never after now (a replay pins the clock)
         return [dict(r) for r in cur.fetchall()]
 
-    def prune(self) -> int:
-        n = self.db.execute("DELETE FROM liquidations WHERE ts_ms < ?",
-                            (int((time.time() - KEEP_DAYS * 86400) * 1000),)).rowcount  # wall-clock: retention
-        self.db.commit()
-        return n
+    async def prune(self) -> int:
+        """Rows past KEEP_DAYS, PRUNE_ROWS per unit (one statement over a day's 12k rows held the lock ~0.1 s)."""
+        cutoff, n = int((time.time() - KEEP_DAYS * 86400) * 1000), 0  # wall-clock: retention
+        while True:
+            k = await self.w.write(self._prune_some, cutoff)
+            n += k
+            if k < PRUNE_ROWS:
+                return n
+            await asyncio.sleep(0)
+
+    def _prune_some(self, cutoff: int) -> int:
+        return int(self.db.execute("DELETE FROM liquidations WHERE rowid IN (SELECT rowid FROM liquidations WHERE "
+                                   "ts_ms < ? LIMIT ?)", (cutoff, PRUNE_ROWS)).rowcount)
 
 
 def recent_many(db_path: Path | str, symbols: list[str], since_ms: int, now_ms: int) -> dict[str, list[dict]]:
@@ -112,7 +125,7 @@ class LiquidationRecorder:
                             self.buffer.append(row)
                             self.received += 1
                         if time.time() - last_flush > 2 and self.buffer:  # wall-clock: recorder flush
-                            self.store.record(self.buffer)
+                            self.store.w.post(self.store.record, self.buffer)   # never waits for the lock (#79)
                             self.buffer, last_flush = [], time.time()  # wall-clock: recorder flush
             except asyncio.CancelledError:
                 raise

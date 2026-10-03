@@ -34,6 +34,7 @@ import sqlite3
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Literal, TypeVar
 
@@ -65,6 +66,13 @@ class UnitConnection(sqlite3.Connection):
         if self.unit_depth:   # it COMMITs first (Python sqlite3 docs): the unit would end half-way
             raise sqlite3.ProgrammingError("executescript inside a journal unit: run schema DDL before the unit")
         return super().executescript(sql)
+
+
+def connect(path: str | Path, timeout_s: float = 15.0) -> UnitConnection:
+    """The journal file (or a store beside it in it): WAL, a busy timeout for writers off a loop, units for the rest."""
+    db = sqlite3.connect(str(path), check_same_thread=False, timeout=timeout_s, factory=UnitConnection)
+    db.execute("PRAGMA journal_mode=WAL")
+    return db
 
 
 @dataclass
@@ -174,6 +182,14 @@ class Writer:
         """Until every unit queued so far is written."""
         if self._q:
             await self.write(lambda: None)
+
+    async def drain(self, timeout_s: float) -> None:
+        """At exit: flush, or log what is lost after timeout_s (the lock held elsewhere all that time)."""
+        try:
+            await asyncio.wait_for(self.flush(), timeout_s)
+        except TimeoutError:
+            log.error("journal: %d queued write(s) lost: the write lock stayed held for %.0f s at exit", self.pending(),
+                      timeout_s)
 
     def pending(self) -> int:
         return len(self._q)

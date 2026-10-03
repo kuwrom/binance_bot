@@ -60,16 +60,17 @@ async def detect(ex, journal) -> int:
         if not ok or (leader.get("r4h") or 0) >= 0:
             continue
         lag, rest = pick_laggards(mem, leader["symbol"], leader["r4h"])
+        rows = []
         for g in lag:
             ctl = random.choice(rest) if rest else None
-            journal.db.execute(
+            rows.append((datetime.now(timezone.utc).isoformat(timespec="seconds"), now_ms, sec, leader["symbol"],
+                         leader["r4h"], g["symbol"], g["r4h"], tk[g["symbol"]]["last"], ctl and ctl["symbol"],
+                         ctl and ctl["r4h"], ctl and tk[ctl["symbol"]]["last"], m["header"]["breadth_pct"]))
+        if rows:   # a unit per sector, before the next sector's await (#79)
+            await journal.write(lambda j, rows=rows: j.db.executemany(
                 "INSERT INTO laggard_events (ts, ts_ms, sector, leader, leader_ret4h, laggard, laggard_ret4h, "
-                "laggard_px, control, control_ret4h, control_px, breadth) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (datetime.now(timezone.utc).isoformat(timespec="seconds"), now_ms, sec, leader["symbol"],
-                 leader["r4h"], g["symbol"], g["r4h"], tk[g["symbol"]]["last"], ctl and ctl["symbol"],
-                 ctl and ctl["r4h"], ctl and tk[ctl["symbol"]]["last"], m["header"]["breadth_pct"]))
-            n += 1
-        journal.db.commit()   # before the next sector's await: no write transaction spans an exchange call
+                "laggard_px, control, control_ret4h, control_px, breadth) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows))
+            n += len(rows)
     return n
 
 
@@ -96,6 +97,7 @@ async def label(ex, journal, limit: int = 20) -> int:
     rows = journal.db.execute("SELECT id, ts_ms, leader_ret4h, laggard, laggard_ret4h, laggard_px, control, control_px"
                               " FROM laggard_events WHERE labelled_at IS NULL AND ts_ms < ? LIMIT ?",
                               (cutoff, limit)).fetchall()
+    done = []
     for rid, ts, lr, lag, lagr, lagp, ctl, ctlp in rows:
         o: dict[str, Any] = {}
         try:
@@ -105,9 +107,10 @@ async def label(ex, journal, limit: int = 20) -> int:
                 o["control"] = outcome(ctlp, await ex.public.fetch_ohlcv(ctl, "15m", since=ts, limit=50))
         except Exception:  # noqa: BLE001
             pass
-        journal.db.execute("UPDATE laggard_events SET outcome=?, labelled_at=? WHERE id=?",
-                           (json.dumps(o), datetime.now(timezone.utc).isoformat(timespec="seconds"), rid))
-        journal.db.commit()   # per row: the guardian's shared connection must not hold a write across the next await
+        done.append((json.dumps(o), datetime.now(timezone.utc).isoformat(timespec="seconds"), rid))
+    if done:   # one unit, after every fetch (#79)
+        await journal.write(lambda j: j.db.executemany("UPDATE laggard_events SET outcome=?, labelled_at=? WHERE id=?",
+                                                       done))
     return len(rows)
 
 

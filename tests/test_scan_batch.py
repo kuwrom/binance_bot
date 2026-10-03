@@ -14,7 +14,8 @@ from shortbot.journal import Journal
 from shortbot.notify import Notifier
 from shortbot.scan_triggers import Trigger
 from shortbot.signals.base import Evaluation
-from tests.held_lock import HeldLock
+from tests.held_lock import STALL_REPORT, HeldLock
+from tests.loop_guard import loop_writes
 from tests.test_guardian import SETTINGS
 from tests.test_journal_writer import ticking
 from tests.test_scan_tiered import Harness, ccxt, coins, row
@@ -89,6 +90,16 @@ def transactions(sql: list[str]) -> list[list[str]]:
     return out
 
 
+async def test_the_scan_lane_writes_nothing_on_the_loop_outside_a_unit(tmp_path, monkeypatch):
+    h = batch(monkeypatch, tmp_path / "j.db")
+    with loop_writes(h.j.db) as bad:
+        await h.ts.step()                                      # a close: the batch, its alerts, the window
+        h.fast = [Trigger(s, "move_5m", 9.0, "d") for s in coins(3)]
+        h.t += 60_000
+        await h.ts.step()                                      # a fast window between closes
+    assert counts(h.j)[3] >= 1 and bad == []
+
+
 async def test_a_batch_that_fails_half_way_leaves_nothing(tmp_path, monkeypatch):
     h = batch(monkeypatch, tmp_path / "j.db")
     real, n = Journal.log_prediction, []
@@ -104,6 +115,7 @@ async def test_a_batch_that_fails_half_way_leaves_nothing(tmp_path, monkeypatch)
     assert counts(h.j) == (0, 0, 0, 0) and not h.j.db.in_transaction
 
 
+@STALL_REPORT
 async def test_a_window_waits_for_a_held_lock_off_the_loop(tmp_path, monkeypatch):
     h = batch(monkeypatch, tmp_path / "j.db")
     gaps, stop = [], asyncio.Event()

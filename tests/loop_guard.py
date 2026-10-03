@@ -1,6 +1,6 @@
 """Guard (#79): a write the guardian runs on its event loop outside a non-waiting unit (journal_writer.py) is a write
-that can sleep in SQLite's busy handler and stall every lane. `loop_writes(g)` collects each such statement, with the
-code that ran it, on the journal and every store connection the guardian holds."""
+that can sleep in SQLite's busy handler and stall every lane. `loop_writes(*dbs)` collects each such statement on
+these connections, with the code that ran it; `connections(g)` are the journal and every store the guardian holds."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def connections(g: Any) -> list[Any]:
 
 
 @contextmanager
-def loop_writes(g: Any) -> Iterator[list[str]]:
+def loop_writes(*dbs: Any) -> Iterator[list[str]]:
     bad: list[str] = []
 
     def watch(db: Any):
@@ -50,7 +50,6 @@ def loop_writes(g: Any) -> Iterator[list[str]]:
             if verb in WRITES and _on_loop() and unit in (None, "run"):
                 bad.append(f"{_site()}: {' '.join(sql.split())[:70]}")
         return cb
-    dbs = connections(g)
     for db in dbs:
         db.set_trace_callback(watch(db))
     try:

@@ -201,7 +201,8 @@ async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str,
                                    - (fr_all or 0)) * 1e4)
     prev = json.loads(journal.get(KV_PREV_RANKS) or "[]")
     rotation_flags(table, prev)
-    journal.set(KV_PREV_RANKS, json.dumps((prev + [{s["sector"]: s["rank4h"] for s in table}])[-3:]))
+    ranks = json.dumps((prev + [{s["sector"]: s["rank4h"] for s in table}])[-3:])
+    journal.post(lambda j: j.set(KV_PREV_RANKS, ranks))   # posted, like the map (#79)
     b15, e15 = await asyncio.gather(*(ex.public.fetch_ohlcv(m, "1m", limit=16) for m in majors),
                                     return_exceptions=True)
     m15 = [(c[-1][4] / c[0][1] - 1) * 100 if isinstance(c, list) and c else None for c in (b15, e15)]
@@ -210,7 +211,8 @@ async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str,
                                                  "resid_sector24h", "resid_sector_z", "vol_surge")} for r in rows}
     out = {"ts": int(clock.now_s()), "built_s": round(time.time() - t0, 1), "header": header,  # wall-clock: built_s
            "btc_15m": _r(m15[0]), "eth_15m": _r(m15[1]), "sectors": table, "vetoes": vetoes, "coins": coins}
-    journal.set(KV_LAST, json.dumps(out))
+    cache = json.dumps(out)
+    journal.post(lambda j: j.set(KV_LAST, cache))
     return out
 
 
@@ -264,9 +266,9 @@ def render(m: dict[str, Any]) -> str:
 
 
 def log_snapshot(journal, m: dict[str, Any]) -> None:
-    """Keep every map (header + sectors) so the thresholds can be tested against outcomes later."""
+    """Keep every map (header + sectors) so the thresholds can be tested against outcomes later. A unit (the guardian
+    awaits journal.write(log_snapshot, m))."""
     journal.db.execute("CREATE TABLE IF NOT EXISTS market_maps (ts INTEGER PRIMARY KEY, header TEXT, sectors TEXT,"
                        " vetoes TEXT)")
     journal.db.execute("INSERT OR REPLACE INTO market_maps VALUES (?,?,?,?)",
                        (m["ts"], json.dumps(m["header"]), json.dumps(m["sectors"]), json.dumps(m["vetoes"])))
-    journal.db.commit()

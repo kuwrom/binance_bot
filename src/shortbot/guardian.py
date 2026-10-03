@@ -10,7 +10,9 @@
 
 Jobs run in lanes (guardian_loop.py) that run concurrently: protective (fills, stops, plans), watch (alerts on
 open shorts), monitor (account and market alerts), research, and scan (tiers 1-3 at each 15m close). Every position and every job is isolated and
-time-boxed, and a slow or hung job only ever delays its own lane, never the protective one.
+time-boxed, and a slow or hung job only ever delays its own lane, never the protective one. No journal write waits on
+the event loop for another process's write lock (#79, journal_writer.py): a job awaits a write it needs (only its lane
+waits) or posts bookkeeping (nothing waits); a wait past STALL_ALERT_S is alerted with the lock's holder.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import signal
 from pathlib import Path
 
 from . import audit, procs
-from .app import close_app, get_app
+from .app import FLUSH_S, close_app, get_app
 from .entries import EntryDesk
 from .gateway import LocalGateway
 from .guardian_jobs import MarketJobs
@@ -77,6 +79,7 @@ RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs
 # the positions pass (account and income reads) runs at most 4x a minute however many stop or target events come
 TRIGGER_GAP_S = {"entries": 1.0, "positions": 15.0}
 TICK_S = 1.0
+STALL_ALERT_S = 60.0   # a journal write waiting this long for another process's lock is alerted, naming the holder
 
 
 class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs):
@@ -105,6 +108,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self.gw = LocalGateway(lambda: self.j, ctx=self)   # its protective actions are intents (#36 step 2)
         self.liq_store = LiquidationStore(self.app.settings.db_path)
         self.social_store = SocialStore(self.app.settings.db_path)
+        self.j.w.on_stall = self._journal_stalled
+        self._stall_alerts: set[asyncio.Task] = set()
         self._social_task: asyncio.Task | None = None
         self._refresh_proc: asyncio.subprocess.Process | None = None
         self._fund_ts: dict[str, float] = {}
@@ -162,6 +167,19 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
             return
         self.j.post(lambda j: j.set(HEARTBEAT_KEY, str(at)))
 
+    def _journal_stalled(self, waited: float, who: dict | None) -> None:
+        """journal_writer: its writes have waited `waited` s for another process's write lock (#79). From STALL_ALERT_S
+        on, the human is told who holds it: the loop runs on, but bookkeeping and the heartbeat queue behind it."""
+        if waited < STALL_ALERT_S:
+            return
+        holder = f"pid {who['pid']} ({who['cmd']})" if who else "an unknown process"
+        t = asyncio.get_running_loop().create_task(send_safe(
+            self.n, "journal_locked", f"journal writes have waited {waited:.0f} s for the write lock, held by "
+            f"{holder}. Stops are still restored (their intents land late); the heartbeat and bookkeeping are queued "
+            "until it frees.", urgent=True, cooldown_s=3600))
+        self._stall_alerts.add(t)
+        t.add_done_callback(self._stall_alerts.discard)
+
     # ------------------------------------------------------------ run
     async def _startup(self) -> None:
         await send_safe(self.n, "guardian_started", f"Guardian online ({self.app.settings.mode}). Trading keys: "
@@ -198,6 +216,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await self.stop_refresh()   # after the lanes: none can start another one now
+        for store in (self.liq_store, self.social_store):   # the journal itself drains in close_app (#79)
+            await store.w.drain(FLUSH_S)
 
 
 async def _main() -> None:

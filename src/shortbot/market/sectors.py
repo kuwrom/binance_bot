@@ -54,7 +54,8 @@ async def sector_map(journal) -> dict[str, str]:
     if not cached or time.time() - cached.get("ts", 0) > TTL_S:  # wall-clock: cache TTL
         try:
             cached = {"ts": time.time(), "tags": await fetch_tags()}  # wall-clock: cache TTL
-            journal.set(KV_KEY, json.dumps(cached))
+            v = json.dumps(cached)
+            journal.post(lambda j: j.set(KV_KEY, v))   # a cache: posted (#79)
         except Exception:  # noqa: BLE001 - taxonomy is context; keep the old one
             pass
     return {b: primary_sector(t) for b, t in (cached.get("tags") or {}).items()}

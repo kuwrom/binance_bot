@@ -46,12 +46,13 @@ def stamps(multipliers: dict[str, Any] | None) -> dict[str, float | None]:
 
 
 def publish_governor(j, gov: dict[str, Any], limits: str, now: float | None = None) -> None:
-    """The guardian's governor verdict for the protective lane; `limits` names the limits it was judged under."""
-    j.set(j.mode_key(GOV_KEY), json.dumps({"ts": time.time() if now is None else now, "halt": bool(gov.get("halt")),
-                                           "until": gov.get("until"), "reasons": list(gov.get("reasons") or []),
-                                           "limits": limits, "m_gov": gov.get("m_gov"),
-                                           "room_usd": (gov.get("daily") or {}).get("room_usd"),
-                                           "open_risk_usd": gov.get("open_risk_usd")}))
+    """The guardian's governor verdict for the protective lane; `limits` names the limits it was judged under. Posted
+    (#79): its age is what readers judge it by."""
+    v = json.dumps({"ts": time.time() if now is None else now, "halt": bool(gov.get("halt")),
+                    "until": gov.get("until"), "reasons": list(gov.get("reasons") or []), "limits": limits,
+                    "m_gov": gov.get("m_gov"), "room_usd": (gov.get("daily") or {}).get("room_usd"),
+                    "open_risk_usd": gov.get("open_risk_usd")})
+    j.post(lambda j: j.set(j.mode_key(GOV_KEY), v))
 
 
 def _verdict(j, now: float | None = None) -> dict[str, Any] | None:

@@ -26,6 +26,7 @@ from typing import Any
 
 from . import episodes, fill_quality, targets
 from .exchange import to_raw
+from .journal import Journal
 
 log = logging.getLogger("shortbot.reconcile")
 PNL_TYPES = {"REALIZED_PNL": "gross", "COMMISSION": "fees", "FUNDING_FEE": "funding", "INSURANCE_CLEAR": "liq_fee"}
@@ -180,7 +181,7 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
     live = live_positions if live_positions is not None else await trader.raw_positions()
     empty = not live and any(r["status"] == "open" for r in rows)   # proves nothing on its own (module doc)
     if not empty and j.get(EMPTY_KEY):
-        j.set(EMPTY_KEY, "")
+        j.post(lambda j: j.set(EMPTY_KEY, ""))   # bookkeeping: posted (#79)
     pos = {p["symbol"]: p for p in live}
     newest = {r["symbol"]: r["id"] for r in rows}   # rows come by id: the last row per symbol wins
     done: list[dict[str, Any]] = []
@@ -189,7 +190,7 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
         try:
             if tr["status"] == "opening":
                 if not empty:
-                    _opening(trader, tr, pos.get(tr["symbol"]))
+                    await _opening(trader, tr, pos.get(tr["symbol"]))
                 continue
             p, older = pos.get(tr["symbol"]), newest[tr["symbol"]] != tr["id"]
             if p and not older and _same(tr, p):
@@ -255,23 +256,23 @@ def _waiting(tr: dict[str, Any], m: dict[str, Any], newer: int | None) -> str:
     return head + "its trade history buys back more than it sold (it didn't begin flat); check and journal by hand"
 
 
-def _opening(trader, tr: dict[str, Any], p: dict[str, Any] | None) -> None:
+async def _opening(trader, tr: dict[str, Any], p: dict[str, Any] | None) -> None:
     if (time.time() * 1000 - iso_to_ms(tr["opened_at"])) / 1000 < OPENING_GRACE_S:
         return   # an entry may be in flight right now
     if p:
-        trader.j.activate_trade(tr["id"], float(p["entryPrice"]), float(p["contracts"]),
-                                abs(float(p.get("notional") or 0)))
+        await trader.j.write(Journal.activate_trade, tr["id"], float(p["entryPrice"]), float(p["contracts"]),
+                             abs(float(p.get("notional") or 0)))
         trader.j.log_alert("trade_recovered", f"trade #{tr['id']} was stuck in 'opening'; activated from the live "
                            "position", tr["symbol"])
     else:
-        trader.j.abort_trade(tr["id"], "entry never filled (recovered by reconcile)")
+        await trader.j.write(Journal.abort_trade, tr["id"], "entry never filled (recovered by reconcile)")
 
 
 async def _empty_answer(trader, rows: list[dict[str, Any]]) -> None:
     """No position at all, yet these trades' own history shows them still open: a glitch looks just like that, so
     they stay open (and 'opening' rows stay as they are). Alerted once per streak; a non-empty answer ends it."""
     if not trader.j.get(EMPTY_KEY):
-        trader.j.set(EMPTY_KEY, str(time.time()))
+        trader.j.post(lambda j: j.set(EMPTY_KEY, str(time.time())))
         await trader.alert("positions_empty", "Binance answered NO positions, but trade history shows "
                            + ", ".join(f"#{r['id']} {r['symbol']}" for r in rows) + " still open: nothing closed or "
                            "aborted on that answer, and the guardian sees no position to check. Check Binance now.",

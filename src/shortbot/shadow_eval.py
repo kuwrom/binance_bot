@@ -29,7 +29,7 @@ def path_r(prices: list[float], xs: list[float], init_r: float, exit_price: floa
 
 def evaluate(journal) -> dict[str, Any]:
     from .ladder import ensure_schema
-    ensure_schema(journal.db)
+    ensure_schema(journal)
     rows = journal.db.execute("SELECT trade_id, variant, ts, price, x_actual, x_virtual, init_r FROM ladder_shadow"
                               " WHERE trade_id IS NOT NULL ORDER BY trade_id, id").fetchall()
     by: dict[int, dict[str, list]] = {}

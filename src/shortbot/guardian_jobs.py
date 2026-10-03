@@ -14,6 +14,7 @@ from typing import Any
 from . import killswitch as ks
 from . import entry_gates, news, procs, research, scan_job, setup_ladder, stream_task
 from .exchange import to_raw
+from .journal import Journal
 from .guardian_loop import guarded, send_safe
 from .market.regime import market_regime
 from .market.social import snapshot as social_snapshot
@@ -40,11 +41,11 @@ class MarketJobs:
                 continue
             key = f"ann_seen:{a['url']}"
             if self.j.get(key) is None:
-                self.j.set(key, str(time.time()))
+                self.j.post(lambda j, k=key: j.set(k, str(time.time())))
                 fresh = datetime.fromisoformat(a["time"]) > datetime.now(timezone.utc) - timedelta(hours=24)
                 if not first_run and fresh:  # never alert on old items that merely re-appear in the list
                     await self._announce(a)
-        self.j.set("ann_initialised", "1")
+        self.j.post(lambda j: j.set("ann_initialised", "1"))
 
     async def _announce(self, a: dict) -> None:
         """A delisting naming a coin on our book (an open short, or an entry that is or may be resting) is urgent, per
@@ -97,7 +98,7 @@ class MarketJobs:
         from . import refresh
         if (self._refresh_proc and self._refresh_proc.returncode is None) or not refresh.due(self.j):
             return
-        self.j.set(refresh.KV_KEY, str(time.time()))   # claim the week now, so a restart doesn't spawn twice
+        await self.j.write(lambda j: j.set(refresh.KV_KEY, str(time.time())))   # claimed first: never spawned twice
         self._refresh_proc = await refresh.spawn()     # its own process group: stop_refresh ends it with its steps
         await self.n.send("research_refresh", "weekly research refresh started (data, backtest ledger, registry)",
                           None, cooldown_s=3600)
@@ -109,7 +110,8 @@ class MarketJobs:
         proc, self._refresh_proc = self._refresh_proc, None
         try:
             if await refresh.stop(proc):
-                self.j.set(refresh.KV_KEY, str(time.time() - refresh.EVERY_S + refresh.RETRY_S))
+                retry = str(time.time() - refresh.EVERY_S + refresh.RETRY_S)
+                await self.j.write(lambda j: j.set(refresh.KV_KEY, retry))
         except Exception as e:  # noqa: BLE001 - shutdown goes on; the human is told
             await send_safe(self.n, "research_refresh_stop_failed", f"the research refresh (pid {proc and proc.pid}) "
                             f"may still be running: {type(e).__name__}: {e}", cooldown_s=0)
@@ -123,9 +125,9 @@ class MarketJobs:
             await self.n.send(f"stale_process:{f['pid']}", f["text"], urgent=True, cooldown_s=procs.ALERT_COOLDOWN_S)
 
     async def housekeeping(self) -> None:
-        n = self.j.prune_kv(("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)
-        n += self.j.prune_kv((scan_job.KV_SEEN,), scan_job.RENOTIFY_S)   # scan alert dedup: past its window
-        m = self.liq_store.prune()
+        n = await self.j.write(Journal.prune_kv, ("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)
+        n += await self.j.write(Journal.prune_kv, (scan_job.KV_SEEN,), scan_job.RENOTIFY_S)   # alert dedup, expired
+        m = await self.liq_store.prune()
         b = await asyncio.to_thread(stream_task.prune, self.streams_db) if self.streams_db else 0
         log.info("pruned %d kv markers, %d old liquidations, %d old stream bars", n, m, b)
 
@@ -135,7 +137,7 @@ class MarketJobs:
         are only logged. A ladder that could not be evaluated fails the job (guardian_error) after the others ran."""
         live = self.app.settings.mode == "live"
         broken = []
-        for row in setup_ladder.auto_reenable(self.j, live=live):
+        for row in await self.j.write(setup_ladder.auto_reenable, live=live):
             s = row["setup"]
             if row.get("error"):
                 broken.append(f"{s}: {row['error']}")
@@ -173,12 +175,10 @@ class MarketJobs:
                                  "AND ts >= ? ORDER BY id", (self.j.mode, since)).fetchall()
         for aid, sym, msg in rows:
             marker = KV_STOP_SENT + str(aid)
-            claimed = self.j.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)",
-                                        (marker, str(time.time()))).rowcount
-            self.j.db.commit()
+            claimed = await self.j.write(lambda j, k=marker: j.db.execute(
+                "INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (k, str(time.time()))).rowcount)
             if claimed and not await self.n.forward("setup_ladder_stop", msg, sym):
-                self.j.db.execute("DELETE FROM kv WHERE k = ?", (marker,))
-                self.j.db.commit()
+                await self.j.write(lambda j, k=marker: j.db.execute("DELETE FROM kv WHERE k = ?", (k,)))
 
     # ------------------------------------------------------------ research lane
     async def record_metrics(self) -> None:
@@ -194,8 +194,9 @@ class MarketJobs:
                 oi[sym] = (await self.ex.public.fetch_open_interest(sym)).get("openInterestAmount")
             except Exception:  # noqa: BLE001 - research metrics: a coin without OI is recorded without it
                 pass
-        self.j.record_metrics([(ts, s, t.get("last"), rates.get(s, {}).get("fundingRate"), oi.get(s),
-                                t.get("quoteVolume")) for s, t in tickers.items() if s in perps])
+        await self.j.write(Journal.record_metrics, [(ts, s, t.get("last"), rates.get(s, {}).get("fundingRate"),
+                                                     oi.get(s), t.get("quoteVolume")) for s, t in tickers.items()
+                                                    if s in perps])
 
     async def label_research(self) -> None:
         now = int(time.time() * 1000)
@@ -205,8 +206,8 @@ class MarketJobs:
         from .laggard import label as label_laggards
         x += await label_laggards(self.ex, self.j)
         from . import registry
-        from .registry_seed import feed_candidates
-        fed = feed_candidates(self.j) if n else 0          # newly labelled scans -> registry node episodes
+        path = self.j.w.path   # labelled scans -> registry node episodes, off the loop (in-memory journal: none)
+        fed = await asyncio.to_thread(_feed, path, self.j.mode) if n and path else 0
         for a in registry.decay_alarms(self.j.db):
             await self.n.send(f"pattern_decay:{a['id']}", f"{a['id']} ({a['status']}): {a['verdict']}", None,
                               cooldown_s=86_400)
@@ -223,7 +224,7 @@ class MarketJobs:
         """Whole-tape map every 10 min (docs/MARKET_MAP.md): cached for the sector signal, logged for research."""
         from .market.market_map import build_map, log_snapshot
         m = await build_map(self.ex, self.j)
-        log_snapshot(self.j, m)
+        await self.j.write(log_snapshot, m)
         if m["vetoes"]["pause"]:
             await self.n.send("market_pause", "; ".join(m["vetoes"]["pause"]), cooldown_s=3600)
 
@@ -286,6 +287,18 @@ class MarketJobs:
         n = await detect(self.ex, self.j)
         if n:
             log.info("laggard study: %d new events", n)
+
+
+def _feed(path: str, mode: str) -> int:
+    """registry_seed.feed_candidates in a worker thread, on its own connection: it rebuilds every node's forward rows
+    from all labelled candidates (25-93 ms of CPU on the 2026-10 journal, growing with it) and may wait for the write
+    lock; neither is the loop's (#79)."""
+    from .registry_seed import feed_candidates
+    j = Journal(path, mode)
+    try:
+        return feed_candidates(j)
+    finally:
+        j.db.close()
 
 
 def _off_loop(module: str, *args: Any) -> Any:

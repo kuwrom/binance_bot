@@ -57,7 +57,8 @@ async def refresh(journal, force: bool = False) -> dict[str, Any]:
     if not force and cached and time.time() - cached.get("ts", 0) < TTL_S:  # wall-clock: cache TTL
         return {"cached": True, "coins": len(cached.get("coins", {}))}
     coins = await fetch_supply()
-    journal.set(KV_KEY, json.dumps({"ts": time.time(), "coins": coins}))  # wall-clock: cache TTL
+    v = json.dumps({"ts": time.time(), "coins": coins})  # wall-clock: cache TTL
+    await journal.write(lambda j: j.set(KV_KEY, v))
     return {"cached": False, "coins": len(coins)}
 
 

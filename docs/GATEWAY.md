@@ -151,7 +151,7 @@ B is the same pattern, with the guardian as one more surface. A and B share step
 | cross-host | `ssh -L local.sock:remote.sock` (OpenSSH ≥ 6.7: "both ends may be a Unix domain socket"); no port | impossible: WAL is same-host | needs an open port. The EC2 security group is SSH-only (DEPLOY §1) |
 | auth | 0700 directory + peer uid | file permissions | TLS + tokens: new secrets to manage |
 | durability | the gateway journals the intent on receipt | built in, but queued intents outlive a crash and can run late on stale decisions, so they need a deadline anyway | as socket |
-| contention | one writer for intent rows | every caller writes the shared journal (busy timeout 15 s, journal.py:120) | as socket |
+| contention | one writer for intent rows | every caller writes the shared journal; on an event loop as non-waiting units (#79, journal_writer.py), off a loop with a 15 s busy timeout | as socket |
 
 ### 3.2 Protocol
 - **Socket path:** `data/run/gateway-<mode>.sock`. The mode is in the path and in every request, so a demo client can't drive a live gateway; a mismatch is refused.

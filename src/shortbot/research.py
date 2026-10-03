@@ -67,7 +67,7 @@ async def label_outcomes(ex: Exchanges, journal, now_ms: int, limit: int = 120) 
     Returns how many labels were written."""
     rows = journal.unlabelled_candidates(older_than_ms=now_ms - 73 * HOUR_MS, limit=limit, version=LABEL_VERSION,
                                          now_ms=now_ms)
-    n = 0
+    labels, fails = [], []
     for r in rows:
         held = r["short_ret_24h"] is not None                   # an older method's label, in the reports today
         try:
@@ -76,19 +76,27 @@ async def label_outcomes(ex: Exchanges, journal, now_ms: int, limit: int = 120) 
             outcome, error = {}, f"{type(e).__name__}: {e}"
         tries = (r["label_tries"] or 0) + 1
         if error is None or (tries >= LABEL_MAX_TRIES and not held):
-            journal.label_candidate(r["id"], outcome, LABEL_VERSION)
-            n += 1
+            labels.append((r["id"], outcome, LABEL_VERSION))
         if error is not None:
             retry = None if tries >= LABEL_MAX_TRIES else now_ms + RETRY_H * HOUR_MS * 2 ** (tries - 1)
-            journal.label_failed(r["id"], error, tries, retry)
-    return n
+            fails.append((r["id"], error, tries, retry))
+    if labels or fails:   # one unit per run, after the fetches (#79): a run cut short labels again next hour
+        await journal.write(_store_labels, labels, fails)
+    return len(labels)
+
+
+def _store_labels(journal, labels: list[tuple], fails: list[tuple]) -> None:
+    for x in labels:
+        journal.label_candidate(*x)
+    for x in fails:
+        journal.label_failed(*x)
 
 
 async def label_post_exit(ex: Exchanges, journal, now_ms: int, limit: int = 10) -> int:
     """For closed trades >= 24h old: how far did price keep going our way AFTER we exited? Measures whether our
     exits systematically leave the move on the table (hold runners longer) or ONDO-style runs were luck."""
     from datetime import datetime
-    n = 0
+    moves: list[tuple[int, dict]] = []
     for t in journal.trades(200, all_modes=True):   # post-exit moves are market facts, whatever the account
         if t["status"] != "closed" or t.get("post_exit") or not t.get("closed_at") or not t.get("exit_price"):
             continue
@@ -100,14 +108,15 @@ async def label_post_exit(ex: Exchanges, journal, now_ms: int, limit: int = 10) 
         except Exception:  # noqa: BLE001
             c = []
         px = t["exit_price"]
-        journal.update_trade(t["id"], post_exit={
+        moves.append((t["id"], {
             "further_drop_24h_pct": round((px - min(x[3] for x in c[:25])) / px * 100, 2) if c else None,
             "rise_against_24h_pct": round((max(x[2] for x in c[:25]) - px) / px * 100, 2) if c else None,
-            "ret_24h_pct": round((px - c[24][4]) / px * 100, 2) if len(c) > 24 else None})
-        n += 1
-        if n >= limit:
+            "ret_24h_pct": round((px - c[24][4]) / px * 100, 2) if len(c) > 24 else None}))
+        if len(moves) >= limit:
             break
-    return n
+    if moves:
+        await journal.write(lambda j: [j.update_trade(tid, post_exit=pe) for tid, pe in moves])
+    return len(moves)
 
 
 def funding_carry_24h(features: dict[str, Any]) -> float:

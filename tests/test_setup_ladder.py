@@ -28,6 +28,8 @@ class J:
         self.kv[k] = v
         self.db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (k, v))
     def mode_key(self, k): return k
+    def post(self, fn, *a, **k): return fn(self, *a, **k)   # Journal.post, the lock free: written at once
+    def run(self, fn, *a, **k): return fn(self, *a, **k)
     def candidates(self, labelled_only=False, limit=5000): return self.cands
     def log_alert(self, kind, message, symbol=None): self.alerts.append((kind, message))
 
