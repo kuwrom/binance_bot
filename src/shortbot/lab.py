@@ -104,7 +104,8 @@ def report(min_n: int = 5) -> dict:
 
 def fee_audit(limit: int = 500) -> dict:
     """Closed trades' journalled fees / P&L against Binance income matched by tradeId (fee_audit.py, #75): before,
-    after and diff per trade, and the totals. Reads the account's trade history and income; writes nothing."""
+    after and diff per trade, how its position was found (`matched`: its journalled order ids, #76, or time), and the
+    totals. Reads the account's trade history and income; writes nothing."""
     return _with_ex(lambda ex: _fee_audit.audit(SimpleNamespace(t=ex.require_trade(), j=journal()), limit))
 
 

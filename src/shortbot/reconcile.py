@@ -2,10 +2,11 @@
 
 - finalize(): close a journal trade using Binance income history (REALIZED_PNL + COMMISSION + FUNDING_FEE,
   INSURANCE_CLEAR = liquidation) and the actual exit fills. Given the trade's position rebuilt from trade history
-  (`episode`), its income is that position's (trade_income) and closed_at is its exit fill.
+  (`episode`), its income is that position's (trade_income) and closed_at is its exit fill. The desk's own close
+  passes none: the position is rebuilt here when the trade's own order ids find it (episodes.match, #76).
 - income rows are stamped to the whole second, 100-944 ms BEFORE their trade (demo, probe_result 395, #75): a read
-  from a fill's own ms misses that fill's rows. A trade's rows are matched by tradeId, the rest by time from its
-  opening second.
+  from a fill's own ms misses that fill's rows. A trade's rows are matched by tradeId, funding to the position held
+  when it settled (episodes.holds), the rest by time from its opening second.
 - reconcile(): journal trades are matched to the exchange by their own trade history (episodes.py), not by symbol
   (#15). A trade is closed once that history shows its position flat, at its exit fill, even if the symbol has been
   shorted again since; without its exit fill it is never closed. Rows stuck in 'opening' are recovered or aborted.
@@ -108,18 +109,23 @@ async def trade_income(t, trade: dict[str, Any], episode: dict[str, Any] | None 
                        until_ms: int | None = None) -> dict[str, Any]:
     """The trade's income (summarize_income), read from the second it opened (module doc). With its episode, a row
     carrying a tradeId counts when that trade is one of the position's fills (the fill before it or a re-entry, in the
-    same second or before until_ms, is another position's); rows without one (funding, insurance) count up to the
-    episode's until_ms. Without an episode, every row from that second to until_ms (open-ended without)."""
-    since = episode["opened_ms"] if episode else iso_to_ms(trade["opened_at"])
+    same second or before until_ms, is another position's); a FUNDING_FEE row when the position held it
+    (episodes.holds: read from FUNDING_LAG_MS before that second); other rows without a tradeId (insurance) from that
+    second up to the episode's until_ms. Without an episode, every row from that second to until_ms (open-ended
+    without)."""
+    since = floor_s(episode["opened_ms"] if episode else iso_to_ms(trade["opened_at"]))
     until = episode.get("until_ms") if episode else until_ms
     ids = {str(x.get("id")) for x in [*episode["sells"], *(episode.get("buys") or [])]} if episode else None
 
     def ours(r: dict[str, Any]) -> bool:
-        tid = str(r.get("tradeId") or "")
+        tid, ms = str(r.get("tradeId") or ""), int(r["time"])
         if ids is not None and tid:
             return tid in ids
-        return until is None or int(r["time"]) <= until
-    return summarize_income([r for r in await income_since(t, floor_s(since), trade["symbol"]) if ours(r)])
+        if episode and r.get("incomeType") == "FUNDING_FEE":
+            return episodes.holds(episode, ms)
+        return since <= ms and (until is None or ms <= until)
+    rows = await income_since(t, since - (episodes.FUNDING_LAG_MS if episode else 0), trade["symbol"])
+    return summarize_income([r for r in rows if ours(r)])
 
 
 async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
@@ -127,8 +133,12 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
     """Close a journal trade with exchange-truth PnL. Safe to call when the position is already flat.
     until_ms: the trade's end when it is known, so income and fills of later activity on the symbol are not counted.
     episode: the trade's position rebuilt from trade history (episodes.match / walk): its own income (trade_income),
-    its exit fills' price, and closed_at = its exit fill (not the time of this call)."""
+    its exit fills' price, and closed_at = its exit fill (not the time of this call). None given (the desk's own close):
+    rebuilt here by the trade's order ids (own_episode)."""
     t, j = trader.t, trader.j
+    given = episode is not None
+    if not given and until_ms is None:
+        episode = await own_episode(trader, trade)
     inc = await trade_income(t, trade, episode, until_ms)
     exit_px = episode["exit"] if episode else (await exit_fills(t, trade["symbol"], iso_to_ms(trade["opened_at"]),
                                                                 until_ms))[0]
@@ -138,11 +148,21 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
                   gross_pnl=inc["gross"], fees=inc["fees"], funding=inc["funding"] + inc["liq_fee"])
     if episode:
         j.update_trade(trade["id"], closed_at=ms_to_iso(episode["closed_ms"]))
+    if given:   # rebuilt here: the desk's close, whose fills it benchmarks live (#35)
         fill_quality.record_episode(trader, trade, episode,   # mainnet refs for its fills not yet referenced (#35)
                                     targets.order_kinds(j, trade["id"]))   # its resting targets' fills say so
     j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,
                                                                       "exit": exit_px})
     return {"trade_id": trade["id"], "symbol": trade["symbol"], "exit": exit_px, **inc, "reason": reason}
+
+
+async def own_episode(trader, trade: dict[str, Any]) -> dict[str, Any] | None:
+    """The trade's closed position, found in trade history by its own order ids (episodes.match `by` "ids", #76): a
+    close and a re-entry in one second each keep their own fills and income. None for a trade journalled without ids
+    (matched by time, it could be the previous position) or while history doesn't show it flat yet: finalize then
+    counts income from its opening second, as before #76."""
+    m = await episodes.match(trader, trade)
+    return m if m["state"] == "closed" and m.get("by") == "ids" else None
 
 
 async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:

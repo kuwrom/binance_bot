@@ -96,8 +96,10 @@ def _trades(j, all_modes: bool) -> list[dict[str, Any]]:
     m, args = j._in_mode(all_modes)
     rows = j._rows(f"SELECT id, symbol, setup, status, entry_features, fill_refs FROM trades WHERE {m} ORDER BY id",
                    args)
-    for r in rows:
-        r["entry_features"], r["refs"] = _json(r["entry_features"]), _json(r.pop("fill_refs"))
+    for r in rows:   # the doc's `orders` are the trade's order ids (order_ids.py, #76): a doc of only those has none
+        refs = {k: v for k, v in _json(r.pop("fill_refs")).items() if k != "orders"}
+        has = any(refs.get(k) for k in ("fills", "missed", "vol24_usd"))
+        r["entry_features"], r["refs"] = _json(r["entry_features"]), refs if has else {}
     return rows
 
 

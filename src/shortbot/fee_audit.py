@@ -1,15 +1,17 @@
 """Read only (#75): the journalled fees and P&L of closed trades against Binance income matched the corrected way
 (reconcile.trade_income). Before #75, finalize read income from the entry fill's own ms, so the entry COMMISSION,
 stamped to the second before its fill (demo, probe_result 395), was missing from every trade closed through its trade
-history (reconcile, round trips). A re-entry soon after a close could also add its rows to the closed trade. Nothing
-is written: the human decides whether to correct history.
+history (reconcile, round trips). A re-entry soon after a close could also add its rows to the closed trade. Since #76
+a trade's position is found by its journalled order ids where it has them (`matched`: "ids"; a trade from before then:
+"time", episodes.match), and funding goes to the position that held it. Nothing is written: the human decides whether
+to correct history.
 
     .venv/bin/python - <<'PY'
     from shortbot import lab
     r = lab.fee_audit()
     print(r["totals"], r["audited"], r["skipped"])
     for x in r["trades"]:
-        print(x["id"], x["symbol"], x.get("diff") or x.get("skipped"))
+        print(x["id"], x["symbol"], x.get("matched"), x.get("diff") or x.get("skipped"))
     PY
 """
 
@@ -29,8 +31,9 @@ def _read_until(trade: dict[str, Any]) -> int | None:
 
 async def audit(tr, limit: int = 500) -> dict[str, Any]:
     """Every closed trade of the journal's mode (the last `limit` trades): before = the journal's gross_pnl, fees,
-    funding and pnl; after = the same from income matched to its position's fills; diff = after - before. A trade
-    whose position trade history can't show (or whose read fails) is listed with `skipped` and its reason.
+    funding and pnl; after = the same from income matched to its position's fills; diff = after - before; matched =
+    how its position was found ("ids" or "time"). A trade whose position trade history can't show (or whose read
+    fails) is listed with `skipped` and its reason.
     tr: anything with `t` (the trade client) and `j` (the journal)."""
     out: list[dict[str, Any]] = []
     totals = dict.fromkeys(FIELDS, 0.0)
@@ -53,7 +56,7 @@ async def audit(tr, limit: int = 500) -> dict[str, Any]:
         diff = {k: round(after[k] - float(before[k] or 0), 6) for k in FIELDS}
         for k in FIELDS:
             totals[k] += diff[k]
-        out.append({**row, "before": before, "after": after, "diff": diff})
+        out.append({**row, "matched": ep.get("by"), "before": before, "after": after, "diff": diff})
     skipped = sum(1 for x in out if "skipped" in x)
     return {"trades": out, "audited": len(out) - skipped, "skipped": skipped,
             "totals": {k: round(v, 6) for k, v in totals.items()}}

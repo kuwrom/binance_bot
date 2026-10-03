@@ -19,7 +19,8 @@ capture still running when a process exits is cancelled quietly (asyncio.run), n
 `trades.fill_refs` (JSON), written only by atomic json_insert / json_set statements, never read-modify-write, so the
 guardian and the MCP server can't lose each other's rows (entry_features is rewritten whole by several writers):
   {"v": 1, "vol24_usd": 3.1e7, "missed": {"<order id>": "timeout"},
-   "fills": [{leg, type, order, px, qty, ms, src, ref_ms, bid, ask, mark | last, at, trigger?}, ...]}
+   "fills": [{leg, type, order, px, qty, ms, src, ref_ms, bid, ask, mark | last, at, trigger?}, ...],
+   "orders": {"<order id>": {leg, cid}}}   <- the trade's market order ids, written at the order's answer (order_ids.py)
 One fill = one order (the VWAP of its fills, at its first fill), keyed by order id: an order recorded live is never
 recorded again by the backstop, whichever process gets there first. Raw quotes, not bps, so the reference rule can
 change without re-capturing. leg / type are free strings: entry/market, entry/limit, exit/market (a desk close),
@@ -55,8 +56,8 @@ FRESH_MS = 1_500                 # a fill younger than this is benchmarked again
 AGG_WINDOWS_MS = (2_000, 60_000)  # the last print before a fill: a 2 s window, then a minute for a thin coin
 AGG_PAGES = 3                    # 1000-row pages read on within one window
 HORIZON_MS = 47 * 3_600_000      # aggTrades answers only the past 48 h
-_DOC = "CASE WHEN json_valid(fill_refs) THEN fill_refs ELSE '{\"v\":1,\"fills\":[],\"missed\":{}}' END"
-_NEW = f"NOT EXISTS (SELECT 1 FROM json_each({_DOC}, '$.fills') WHERE json_extract(value, '$.order') = ?)"
+DOC = "CASE WHEN json_valid(fill_refs) THEN fill_refs ELSE '{\"v\":1,\"fills\":[],\"missed\":{}}' END"
+_NEW = f"NOT EXISTS (SELECT 1 FROM json_each({DOC}, '$.fills') WHERE json_extract(value, '$.order') = ?)"
 _PENDING: set[asyncio.Task] = set()
 
 
@@ -264,19 +265,19 @@ async def _vol(ex, j, tid: int, symbol: str) -> bool:
     except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - the report falls back to entry_features.quote_volume
         return False
     if v:
-        j.db.execute(f"UPDATE trades SET fill_refs = json_insert({_DOC}, '$.vol24_usd', ?) WHERE id=?", (v, tid))
+        j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.vol24_usd', ?) WHERE id=?", (v, tid))
         j.db.commit()
     return True
 
 
 def _add(j, tid: int, fill: dict[str, Any]) -> None:
-    j.db.execute(f"UPDATE trades SET fill_refs = json_insert({_DOC}, '$.fills[#]', json(?)) WHERE id=? AND {_NEW}",
+    j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.fills[#]', json(?)) WHERE id=? AND {_NEW}",
                  (json.dumps(fill), tid, fill["order"]))
     j.db.commit()
 
 
 def _miss(j, tid: int, order: str, why: str) -> None:
     log.info("trade #%s: no mainnet reference for order %s (%s)", tid, order, why)
-    j.db.execute(f"UPDATE trades SET fill_refs = json_set({_DOC}, '$.missed.' || json_quote(?), ?) WHERE id=? AND "
+    j.db.execute(f"UPDATE trades SET fill_refs = json_set({DOC}, '$.missed.' || json_quote(?), ?) WHERE id=? AND "
                  f"{_NEW}", (order, why, tid, order))
     j.db.commit()

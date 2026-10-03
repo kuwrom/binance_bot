@@ -23,10 +23,10 @@ Each process has its own ccxt client (`exchange.py:104-150`) and its own weight-
 ### 1.2 Raw exchange writes: 20 sites in 10 files
 | group | sites |
 |---|---|
-| open risk (3) | `trading.py:346` market SELL (`_market_sell`: open, add) · `entries_place.py:229` GTD limit SELL · `entries_amend.py:59` `edit_order` |
+| open risk (3) | `trading_orders.py:110` market SELL (`_market_sell`: open, add) · `entries_place.py:229` GTD limit SELL · `entries_amend.py:59` `edit_order` |
 | stops (3 creates) | `trading.py:262` closePosition STOP_MARKET (`_place_stop`) · `stops.py:96` reduce-only bridge · `entries_place.py:270` reduce-only pre-arm |
 | stop cancels (2) | `stops.py:80` (`_cancel`: old stop, bridges, strip) · `trading_manage.py:133` (`_strip_stops` once flat) |
-| closes (1) | `trading.py:304` reduce-only market BUY (`_market_close`). Used by close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry and flatten |
+| closes (1) | `trading_orders.py:39` reduce-only market BUY (`_market_close`). Used by close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry and flatten |
 | targets (2) | `targets_sync.py:161` reduce-only GTC BUY limit · `targets_sync.py:134` cancel |
 | entry and pre-arm cancels (6) | `entries_cancel.py:38` limit, `:52` pre-arm · `entries.py:199` forgotten entry's pre-arm, `:281` pre-arm once the stop rests · `entries_fills.py:280` round trip · `entry_intents.py:184` dead entry's pre-arm |
 | account config (3) | `trading.py:206` `set_position_mode`, `:209` `set_margin_mode`, `:218` `set_leverage` (all in `_prepare`). The lock audit covers them since #74 (`set_position_mode` under the account lock) |

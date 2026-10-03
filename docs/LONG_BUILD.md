@@ -80,8 +80,8 @@ No table has a side column: `trades` (journal.py:52-61) and `entries` (entries.p
 ### Exchange / trading
 - **trading.py**
   - :262 `_place_stop` sends `STOP_MARKET` with side `buy` and closePosition.
-  - :304 `_market_close` is a reduce-only `buy`.
-  - :346 `_market_sell` opens and adds.
+  - trading_orders.py:39 `_market_close` is a reduce-only `buy`.
+  - trading_orders.py:110 `_market_sell` opens and adds.
   - :160-166 `stop_orders` uses the buy-only `is_protective_stop`.
   - :184 picks the tightest stop with `min`.
   - :189 / :192 PnL and stop-distance signs assume a short.
