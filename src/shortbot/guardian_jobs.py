@@ -251,6 +251,16 @@ class MarketJobs:
         deep scores of the selected coins under the tier-2 cap, research candidates, alerts."""
         await self.tiered.step()
 
+    async def cadence_shadow(self) -> None:
+        """Forward check of a per-rule tier-1 cadence (cadence_shadow.py, docs/SCANNING.md "Cadence"): logs the minutes
+        two rules hold on live 1m bars. No deep scores, no alerts, no orders."""
+        from . import cadence_shadow
+        from .market import streams
+        store = streams.path_for(self.app.settings.db_path)
+        if store is not None and store.exists():
+            r = await asyncio.to_thread(cadence_shadow.run, store, int(time.time() * 1000))
+            log.debug("cadence shadow: %s", r)
+
     async def laggard_study(self) -> None:
         """Shadow study (docs/LADDER.md A): log sector-leader breakdowns with their laggards and a random control."""
         from .laggard import detect

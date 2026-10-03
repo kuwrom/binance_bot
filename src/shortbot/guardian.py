@@ -64,7 +64,8 @@ MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600,
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600),
             "long_shadow": (900, 900)}
-SCAN = {"scan": (15, 300)}   # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
+SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
+        "cadence_shadow": (60, 50)}   # #40: logs two rules every minute on live bars; no deep scores, no alerts
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
 TICK_S = 1.0
 
@@ -111,7 +112,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
                "ladder": self.ladder_shadow, "laggard": self.laggard_study, "long_shadow": self.long_shadow,
-               "scan": self.tiered_scan,
+               "scan": self.tiered_scan, "cadence_shadow": self.cadence_shadow,
                "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops}
 
         def lane(name: str, table: dict, **kw) -> Lane:
