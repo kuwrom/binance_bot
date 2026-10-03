@@ -45,6 +45,8 @@ def _signal_group(pgid: int, sig: signal.Signals) -> None:
         os.killpg(pgid, sig)
     except ProcessLookupError:   # the group is gone
         pass
+    except PermissionError:      # macOS answers EPERM for a group whose members exited but are not yet reaped
+        pass                     # stop() still waits on the leader; a live member we can't signal shows up there
 
 
 async def stop(proc: asyncio.subprocess.Process | None, grace_s: float = STOP_GRACE_S) -> bool:
@@ -60,7 +62,10 @@ async def stop(proc: asyncio.subprocess.Process | None, grace_s: float = STOP_GR
     except TimeoutError:
         pass
     _signal_group(proc.pid, signal.SIGKILL)
-    await proc.wait()
+    try:
+        await asyncio.wait_for(proc.wait(), grace_s)
+    except TimeoutError:
+        raise RuntimeError(f"pid {proc.pid} still running after SIGKILL") from None   # stop_refresh tells the human
     return True
 
 

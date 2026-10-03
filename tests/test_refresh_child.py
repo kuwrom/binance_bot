@@ -31,6 +31,8 @@ def alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:   # macOS: an exited, unreaped child in another session answers EPERM; it no longer runs
+        return False
     return True
 
 
@@ -70,6 +72,20 @@ async def test_a_finished_refresh_is_left_alone(monkeypatch, tmp_path):
     sent = []
     monkeypatch.setattr(refresh.os, "killpg", lambda *a: sent.append(a))
     assert await refresh.stop(proc) is False and await refresh.stop(None) is False and sent == []
+
+
+async def test_a_refresh_that_exits_while_being_stopped_is_not_reported_running(monkeypatch):
+    """macOS answers killpg on a group whose members have all exited but are not yet reaped with EPERM, not ESRCH:
+    a refresh that finishes as the guardian stops must count as gone, not as 'may still be running'."""
+    monkeypatch.setattr(refresh, "CMD", (sys.executable, "-c", "import time; time.sleep(60)"))
+    proc = await refresh.spawn()
+
+    def killpg(pgid, sig):
+        os.kill(proc.pid, signal.SIGKILL)       # it exits on its own just as we signal its group ...
+        raise PermissionError(1, "Operation not permitted")   # ... and the kernel reports EPERM for the zombie group
+    monkeypatch.setattr(refresh.os, "killpg", killpg)
+    assert await refresh.stop(proc, grace_s=2) is True    # no exception: it was running, it is gone now
+    assert proc.returncode is not None
 
 
 async def test_sigterm_stops_the_guardian_through_its_shutdown(monkeypatch):
