@@ -61,9 +61,16 @@ def move_z(bars: list[list[float]]) -> dict[str, float | None]:
     out: dict[str, float | None] = {}
     for name, k in (("z1h", 4), ("z4h", 16)):
         base = rets[:-k][-96:]
-        sd = statistics.pstdev(base) if len(base) >= MIN_VOL_BARS else 0.0
+        sd = _pstdev(base) if len(base) >= MIN_VOL_BARS else 0.0
         out[name] = round(sum(rets[-k:]) / (sd * math.sqrt(k)), 2) if sd > 0 else None
     return out
+
+
+def _pstdev(xs: list[float]) -> float:
+    """Population stdev in floats (two-pass, fsum): statistics.pstdev's value to float precision, ~10x faster (its
+    exact fraction arithmetic held the guardian's loop ~20 ms per close, #78)."""
+    m = math.fsum(xs) / len(xs)
+    return math.sqrt(math.fsum((x - m) ** 2 for x in xs) / len(xs))
 
 
 def volume_z(bars: list[list[float]]) -> float | None:

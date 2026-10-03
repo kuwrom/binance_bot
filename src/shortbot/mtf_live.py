@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +67,10 @@ def run(store: Path | str, now_ms: int, path: Path | str | None = None) -> dict[
         if r and int(r[0]) >= close:
             return {"logged": 0}
         coins = R.fresh_symbols("kline_15m", 90, store, now_ms)
-        rows = [(close, s, json.dumps(view(store, s, now_ms), separators=(",", ":"))) for s in coins]
+        rows = []
+        for s in coins:
+            rows.append((close, s, json.dumps(view(store, s, now_ms), separators=(",", ":"))))
+            time.sleep(0)   # in a worker thread: hand the GIL to the guardian's loop between coins (#78)
         with db:
             db.executemany("INSERT OR REPLACE INTO views VALUES (?,?,?)", rows)
             db.execute("INSERT OR REPLACE INTO meta VALUES ('last_close', ?)", (str(close),))
@@ -77,7 +81,6 @@ def run(store: Path | str, now_ms: int, path: Path | str | None = None) -> dict[
 
 
 def main(argv: list[str] | None = None) -> None:
-    import time
     from .exchange import to_raw
     names = sys.argv[1:] if argv is None else argv
     store = R.path_for(str(db_path().parent.parent / "shortbot.db"))
