@@ -29,7 +29,7 @@ Each process has its own ccxt client (`exchange.py:104-150`) and its own weight-
 | closes (1) | `trading.py:304` reduce-only market BUY (`_market_close`). Used by close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry and flatten |
 | targets (2) | `targets_sync.py:161` reduce-only GTC BUY limit · `targets_sync.py:134` cancel |
 | entry and pre-arm cancels (6) | `entries_cancel.py:38` limit, `:52` pre-arm · `entries.py:199` forgotten entry's pre-arm, `:281` pre-arm once the stop rests · `entries_fills.py:280` round trip · `entry_intents.py:184` dead entry's pre-arm |
-| account config (3) | `trading.py:206` `set_position_mode`, `:209` `set_margin_mode`, `:218` `set_leverage` (all in `_prepare`). The lock audit's `_WRITES` (tests/conftest.py:42) misses these three |
+| account config (3) | `trading.py:206` `set_position_mode`, `:209` `set_margin_mode`, `:218` `set_leverage` (all in `_prepare`). The lock audit covers them since #74 (`set_position_mode` under the account lock) |
 
 ### 1.3 The flows that reach them
 About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
@@ -90,7 +90,7 @@ Each mechanism covers one part:
   - an asyncio lock sits in front of it;
   - it is reentrant per task, and a task never holds two symbols;
   - after the wait, the caller gets `SymbolBusy` and nothing is sent. Sessions wait 60 s, the guardian 5 s;
-  - lock order is `Trader.lock` → symbol lock → SQLite autocommit writes.
+  - lock order is the account lock → symbol lock → SQLite autocommit writes. Risk-adding flows (open, limit entry, add, lowered amend, widen) hold the account lock (`<lock dir>/_account.lock`, same mechanism, `AccountBusy`) from their cap checks through the send (#74); risk-reducing paths and the guardian never take it.
 - **Client ids** (`clientid.py`) make one send's outcome knowable:
   - every send carries `sb-<kind><ref>-<nonce>`, journalled before it goes out;
   - an ambiguous answer is resolved by looking the id up, never by resending. A Binance id is unique among open orders only: it is a lookup key, not a dedup key.
@@ -105,7 +105,7 @@ Each mechanism covers one part:
    - the guardian gets `SymbolBusy` on that symbol every pass, so no pass verifies, and HALTED follows after 10 min;
    - the session wakes up mid-sequence, acting on hours-old decisions.
 3. **Market sends of unknown outcome outside entries have no resolver.** These are the `close_unknown` and `add` UNKNOWN decisions; a human re-reads the position.
-4. **Portfolio caps are checked per process.** `Trader.lock` serialises opens only within one process, and the flock is per symbol. Two sessions opening two different symbols can each pass the max-positions, total-notional and daily-room checks.
+4. ~~**Portfolio caps are checked per process.**~~ Fixed by #74: the account lock serialises every risk-adding flow across the processes on this host, and the caps count resting entries and entries of unknown outcome (`exposure.py`). Same-host only, like the symbol flock.
 5. **Account-level limits are invisible to any one process.** Order rate limits are counted per account (Binance General Info), weight per IP, and each process sees only its own responses.
 6. **Every writer runs its own copy of the order path.** #68 stops a stale MCP server from writing, but the guardian between a merge and its restart, or a stale lazily-imported module, still writes.
 

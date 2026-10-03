@@ -11,6 +11,10 @@ One trade per symbol (#12): no market short beside an order resting on the symbo
 the desk didn't place): its fill would join this position as a second trade and every USDT would count twice. It is
 refused, not cancelled first: a cancel can find the order already filled, and its group may hold other symbols' bets.
 
+Portfolio caps (#74): the whole flow holds the account lock (symlock.py), so a session adding risk on another symbol
+waits, then sees this one. The caps also count other symbols' resting entries and entries of unknown outcome
+(exposure.py); the intended notional is journalled before the send, so a lost answer still counts at its full size.
+
 Two overrides, each a non-empty research reason (#11): `veto_override` trades through the signal vetoes, the cold-desk
 gate and a hostile/unknown regime; `budget_override` lets an explicit notional risk more than the dynamic budget
 (heat, cluster caps, daily-cap room, governor halving). Neither lifts a blocked budget or a hard cap. Each one used is
@@ -25,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-from . import clientid, errors, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
+from . import clientid, errors, exposure, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
 from .audit import refusals
 from .entry_intents import ON_BOOK
 from .exchange import to_symbol
@@ -34,6 +38,7 @@ from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier
                    max_notional_for_risk)
 from .setups import resolve
 from .steps import floor_amount, too_small
+from .symlock import busy_refusal
 
 
 def _reason(x: str | None) -> str | None:
@@ -63,9 +68,10 @@ def _beside(symbol: str, rows: list[dict]) -> dict:
 
 
 class OpenFlow:
-    """Uses Trader's exchange, journal, lock (then symbol_lock), prechecks, budget and order primitives."""
+    """Uses Trader's exchange, journal, account_lock (then symbol_lock), prechecks, budget and order primitives."""
 
     @refusals("open_short")
+    @busy_refusal
     async def open_short(self, symbol: str, stop_price: float, setup: str, thesis: str,
                          plan: dict | None = None, notional: float | None = None, leverage: int = 2,
                          veto_override: str | None = None, conviction: str = "B",
@@ -76,7 +82,7 @@ class OpenFlow:
         veto_why, budget_why = _reason(veto_override), _reason(budget_override)
         symbol = to_symbol(symbol)
         st = resolve(setup)
-        async with self.lock:
+        async with self.account_lock(f"open short {symbol} ({setup})"):   # the caps through the send, across processes
             if blocked := await killswitch.gate(self, "open_short"):
                 return blocked
             await self.ex.trade_markets()
@@ -124,8 +130,9 @@ class OpenFlow:
                                "multipliers": budget.get("multipliers"), "reasons": budget.get("reasons")}
             req = ShortRequest(symbol, notional, price, stop_price, leverage, _f(prod_ticker.get("quoteVolume")),
                                maint=await self.ex.maint_margin(symbol, notional))   # the symbol's leverage bracket
-            try:
-                check_open_short(req, acct, lim)
+            try:   # what rests elsewhere or may still fill counts (#74); this symbol's own: refused under its lock
+                check_open_short(req, exposure.counted(self.j, acct, lim.max_position_notional, symbol=symbol,
+                                                  own_resting=False), lim)
             except RiskViolation as e:
                 self.j.log_decision("rejected", "; ".join(e.reasons), symbol, snapshot=req.__dict__)
                 return {"ok": False, "rejected_by_risk": e.reasons, "request": req.__dict__}
@@ -160,7 +167,8 @@ class OpenFlow:
                                           self.ex.experiment)
                 cid = clientid.new("open", tid)   # journalled BEFORE the send
                 self.j.update_trade(tid, conviction=budget.get("conviction"), regime_cell=budget.get("cell"),
-                                    entry_features={**features, "client_id": cid})
+                                    entry_features={**features, "client_id": cid,   # its size counts until it settles
+                                                    "intended_notional": round(amount * price, 2)})
                 res = await self._enter(tid, cid, symbol, amount, stop_price, sized, leverage, lim, acct.equity)
         await self._override_alerts(symbol, tid, features, res)
         return res

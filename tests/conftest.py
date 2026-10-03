@@ -41,7 +41,15 @@ def current_code(request, monkeypatch):
 
 _SRC = str(Path(__file__).resolve().parents[1] / "src" / "shortbot")
 _TESTS = str(Path(__file__).resolve().parent)
-_WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_orders": 0}   # name: symbol arg
+# name: its symbol argument; None = an account-wide write, held under the account lock (#74)
+_WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_orders": 0,
+           "set_margin_mode": 1, "set_leverage": 1, "set_position_mode": None}
+
+
+def _adds_risk(name: str, a: tuple, k: dict) -> bool:
+    """An order that opens or adds to a short: a SELL that isn't reduce-only (market entry, limit entry, add)."""
+    params = (a[5] if len(a) > 5 else k.get("params")) or {}
+    return name == "create_order" and a[2] == "sell" and not params.get("reduceOnly")
 
 
 def _origin(frame) -> str | None:
@@ -51,7 +59,7 @@ def _origin(frame) -> str | None:
     while frame:
         f = frame.f_code.co_filename
         if f.startswith(_SRC):
-            if not f.endswith("/audit.py"):   # audit.refusals wraps the order paths: it is not the caller
+            if not f.endswith(("/audit.py", "/symlock.py")):   # refusals / busy_refusal wrap the order paths
                 outer = frame
         elif not f.startswith(_TESTS):
             break
@@ -63,7 +71,9 @@ def _origin(frame) -> str | None:
 
 @pytest.fixture(autouse=True)
 def order_lock_audit(monkeypatch):
-    """Task #21: every order-changing exchange call shortbot makes runs inside that symbol's lock, in every test."""
+    """Task #21: every order-changing exchange call shortbot makes runs inside that symbol's lock, in every test. #74:
+    every risk-adding send and account-wide write also runs inside the account lock (so the guardian, which never
+    takes it, can never add risk). Probes are exempt: demo-only minimum orders that bypass the caps by design (#55)."""
     from shortbot import symlock
     from tests.fakes import FakeCcxt
     tables, bad = [], []
@@ -79,8 +89,12 @@ def order_lock_audit(monkeypatch):
 
         async def audited(self, *a, **k):
             origin = _origin(sys._getframe(1))
-            if origin and not any(t.holds(a[at]) for t in tables):
-                bad.append(f"{name}({a[at]}) via {origin} outside its symbol lock")
+            what = f"{name}({a[at] if at is not None else ''}) via {origin}"
+            if origin and at is not None and not any(t.holds(a[at]) for t in tables):
+                bad.append(f"{what} outside its symbol lock")
+            if (origin and (at is None or _adds_risk(name, a, k)) and not origin.startswith("probe")
+                    and not any(t.holds_account() for t in tables)):
+                bad.append(f"{what} outside the account lock")
             return await real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name, at in _WRITES.items():

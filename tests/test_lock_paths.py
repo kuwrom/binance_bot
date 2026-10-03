@@ -194,8 +194,9 @@ async def test_ladder_cut_is_refused_when_the_size_changed_since_its_snapshot(tm
 
 
 async def test_concurrent_order_paths_in_one_process_never_deadlock(tmp_path):
-    """Lock order: Trader.lock (open_short only) -> one symbol lock. Every other path takes only its symbol lock, so
-    an open, a fill, a guardian pass and session actions on the same symbols interleave without a deadlock."""
+    """Lock order: the account lock (risk-adding flows only, #74) -> one symbol lock. Every other path takes only its
+    symbol lock, so an open, a fill, a guardian pass and session actions on the same symbols interleave without a
+    deadlock."""
     t, _, fake = two(tmp_path)
     fake.add_symbol("ETH/USDT:USDT", 1.0)
     fake.add_symbol("SOL/USDT:USDT", 1.0)

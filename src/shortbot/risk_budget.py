@@ -69,6 +69,22 @@ def clip(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+def room_left_today(inp: BudgetInputs) -> float:
+    """Today's daily-loss room once every open stop hits (open risk would hit the same daily cap): what a new trade's
+    budget is capped at, and what a voluntary widen must fit (#74)."""
+    room = ((inp.gov or {}).get("daily") or {}).get("room_usd", float("inf"))   # no governor read: no daily cap
+    return room - sum(inp.open_risks.values())
+
+
+async def room_today(trader, regime: str) -> dict[str, Any]:
+    """room_left_today from live inputs, with its parts and the governor's halt."""
+    inp = await gather_inputs(trader, regime)
+    open_risk = sum(inp.open_risks.values())
+    left = room_left_today(inp)
+    return {"room_usd": round(left, 2), "daily_room_usd": round(left + open_risk, 2),
+            "open_risk_usd": round(open_risk, 2), "halt": bool((inp.gov or {}).get("halt"))}
+
+
 def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, conviction: str = "B") -> dict[str, Any]:
     """Risk (USDT and %) allowed for a new short in `symbol` right now, with the reasons."""
     eq = max(inp.equity, 0.0)
@@ -113,7 +129,7 @@ def compute_budget(limits: RiskLimits, inp: BudgetInputs, symbol: str, convictio
     heat = sum(every.values())
     cluster_heat = sum(r for s, r in every.items() if cluster_of(s) == cl and s != symbol)
     room = min(eq * limits.max_portfolio_heat_pct / 100 - heat, eq * limits.max_cluster_heat_pct / 100 - cluster_heat)
-    day_room = gov["daily"]["room_usd"] - sum(inp.open_risks.values())   # open risk would hit the same daily cap
+    day_room = room_left_today(inp)
     capped = max(0.0, min(risk_usd, room, day_room))
     guard = book_guard(sum(1 for s in inp.open_risks if cluster_of(s) == "alts"), inp.pause) if cl == "alts" else None
     if guard:

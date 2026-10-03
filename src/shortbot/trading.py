@@ -8,8 +8,8 @@ exchange-side stop-market (closePosition, mark price). Safety properties:
 - stop changes are make before break (stops.py): a bridge stop covers the swap; move_stop only tightens
 - scanner vetoes + market regime are re-checked server-side; overriding them needs a logged reason
 - every order-changing sequence on a symbol holds that symbol's lock (symlock.py): one at a time across the
-  guardian, the MCP servers and CLI calls on this host. Opening also holds `lock`, this process's one asyncio lock
-  (its portfolio checks), and always takes it first
+  guardian, the MCP servers and CLI calls on this host. Every risk-adding flow first holds the account lock, from its
+  portfolio checks through the send, so two sessions can't both spend the last slot (#74)
 
 This module: account, positions and the order primitives. The flows are mixed in from trading_open.py (open_short)
 and trading_manage.py (close, move_stop, ensure_stop).
@@ -74,9 +74,12 @@ class Trader(OpenFlow, ManageFlow):
         self._alert = alert
         self.prechecks = prechecks
         self.budget = budget  # dynamic risk budget (risk_budget.py)
-        self.lock = asyncio.Lock()   # open_short only (portfolio checks); per-symbol sequences use symbol_lock
         self.symlocks = SymbolLocks(lock_dir_for(journal.db))
         self._one_way_ok = False
+
+    def account_lock(self, action: str = "", wait_s: float | None = None):
+        """`async with tr.account_lock("open short"):` from a risk-adding flow's cap checks through its send (#74)."""
+        return self.symlocks.account(action, wait_s)
 
     def symbol_lock(self, symbol: str, action: str = "", wait_s: float | None = None):
         """`async with tr.symbol_lock(sym, "close"):` around an order-changing sequence (symlock.py). Reentrant in

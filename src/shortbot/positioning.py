@@ -4,24 +4,31 @@
 re-plans the trade as if entering now and returns ranked, reasoned actions. The analyst decides; the
 actions below execute the non-trivial ones safely:
 
-- widen_stop: allowed ONCE per trade, only with a size cut so the $ loss at the new stop ≤ the initial 1R
+- widen_stop: allowed ONCE per trade, only with a size cut so the $ loss at the new stop ≤ the initial 1R; the risk it
+  adds at the stop (from the mark) must fit today's daily-loss room, as a new trade's budget must (#74)
 - add_to_winner: only in profit; the stop is tightened FIRST so total worst case after the add ≤ 1R; inside open_short's
   caps and the pyramiding rules (risk.check_add: ≥ min_add_r, ≤ max_add_frac of the initial size, ≤ max_adds)
 (Tightening and partial exits already exist: Trader.move_stop / Trader.close(fraction).)
+Both add risk: each holds the account lock (symlock.py, #74), then the symbol's, from its checks through the send. The
+guardian never widens or adds.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from . import clientid, errors, killswitch, stops, targets_sync
+from . import clientid, errors, exposure, killswitch, stops, targets_sync
 from . import indicators as ind
 from .audit import refusals
 from .exchange import to_symbol
 from .risk import AddRequest, RiskViolation, check_add
 from .steps import floor_amount
+from .symlock import busy_refusal
+
+log = logging.getLogger("shortbot.positioning")
 
 
 def _r_initial(trade: dict) -> float:
@@ -136,12 +143,14 @@ class PositionOps:
         return res
 
     @refusals("widen_stop")
+    @busy_refusal
     async def widen_stop(self, symbol: str, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr
         symbol = to_symbol(symbol)
         if blocked := await killswitch.gate(tr, "widen_stop"):   # can raise the loss at stop back up to 1R
             return blocked
-        async with tr.symbol_lock(symbol, f"widen stop to {new_stop:g}: {reason}"):
+        async with (tr.account_lock(f"widen {symbol} stop to {new_stop:g}: {reason}"),   # it adds risk (#74)
+                    tr.symbol_lock(symbol, f"widen stop to {new_stop:g}: {reason}")):
             if blocked := killswitch.state_refusal(tr.j, "widen_stop"):   # tripped while we waited for the lock
                 return blocked
             await tr.ex.trade_markets()
@@ -167,7 +176,39 @@ class PositionOps:
                 cut = float(tr.t.amount_to_precision(symbol, cut + float(tr.t.market(symbol)["precision"]["amount"] or 0)))
             if cut >= qty:   # nothing would be left to protect at the wider stop
                 return {"ok": False, "error": f"a widen to {new_stop} within 1R ({r1:.2f}) leaves no size: close instead"}
+            if refused := await self._widen_room(pos, cur, new_stop, qty, max(cut, 0.0)):
+                tr.j.log_decision("widen_rejected", reason, symbol, snapshot={"from": cur, "to": new_stop, **refused})
+                return refused
             return await self._widen(trade, symbol, old, cur, new_stop, qty, max(cut, 0.0), r1, reason)
+
+    async def _widen_room(self, pos: dict, cur: float, new_stop: float, qty: float, cut: float) -> dict | None:
+        """A session's voluntary widen adds risk at the stop: loss from the mark at the new stop (after the cut) minus
+        at the current one. It must fit today's daily-loss room after every open stop (risk_budget.room_left_today, the
+        room a new trade is capped at), and never a governor halt. None = fits; else the refusal, with the numbers."""
+        mark = float(pos.get("markPrice") or 0)
+        added = max(0.0, (new_stop - mark) * (qty - cut)) - max(0.0, (cur - mark) * qty)
+        if added <= 1e-9:
+            return None
+        from .risk_budget import room_today
+        room = await room_today(self.tr, await self._regime())
+        if room["room_usd"] >= added - 1e-9 and not room["halt"]:
+            return None
+        why = (f"widening to {new_stop:g} adds {added:.2f} USDT of risk at the stop (from the mark {mark:g}), more "
+               f"than today's daily-loss room left: {room['room_usd']:.2f} USDT = daily room "
+               f"{room['daily_room_usd']:.2f} - {room['open_risk_usd']:.2f} already at risk at the open stops"
+               + (", and the governor halts new risk" if room["halt"] else ""))
+        return {"ok": False, "error": why, "rejected_by_risk": [why], "added_risk_usdt": round(added, 2), "room": room,
+                "hint": "widen less, close part first, or change the daily cap openly (set_risk_params)"}
+
+    async def _regime(self) -> str:
+        """The market regime for the governor's daily cap, as a new trade's budget reads it; "unknown" (the smallest
+        cap) when it can't be read."""
+        from .scanner import market_regime
+        try:
+            return (await market_regime(self.tr.ex))["verdict_for_shorts"]
+        except Exception as e:  # noqa: BLE001 - unread: "unknown" sizes the daily cap down, never up
+            log.warning("market regime unread for the widen room (%s: %s): 'unknown'", type(e).__name__, e)
+            return "unknown"
 
     async def _widen(self, trade: dict, symbol: str, old: list[dict], cur: float, new_stop: float, qty: float,
                      cut: float, r1: float, reason: str) -> dict[str, Any]:
@@ -215,12 +256,14 @@ class PositionOps:
                 "max_loss_usdt": round(r1, 2), **({"warnings": res["warnings"]} if res.get("warnings") else {})}
 
     @refusals("add_to_winner")
+    @busy_refusal
     async def add_to_winner(self, symbol: str, notional: float, new_stop: float, reason: str) -> dict[str, Any]:
         tr = self.tr
         symbol = to_symbol(symbol)
         if blocked := await killswitch.gate(tr, "add_to_winner"):   # before the pre-add stop tighten
             return blocked
-        async with tr.symbol_lock(symbol, f"add {notional:g} USDT to a winner: {reason}"):   # one view: decide, act
+        async with (tr.account_lock(f"add {notional:g} USDT to {symbol}: {reason}"),   # the caps through the send (#74)
+                    tr.symbol_lock(symbol, f"add {notional:g} USDT to a winner: {reason}")):   # one view: decide, act
             return await self._add(symbol, notional, new_stop, reason)
 
     async def _add(self, symbol: str, notional: float, new_stop: float, reason: str) -> dict[str, Any]:
@@ -305,7 +348,8 @@ class PositionOps:
         req = AddRequest(symbol, add_qty, mark, stop_after, qty, float(pos["entryPrice"]), lev, initial, r1,
                          adds_done(tr.j, trade), await tr.ex.maint_margin(symbol, (qty + add_qty) * mark))
         try:
-            check_add(req, await tr.account_state(), lim)
+            acct = exposure.counted(tr.j, await tr.account_state(), lim.max_position_notional, symbol=symbol)
+            check_add(req, acct, lim)   # resting entries and unknown entries count (#74)
         except RiskViolation as e:
             out += e.reasons
         min_cost = tr.t.market(symbol)["limits"]["cost"]["min"] or 0

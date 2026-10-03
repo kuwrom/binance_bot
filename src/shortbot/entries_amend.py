@@ -5,23 +5,26 @@ sized it for. So lowering re-runs the placement's risk check (#12): the kill swi
 blocked; risk at the stop within it) and the per-order hard caps (stop-distance range, liquidation buffer, risk per
 trade). A split entry's leg is never lowered: its legs share one pinned 1R (tranches.finalize); cancel the group and
 re-propose instead. Raising the limit toward the stop only cuts risk. Every amend and every refusal is a logged
-decision.
+decision. A lowering holds the account lock (symlock.py, #74) from its risk check through the edit.
 """
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 from . import killswitch
 from .audit import refusals
 from .entry_gates import stamps
 from .risk import AccountState, RiskViolation, ShortRequest, check_open_short
+from .symlock import busy_refusal
 
 
 class EntryAmend:
     """Uses EntryDesk's trader, journal, regime and entry-row storage."""
 
     @refusals("amend")
+    @busy_refusal
     async def amend(self, entry_id: int, new_limit: float, reason: str) -> dict[str, Any]:
         rows = self._rows("id=? AND status='pending'", (entry_id,))
         if not rows:
@@ -42,23 +45,25 @@ class EntryAmend:
         snap = {"entry_id": entry_id, "old_limit": e["limit_price"], "new_limit": px, "amount": e["amount"],
                 "old_risk_usdt": round(e["amount"] * (e["stop_price"] - e["limit_price"]), 4),
                 "risk_usdt": round(e["amount"] * (e["stop_price"] - px), 4)}
-        if lower:
-            refused, extra = await self._amend_risk(e, px, snap["risk_usdt"])
-            if refused:
-                self.j.log_decision("rejected", f"amend entry #{entry_id} to {px}: " + "; ".join(
-                    refused.get("rejected_by_budget") or refused.get("rejected_by_risk")), sym, snapshot=snap)
-                return refused
-            snap.update(extra)
-        async with self.tr.symbol_lock(sym, f"amend entry #{entry_id}: {reason}"):
-            if not self._rows("id=? AND status='pending' AND COALESCE(replaced, 0)=0 AND limit_price=?",
-                              (entry_id, e["limit_price"])):
-                return {"ok": False, "error": f"entry #{entry_id} changed since you looked (filled, cancelled or "
-                                              "amended meanwhile): re-read pending_entries"}
-            if lower and (blocked := killswitch.state_refusal(self.j, "amend (lower limit)")):
-                return blocked
-            await t.edit_order(e["order_id"], sym, "limit", "sell", e["amount"], px)
-            self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}",   # lowered: re-sized now
-                         **(stamps(snap.get("budget_multipliers")) if lower else {}))
+        # lowering adds risk: its check through the edit holds the account lock (#74); raising only cuts risk
+        async with self.tr.account_lock(f"lower entry #{entry_id} to {px:g}") if lower else nullcontext():
+            if lower:
+                refused, extra = await self._amend_risk(e, px, snap["risk_usdt"])
+                if refused:
+                    self.j.log_decision("rejected", f"amend entry #{entry_id} to {px}: " + "; ".join(
+                        refused.get("rejected_by_budget") or refused.get("rejected_by_risk")), sym, snapshot=snap)
+                    return refused
+                snap.update(extra)
+            async with self.tr.symbol_lock(sym, f"amend entry #{entry_id}: {reason}"):
+                if not self._rows("id=? AND status='pending' AND COALESCE(replaced, 0)=0 AND limit_price=?",
+                                  (entry_id, e["limit_price"])):
+                    return {"ok": False, "error": f"entry #{entry_id} changed since you looked (filled, cancelled or "
+                                                  "amended meanwhile): re-read pending_entries"}
+                if lower and (blocked := killswitch.state_refusal(self.j, "amend (lower limit)")):
+                    return blocked
+                await t.edit_order(e["order_id"], sym, "limit", "sell", e["amount"], px)
+                self._update(e["id"], limit_price=px, replaced=1, reason=f"amended: {reason}",   # lowered: re-sized
+                             **(stamps(snap.get("budget_multipliers")) if lower else {}))
         self.j.log_decision("amend_entry", reason, sym, snapshot=snap)
         return {"ok": True, "entry_id": entry_id, "new_limit": px, "risk_usdt": snap["risk_usdt"]}
 

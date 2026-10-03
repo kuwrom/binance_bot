@@ -4,6 +4,8 @@ budget, journal the entry row (status 'placing', with its client order id), then
 first and rolled back as one unit if any leg fails. A veto_override is recorded on the row (`overrides`, carried onto
 the trade a fill opens) and alerted (#11); a limit entry has no budget override: it is always sized from the budget.
 The TTL is capped at MAX_TTL_H: a resting order must not outlive the read it was placed on (#12).
+Each proposal holds the account lock (symlock.py, #74) from its checks through the send, and its caps count what
+rests in other groups or may still fill (exposure.py), like open_short's.
 """
 
 from __future__ import annotations
@@ -18,10 +20,10 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, errors, killswitch, warmup
+from . import clientid, errors, exposure, killswitch, warmup
 from .audit import refusals
 from .entry_gates import market_pause, stamps
-from .entry_intents import HINTS, ON_BOOK, SendUnknown
+from .entry_intents import HINTS, SendUnknown
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
 from .setups import resolve
@@ -64,24 +66,27 @@ class EntryPlacement:
         placed, rejected, unknown, warnings = [], [], [], []
         for p in proposals:
             try:
-                if p.get("tranches"):
-                    from . import tranches
-                    _, legs = tranches.expand(p)
-                    # far leg first: the near leg can fill the moment it is placed (MOVR 2026-10-01)
-                    legs = sorted(legs, key=lambda leg: -float(leg["limit_price"]))
-                    got: list[dict] = []
-                    try:
-                        for leg in legs:
-                            got.append(await self._place_one(gid, leg, regime, expires_ms, prearm_stop))
-                        pinned = tranches.finalize(self.j.db, got)
-                    except Exception as e:
-                        await self._rollback(got)   # a split entry is one unit (0G 2026-10-01)
-                        if isinstance(e, SendUnknown):   # that leg is abandoned: cancelled if it turns up
-                            raise ValueError(f"split entry rolled back: a leg's {e}") from e
-                        raise
-                    placed += [{**x, **pinned} for x in got]
-                else:
-                    placed.append(await self._place_one(gid, p, regime, expires_ms, prearm_stop))
+                # the caps through the send, across processes (#74); a split entry's legs and their rollback are
+                # one hold, so no other session's risk lands between two legs
+                async with tr.account_lock(f"place a limit entry on {p.get('symbol')} (group {gid})"):
+                    if p.get("tranches"):
+                        from . import tranches
+                        _, legs = tranches.expand(p)
+                        # far leg first: the near leg can fill the moment it is placed (MOVR 2026-10-01)
+                        legs = sorted(legs, key=lambda leg: -float(leg["limit_price"]))
+                        got: list[dict] = []
+                        try:
+                            for leg in legs:
+                                got.append(await self._place_one(gid, leg, regime, expires_ms, prearm_stop))
+                            pinned = tranches.finalize(self.j.db, got)
+                        except Exception as e:
+                            await self._rollback(got)   # a split entry is one unit (0G 2026-10-01)
+                            if isinstance(e, SendUnknown):   # that leg is abandoned: cancelled if it turns up
+                                raise ValueError(f"split entry rolled back: a leg's {e}") from e
+                            raise
+                        placed += [{**x, **pinned} for x in got]
+                    else:
+                        placed.append(await self._place_one(gid, p, regime, expires_ms, prearm_stop))
             except SendUnknown as e:   # may rest on the book: resolved by its client id, never by resending
                 unknown.append({"symbol": p.get("symbol"), "entry_id": e.entry_id, "error": str(e),
                                 "hint": HINTS["unknown"]})
@@ -179,24 +184,8 @@ class EntryPlacement:
         px = float(tr.t.price_to_precision(sym, limit))
         from .risk import ShortRequest, check_open_short
         acct = await tr.account_state()
-        # other groups' resting (or possibly resting: placing/unknown) orders count as exposure: one OCO order per
-        # group can fill, but a split entry's legs can ALL fill, so a group's exposure = its biggest single order or
-        # its biggest whole tranche. Each external order (not ours) can fill on its own: one group each.
-        by_group: dict[str, list[dict]] = {}
-        for r in self._rows(ON_BOOK):
-            g = f"external{r['id']}" if r["status"] == "external" else r["group_id"]
-            if g != gid:
-                by_group.setdefault(g, []).append(r)
-        worst: dict[str, tuple[str, float]] = {}
-        for g, rows in by_group.items():
-            units: dict[str, float] = {}
-            for r in rows:
-                key = r.get("tranche") or f"single{r['id']}"
-                units[key] = units.get(key, 0.0) + r["amount"] * r["limit_price"]
-            k = max(units, key=units.get)
-            worst[g] = (next(r["symbol"] for r in rows if (r.get("tranche") or f"single{r['id']}") == k), units[k])
-        acct = type(acct)(acct.equity, acct.open_symbols + tuple(s for s, _ in worst.values()),
-                          acct.total_open_notional + sum(n for _, n in worst.values()), acct.day_pnl)
+        # what rests in other groups or may still fill counts as exposure (exposure.py, shared with open_short: #74)
+        acct = exposure.counted(self.j, acct, lim.max_position_notional, group=gid, symbol=sym)
         prod = await tr.ex.public.fetch_ticker(sym)
         check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0), maint),
                          acct, lim)

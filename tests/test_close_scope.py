@@ -158,13 +158,15 @@ async def test_this_trades_leftover_prearm_and_resting_leg_go_when_it_closes_fla
     assert t.j.get_trade(tid)["status"] == "closed"
 
 
-async def test_a_stop_placed_for_a_new_fill_after_the_flat_read_is_not_cancelled():
+async def test_a_stop_placed_for_a_new_fill_after_the_flat_read_is_not_cancelled(order_lock_audit):
     d, t, fake = desk()
     await market_short(t)
     fake.price = 0.95
     fill_after_flat_read(fake, 50, 1.2)
     res = await t.close(SYM, "target", "lesson")
     assert res["ok"] and fake.position == 50 and list(fake.stops.values()) == [1.2]
+    assert order_lock_audit == [f"create_order({SYM}) via trading_manage.close outside the account lock"]
+    order_lock_audit.clear()   # that entry is the simulated other process's, sent from inside this call chain
 
 
 async def test_a_reread_that_fails_cancels_nothing_and_alerts():
