@@ -1,5 +1,6 @@
 import importlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -127,6 +128,7 @@ _TESTS = str(Path(__file__).resolve().parent)
 # name: its symbol argument; None = an account-wide write, held under the account lock (#74)
 _WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_orders": 0,
            "set_margin_mode": 1, "set_leverage": 1, "set_position_mode": None}
+_RAW_WRITE = re.compile(r"^(fapi|sapi|dapi)?[Pp]rivate(Post|Put|Delete)")   # implicit endpoints that write
 
 
 # Trader's send primitives (#36 step 0) and withdraw(): their callers hold the locks, so a test may drive them directly
@@ -134,6 +136,13 @@ PRIMITIVES = {"trading.prepare", "trading.place_close_stop", "trading_orders.clo
               "trading_orders.open_market", "trading_orders.cancel", "trading_orders.place_limit",
               "trading_orders.edit_limit", "trading_orders.place_reduce_stop", "trading_orders.place_reduce_limit",
               "entries_cancel.withdraw"}
+# #36 step 2b: a write reached from the guardian (any guardian*.py frame) or from one of these runs inside an intent
+INTENT_ONLY = {"entries.poll", "entry_intents.reconcile", "entry_intents.resolve", "entry_gates.sweep",
+               "entry_gates.guardian_sweep", "entry_gates.halt_sweep", "orphans.sweep", "killswitch.watch_guardian",
+               "entries_cancel.cancel_resting"}
+# ...except these, by design (GATEWAY.md §1.2): the user-data stream's listen key changes no order or position, the
+# stream must never wait for the journal, and step 9 moves the stream into the gateway (test_trader_public.NO_INTENT)
+NO_INTENT = {"fapiPrivatePostListenKey": "listen_key", "fapiPrivatePutListenKey": "keep_listen_key"}
 
 
 def _adds_risk(name: str, a: tuple, k: dict) -> bool:
@@ -160,11 +169,27 @@ def _origin(frame) -> str | None:
     return None if origin in PRIMITIVES else origin
 
 
+def intent_root(frame) -> str | None:
+    """The guardian-side function (INTENT_ONLY, or any in guardian*.py) on the call chain, if any: the whole chain,
+    through asyncio's frames (wait_for awaits the coroutine in the caller's task)."""
+    while frame:
+        f = frame.f_code.co_filename
+        if f.startswith(_SRC):
+            name = f"{Path(f).stem}.{frame.f_code.co_name}"
+            if name.startswith("guardian") or name in INTENT_ONLY:
+                return name
+        frame = frame.f_back
+    return None
+
+
 @pytest.fixture(autouse=True)
 def order_lock_audit(monkeypatch):
     """Task #21: every order-changing exchange call shortbot makes runs inside that symbol's lock, in every test. #74:
     every risk-adding send and account-wide write also runs inside the account lock (so the guardian, which never
-    takes it, can never add risk). Probes are exempt: demo-only minimum orders that bypass the caps by design (#55)."""
+    takes it, can never add risk). Probes are exempt: demo-only minimum orders that bypass the caps by design (#55).
+    #36 step 2b: every write the guardian makes (and the session watchdog's withdrawal) runs inside an intent
+    (gateway.py), except the listen key (NO_INTENT)."""
+    from shortbot import audit as audit_ctx
     from shortbot import symlock
     from tests.fakes import FakeCcxt
     tables, bad = [], []
@@ -186,12 +211,41 @@ def order_lock_audit(monkeypatch):
             if (origin and (at is None or _adds_risk(name, a, k)) and not origin.startswith("probe")
                     and not any(t.holds_account() for t in tables)):
                 bad.append(f"{what} outside the account lock")
+            if audit_ctx.intent_id() is None and (root := intent_root(sys._getframe(1))):
+                bad.append(f"{what} outside an intent (from {root})")
             return await real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name, at in _WRITES.items():
         audit(name, at)
+
+    def raw(name):   # POST/PUT/DELETE endpoints (no symbol lock: account-wide or probes): the intent rule only
+        real = getattr(FakeCcxt, name)
+
+        async def audited(self, *a, **k):
+            if name not in NO_INTENT and audit_ctx.intent_id() is None and (root := intent_root(sys._getframe(1))):
+                bad.append(f"{name} outside an intent (from {root})")
+            return await real(self, *a, **k)
+        monkeypatch.setattr(FakeCcxt, name, audited)
+    for name in [n for n in dir(FakeCcxt) if _RAW_WRITE.match(n)]:
+        raw(name)
     yield bad
     assert not bad, bad
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    """Every order write the fake gets, with the intent running when it was sent (audit.intent_id): tests/intent_jobs."""
+    from shortbot import audit as audit_ctx
+    from tests.fakes import FakeCcxt
+    out: list[tuple[str, str | None]] = []
+    for name in ("create_order", "cancel_order", "edit_order"):
+        real = getattr(FakeCcxt, name)
+
+        async def spy(self, *a, _real=real, _name=name, **k):
+            out.append((_name, audit_ctx.intent_id()))
+            return await _real(self, *a, **k)
+        monkeypatch.setattr(FakeCcxt, name, spy)
+    return out
 
 
 @pytest.fixture(autouse=True)

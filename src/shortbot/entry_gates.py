@@ -15,9 +15,12 @@ re-proposed afterwards is re-checked and re-sized at the prices and budget of th
   HALF; a NULL stamp, from an older server, skips that comparison), when its setup's ladder is SHADOW, or when its
   risk (a split entry's resting legs together) exceeds the verdict's daily loss-cap room minus open risk. A source
   judges only rows placed before it was read: a newer row was sized on fresher numbers
-Rows are withdrawn by killswitch_ops.cancel_resting: only an unfilled limit closes its row ("governor halt: ..." /
+Rows are withdrawn by entries_cancel.cancel_resting: only an unfilled limit closes its row ("governor halt: ..." /
 "market pause: ..." / "governor resized: ..." / "setup ladder: ..."), a fill is the poll's to adopt. The kill
-switch's HALTED sweep is separate (guardian_positions).
+switch's HALTED sweep (`halt_sweep`) runs instead of these while HALTED.
+Each sweep decides from reads and withdraws in a withdraw_entries intent of the fill poll's job (#36 step 2b,
+entries_acts.py). A row whose withdrawal keeps failing is resubmitted further and further apart (`Retry`): one intent
+row per attempt, never one per 5 s pass.
 """
 
 from __future__ import annotations
@@ -29,15 +32,45 @@ import time
 from datetime import datetime
 from typing import Any
 
+from .intents import Intent
 from .market.market_map import cached
 
 log = logging.getLogger("shortbot.entries")
 GOV_KEY = "governor_verdict"   # journal kv, per mode
 MAX_AGE_S = 900
 SWEEP_TIMEOUT_S = 60           # a hung cancel must not hold up the fill poll behind it
-RESTING = "status IN ('pending','placing','unknown')"   # the rows killswitch_ops.cancel_resting withdraws
+RETRY_MAX_S = 60.0             # a withdrawal that keeps failing is resubmitted at most this far apart (Retry)
+HALTED_WHY = "kill switch HALTED (guardian sweep)"
+RESTING = "status IN ('pending','placing','unknown')"   # the rows entries_cancel.cancel_resting withdraws
 STAMPED = ("m_gov", "m_ladder")   # budget multipliers stamped on each entry (entries_place, a lowering amend)
 LADDER_TTL_S = 60                 # the sweep re-reads a setup's ladder at most this often (it walks the closed trades)
+
+
+_now = time.monotonic
+
+
+class Retry:
+    """Resubmission gaps for a withdrawal that keeps failing, per (kind, entry id): at once after the first failure,
+    then 5, 10, 20, 40 and at most RETRY_MAX_S seconds apart; a success resets it. The caller's memory: the guardian's
+    desk (EntryDesk.retry)."""
+
+    def __init__(self) -> None:
+        self.fails: dict[tuple[str, int], tuple[int, float]] = {}   # key -> (failures in a row, next try at)
+
+    def due(self, key: tuple[str, int]) -> bool:
+        return key not in self.fails or _now() >= self.fails[key][1]
+
+    def done(self, key: tuple[str, int], ok: bool) -> None:
+        if ok:
+            self.fails.pop(key, None)
+            return
+        n = self.fails.get(key, (0, 0.0))[0] + 1
+        self.fails[key] = (n, _now() + (0.0 if n == 1 else min(5.0 * 2 ** (n - 2), RETRY_MAX_S)))
+
+    def keep(self, keys: set[tuple[str, int]]) -> None:
+        """Forget the rows no longer resting."""
+        for k in [k for k in self.fails if k not in keys]:
+            del self.fails[k]
 
 
 def stamps(multipliers: dict[str, Any] | None) -> dict[str, float | None]:
@@ -151,11 +184,29 @@ def _ladders(desk):
     return ladder_of
 
 
+async def _withdraw(desk, reason: str, rows: list[dict[str, Any]]) -> dict[str, list[int]] | None:
+    """One withdraw_entries intent for the rows a sweep decided to withdraw, those backing off left out (Retry);
+    None when all are. Its result is cancel_resting's."""
+    ids = [e["id"] for e in rows if desk.retry.due(("withdraw_entries", e["id"]))]
+    if not ids:
+        return None
+    r = await desk.gw.submit(Intent("withdraw_entries", {"reason": reason, "ids": ids}))
+    for i in ids:
+        desk.retry.done(("withdraw_entries", i), i in r["cancelled"])
+    return r
+
+
+def _resting(desk) -> list[dict[str, Any]]:
+    rows = desk._rows(RESTING)
+    desk.retry.keep({("withdraw_entries", e["id"]) for e in rows})
+    return rows
+
+
 async def sweep(desk) -> list[dict[str, Any]]:
     """Withdraw this desk's resting entries that must not fill as they are: all of them in a governor halt; else those
     a governor resize or their setup's ladder shrank, and in a market pause every one that didn't override it. One
-    result per reason; [] when nothing is to go."""
-    rows = desk._rows(RESTING)
+    result per reason withdrawn; [] when nothing is to go (or all of it is backing off)."""
+    rows = _resting(desk)
     if not rows:   # nothing rests: don't parse the market map every 5 s
         return []
     gov, pause = governor_halt(desk.j), market_pause(desk.j)
@@ -164,12 +215,33 @@ async def sweep(desk) -> list[dict[str, Any]]:
     else:
         why = resized(desk.j, rows, _ladders(desk))
         why.update({e["id"]: f"market pause: {'; '.join(pause)}" for e in rows if pause and not overrode_pause(e)})
-    from .killswitch_ops import cancel_resting   # (it imports entries, which imports this module's users)
     out = []
     for reason in dict.fromkeys(why.values()):
-        ids = {i for i, w in why.items() if w == reason}
-        out.append({"reason": reason, **await cancel_resting(desk, reason, keep=lambda e, ids=ids: e["id"] not in ids)})
+        r = await _withdraw(desk, reason, [e for e in rows if why.get(e["id"]) == reason])
+        if r is not None:
+            out.append({"reason": reason, **r})
     return out
+
+
+async def halt_sweep(desk, n) -> None:
+    """The guardian's HALTED sweep (protective lane, every pass while HALTED): catches entries a session placed before
+    it saw the trip. External orders (maybe the owner's) are alerted, never cancelled. Never fails the fill poll."""
+    from .guardian_loop import send_safe
+    try:
+        rows = _resting(desk)
+        r = await asyncio.wait_for(_withdraw(desk, HALTED_WHY, rows), SWEEP_TIMEOUT_S) if rows else None
+        if r and r["cancelled"]:
+            await send_safe(n, "kill_switch_sweep", f"HALTED: withdrew resting entries {r['cancelled']}"
+                            + (f"; left for the fill poll {r['left_for_fill_poll']}" if r["left_for_fill_poll"]
+                               else ""), cooldown_s=0)
+        for x in desk._rows("status='external'"):   # not the desk's (maybe the owner's): never cancelled
+            await send_safe(n, f"external_while_halted:{x['order_id']}", f"external order {x['order_id']} on "
+                            f"{x['symbol']} ({x['amount']} @ {x['limit_price']}) still resting while HALTED; "
+                            "cancel it on Binance if it must not fill", x["symbol"], urgent=True, cooldown_s=3600)
+    except Exception as e:  # noqa: BLE001 (incl. TimeoutError) - the fill poll below must still run
+        log.exception("HALTED sweep failed")
+        await send_safe(n, "guardian_error:kill_switch", f"HALTED sweep: {type(e).__name__}: {e}",
+                        urgent=True, cooldown_s=1800)
 
 
 async def guardian_sweep(desk, n) -> None:

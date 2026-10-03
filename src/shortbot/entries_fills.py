@@ -1,5 +1,5 @@
-"""Journalling the fills the 5 s entry poll finds (entries._on_fill), and those it learns about late (#8), rebuilt from
-the account's trade history.
+"""Journalling the fills the 5 s entry poll finds (entries_acts.on_fill), and those it learns about late (#8), rebuilt
+from the account's trade history.
 
 - a fill with its position open is journalled inside the symbol lock (`adopt`), siblings and alerts come after it
   (`announce`): a session's close never finds the position without its trade (#60)

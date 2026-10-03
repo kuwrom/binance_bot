@@ -110,7 +110,7 @@ def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int,
     """A later fill on this group's open trade is an add (the closePosition stop already covers the whole size): a
     split entry's next leg, or an OCO sibling whose cancel came too late (then the group is over its budget).
     filled_at: when it filled on the exchange (entries_fills.first_fill_ms), not when the poll saw it. Journal only
-    (inside the symbol lock, entries._on_fill): returns (event, (alert, urgent) or None), alerted after the lock."""
+    (inside the symbol lock, entries_acts.on_fill): returns (event, (alert, urgent) or None), alerted after the lock."""
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
     # amount = peak size; a fill that landed before the first one was adopted is already in it (count it once)
     peak = max(float((desk.j.get_trade(tid) or {}).get("amount") or 0), qty)

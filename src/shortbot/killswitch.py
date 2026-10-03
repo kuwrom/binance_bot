@@ -216,8 +216,9 @@ async def watch_guardian(tr, now: float | None = None) -> str | None:
     """The guardian can't see its own death, so sessions check its heartbeat wherever they read the state (the
     opening gate, the brief, the status tool). Its age is how long protection has gone unverified (#61). Over
     VERIFIED_S: new risk is refused (the reason is returned; nothing is tripped, so it lifts with the next verified
-    pass). Stale: trip HALTED and withdraw the resting entries now, since no one would protect their fills; it lifts
-    itself after AUTO_CLEAR_CHECKS verified passes. Never seen: block without tripping (start the guardian first)."""
+    pass). Stale: trip HALTED and withdraw the resting entries now, since no one would protect their fills (an intent:
+    the reader's own, or the write's whose gate this is; killswitch_ops.withdraw_resting); it lifts itself after
+    AUTO_CLEAR_CHECKS verified passes. Never seen: block without tripping (start the guardian first)."""
     age = heartbeat_age(tr.j, now)
     if age is None:
         return ("the guardian has never run against this journal, or never with trade keys: nothing has verified "

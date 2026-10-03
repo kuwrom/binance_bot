@@ -7,31 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import audit
 from . import killswitch as ks
 from .entries import EntryDesk
+from .entries_cancel import cancel_resting
+from .intents import Intent
 from .killswitch import HALTED
-from .symlock import SymbolBusy
 
 CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who typed it; shortbot-admin can
-
-
-async def cancel_resting(desk, reason: str, keep=None) -> dict[str, list[int]]:
-    """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED; entry_gates
-    reuses it for a governor halt or a market pause, keeping the rows `keep(row)` spares). Only an
-    "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
-    "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position.
-    The desk's own rows only, incl. sends of unknown outcome (placing/unknown: found by client id, and 'rejected' once
-    GRACE_S passed without it reaching the book: desk._cancel_entry, re-read and compare-and-set inside the symbol
-    lock); never an 'external' order, which may be the owner's (the guardian alerts those instead)."""
-    out: dict[str, list[int]] = {"cancelled": [], "left_for_fill_poll": []}
-    for e in [e for e in desk._rows("status IN ('pending','placing','unknown')") if not (keep and keep(e))]:
-        try:
-            got = await desk._cancel_entry(e, "cancelled", reason)
-        except SymbolBusy:   # a session is acting on the symbol: the guardian's HALTED sweep retries every pass
-            out.setdefault("busy", []).append(e["id"])
-            continue
-        out["cancelled" if got == "unfilled" else "left_for_fill_poll"].append(e["id"])
-    return out
 
 
 async def halt(tr, state: str, by: str, reason: str, evidence: dict | None = None,
@@ -40,12 +23,21 @@ async def halt(tr, state: str, by: str, reason: str, evidence: dict | None = Non
     res = await ks.trip(tr.j, tr.ex.settings, state, by, reason, evidence, cause)
     if ks.read(tr.j)["state"] == HALTED:
         try:
-            res["resting"] = await cancel_resting(EntryDesk(tr), f"kill switch HALTED: {reason}")
+            res["resting"] = await withdraw_resting(EntryDesk(tr), f"kill switch HALTED: {reason}")
         except Exception as e:  # noqa: BLE001 - the guardian's sweep retries
             res["resting"] = {"error": f"{type(e).__name__}: {e}"}
             await ks.notify(tr.j, tr.ex.settings, "kill_switch_cancel_failed", f"HALTED, but resting entries were "
                             f"not withdrawn ({e}); the guardian retries every cycle", urgent=True)
     return res
+
+
+async def withdraw_resting(desk, reason: str) -> dict[str, list[int]]:
+    """Every resting entry withdrawn (cancel_resting): inside the running intent (a command's: halt_trading,
+    flatten_all, kill-switch; an opening gate's watchdog), else as a withdraw_entries intent of its own (the watchdog
+    from a read: trading_state, the brief), actor the reader's (#36 step 2b)."""
+    if audit.intent_id() is not None:
+        return await cancel_resting(desk, reason)
+    return await desk.gw.submit(Intent("withdraw_entries", {"reason": reason}))
 
 
 async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:

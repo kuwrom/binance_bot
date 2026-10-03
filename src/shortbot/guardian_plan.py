@@ -2,7 +2,8 @@
 manager.plan_actions on the live position, applied under the symbol lock. Resting targets (#65, targets_sync.py):
 their fills are settled before the plan decides (a filled target is hit, not crossed), and the book is synced after
 it acts. The lock is taken only when an action is due or the targets need it (targets_sync.due): that step is a
-`plan_step` intent (#36 step 2, gateway.py), recording what the pass saw and decided again under the lock."""
+`plan_step` intent (#36 step 2, gateway.py), recording what the pass saw and decided again under the lock. A flat
+symbol's targets are pulled in a `pull_targets` intent (step 2b), before reconcile journals the trade."""
 
 from __future__ import annotations
 
@@ -21,6 +22,15 @@ log = logging.getLogger("shortbot.guardian")
 
 class PlanChecks:
     """Guardian mixin: needs app, j, n, gw."""
+
+    async def _settle_flat(self, live: list[dict]) -> None:
+        """Each symbol with live target rows and no position (targets_sync.flat_symbols): its targets pulled in an
+        intent. A busy symbol waits for the next pass (a session's close pulls them too)."""
+        for sym in targets_sync.flat_symbols(self.app.trader, live):
+            try:
+                await self.gw.submit(Intent("pull_targets", {"symbol": sym}, sym))
+            except SymbolBusy:
+                continue
 
     async def _targets(self, coro, sym: str | None = None, default=None):
         """A target step never costs the pass's stop and plan checks: a failure is alerted (SymbolBusy: next pass)."""
@@ -79,6 +89,13 @@ class PlanChecks:
                 if (a.fraction or 1.0) >= 1.0:
                     return done
         return done
+
+
+@handler("pull_targets")
+async def pull_targets(g, symbol: str) -> bool:
+    """PullTargets (GATEWAY.md §4.2): a flat symbol's targets cancelled and their fills journalled, the position
+    re-read under the lock (targets_sync.pull_flat). Strict (journal first): reduce-only orders can't fill at flat."""
+    return await targets_sync.pull_flat(g.app.trader, symbol)
 
 
 @handler("plan_step")

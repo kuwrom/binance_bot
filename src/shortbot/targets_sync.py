@@ -10,8 +10,8 @@ inside the symbol's lock (taken here; reentrant for a caller that holds it, syml
 - pull: cancel every target on the symbol and journal what they filled. Before a partial close or a size cut (a
   target filling at the same moment would close more than the plan wants), and once flat, whatever Binance does on
   its own (it expires reduce-only orders at flat, staff answer dev.binance.vision/t/802; the desk doesn't rely on it).
-- settle_flat (guardian, before reconcile): symbols with live target rows but no position: pulled, so the fills that
-  closed the trade are journalled as targets before reconcile finalizes it.
+- flat_symbols / pull_flat (guardian, before reconcile, a pull_targets intent each): symbols with live target rows
+  but no position: pulled, so the fills that closed the trade are journalled as targets before reconcile finalizes it.
 - clear_stale: the re-entry guard. A new short on a symbol cancels any target of another trade first.
 - at_entry: sync right after an entry's stop rests (open_short, a limit-entry fill), never failing the entry (#71).
 - due: the guardian's lock-free check, so its 60 s pass takes the lock only when something is to settle or change.
@@ -256,20 +256,19 @@ async def clear_stale(tr, symbol: str, keep: int | None = None) -> int:
         return 0
 
 
-async def settle_flat(tr, live_positions: list[dict]) -> list[str]:
-    """Pull the targets of symbols with no position left (guardian, before reconcile). Returns the symbols done."""
-    held = {p["symbol"] for p in live_positions}
-    done = []
-    for sym in sorted({r["symbol"] for r in targets.live(tr.j)} - held):
-        try:
-            async with tr.symbol_lock(sym, "targets: flat sweep"):
-                if await tr.position(sym):   # re-read under the lock: an empty answer alone proves nothing
-                    continue
-                await pull(tr, sym, "flat: the position is closed")
-                done.append(sym)
-        except SymbolBusy:   # a session is on it (its close pulls them too): next pass
-            continue
-    return done
+def flat_symbols(tr, live_positions: list[dict]) -> list[str]:
+    """Symbols with live target rows and no position (guardian, before reconcile): their targets are to be pulled."""
+    return sorted({r["symbol"] for r in targets.live(tr.j)} - {p["symbol"] for p in live_positions})
+
+
+async def pull_flat(tr, symbol: str) -> bool:
+    """Pull a flat symbol's targets (guardian_plan.pull_targets); False when it isn't flat now (re-read under the
+    lock: an empty answer alone proves nothing)."""
+    async with tr.symbol_lock(symbol, "targets: flat sweep"):
+        if await tr.position(symbol):
+            return False
+        await pull(tr, symbol, "flat: the position is closed")
+        return True
 
 
 async def due(tr, trade: dict, p: dict) -> bool:

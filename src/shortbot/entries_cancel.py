@@ -1,7 +1,7 @@
 """Withdrawing limit entries (mixed into EntryDesk, entries.py): `withdraw` pulls one order and believes only what
 filled; `_cancel_entry` does it for one journal row inside the symbol lock, compare-and-set; `cancel_group` for every
 order of an OCO group that is or may be on the book; `_cancel_by_rule` counts a failing sibling-retry cancel. The
-kill switch and entry_gates withdraw resting rows through `_cancel_entry` too (killswitch_ops.cancel_resting).
+kill switch and entry_gates withdraw every resting row through `_cancel_entry` too (`cancel_resting`).
 """
 
 from __future__ import annotations
@@ -73,6 +73,26 @@ async def withdraw(tr, e: dict[str, Any], alert=None) -> str:
     return "unfilled"
 
 
+async def cancel_resting(desk, reason: str, keep=None) -> dict[str, list[int]]:
+    """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED; entry_gates
+    reuses it for a governor halt or a market pause, keeping the rows `keep(row)` spares). Only an
+    "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
+    "unknown" keep the row and its stop, so the guardian's fill poll protects and journals the position.
+    The desk's own rows only, incl. sends of unknown outcome (placing/unknown: found by client id, and 'rejected' once
+    GRACE_S passed without it reaching the book: desk._cancel_entry, re-read and compare-and-set inside the symbol
+    lock); never an 'external' order, which may be the owner's (the guardian alerts those instead). Always inside an
+    intent: a command's (halt_trading, flatten_all), or the withdraw_entries intent of a sweep or the watchdog."""
+    out: dict[str, list[int]] = {"cancelled": [], "left_for_fill_poll": []}
+    for e in [e for e in desk._rows(RESTING) if not (keep and keep(e))]:
+        try:
+            got = await desk._cancel_entry(e, "cancelled", reason)
+        except SymbolBusy:   # a session is acting on the symbol: the guardian's HALTED sweep retries every pass
+            out.setdefault("busy", []).append(e["id"])
+            continue
+        out["cancelled" if got == "unfilled" else "left_for_fill_poll"].append(e["id"])
+    return out
+
+
 class EntryCancel:
     """Uses EntryDesk's trader, journal and entry-row storage (_rows, _settle)."""
 
@@ -128,8 +148,9 @@ class EntryCancel:
 
     async def _cancel_by_rule(self, e: dict, why: str) -> str:
         """A cancel rule fired. When the OCO retry keeps failing, a second order stays live in a group that already
-        filled: tell a human once per streak of CANCEL_FAILS_ALERT failures in a row."""
-        got = await self._cancel_entry(e, "cancelled", why)
+        filled: tell a human once per streak of CANCEL_FAILS_ALERT failures in a row. The guardian's poll decides it,
+        the cancel is an intent of its job (entries_acts.cancel_entry)."""
+        got = await self.act("cancel_entry", e, status="cancelled", reason=why)
         if got != "unknown" or not why.startswith("sibling #"):
             self._cancel_fails.pop(e["id"], None)
             return got

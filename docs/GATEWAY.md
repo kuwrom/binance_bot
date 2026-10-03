@@ -1,8 +1,8 @@
 # Order gateway (task #36, design, 2026-10-02)
 One process owns every exchange write. The MCP servers, the CLI and the guardian submit **intents** to it. It runs them one at a time per symbol, journals each one before acting, resolves unknown outcomes by client id, and answers with a typed result. It replaces the per-symbol flock (#21) as the serialiser, works when the desk runs on AWS Tokyo, gives `Trader` a public interface, and makes one command registry the source of both the MCP tools and the CLI.
 
-Status: steps 0 (public `Trader`, §1.2), 1 (command registry) and 2a (in-process intents, §8) built; the rest is
-design. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
+Status: steps 0 (public `Trader`, §1.2), 1 (command registry), 2a and 2b (in-process intents, every write of the
+sessions and the guardian, §8) built; the rest is design. Surveyed on master e45da38 (768181f changes no order path). Sources at the end, checked 2026-10-02.
 
 ## Recommendation in one screen
 - **Where:** its own small process, `shortbot-gateway`, on the desk host (the host with the journal and the guardian). The guardian becomes its first client. Not inside the guardian, and not a library with a leader lock (§2).
@@ -35,7 +35,7 @@ The survey found 20 raw write sites in 10 files. Step 0 put each behind a public
 | `close_market` (trading_orders) | reduce-only market BUY, settled by id | close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry, flatten |
 | `place_reduce_limit` (trading_orders) | reduce-only GTC limit BUY (target) | `targets_sync.py` |
 | `prepare` (trading) | `set_position_mode`, `set_margin_mode`, `set_leverage` | open, `entries_place.py`. The lock audit covers them since #74 (`set_position_mode` under the account lock) |
-| `listen_key`, `keep_listen_key` (trading_orders) | POST / PUT `/fapi/v1/listenKey` (never DELETE: one key per account, shared) | `user_stream.py` (#54). Side-free: they stay out of step 8's `Side` table |
+| `listen_key`, `keep_listen_key` (trading_orders) | POST / PUT `/fapi/v1/listenKey` (never DELETE: one key per account, shared) | `user_stream.py` (#54). Side-free: they stay out of step 8's `Side` table. The only guardian sends outside an intent (step 2b): the key changes no order or position, the stream must never wait for the journal (its REST calls are time-boxed), and step 9 moves the stream into the gateway. Allowlisted by name in the runtime guard (`conftest.NO_INTENT`) and in `test_trader_public.NO_INTENT` |
 
 **Raw writes that remain: the probes only.** `probe_kit.py`, `probe_cases.py`, `probes.py` and `probe_stream.py` call ccxt directly: test orders, `countdownCancelAll` and the listen key. Two reasons keep them raw for now:
 - they exist to record Binance's raw answer to each case (#55), which the desk's primitives would classify or retry away;
@@ -61,18 +61,18 @@ About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
 - Every session's opening gate can also halt on a stale heartbeat and withdraw the entries itself (`killswitch.py:214-234`).
 
 **Guardian:**
+Every guardian flow below is an intent of its job since step 2b (§8); the kinds are in §4.2.
 - Positions pass (60 s):
   - `ensure_stop` (`trading_manage.py:232`, lock at :239);
   - forced close (`guardian_positions.py:226-230`);
   - the plan executor (`guardian_plan.py:42-82`);
-  - `targets_sync.settle_flat` (:52).
+  - a flat symbol's targets (`targets_sync.flat_symbols` / `pull_flat`).
 - `cap_stop` (`guardian_margin.py:117`).
 - Fill poll (5 s):
-  - `_on_fill` (`entries.py:239-267`): withdraw the remainder, protect, plan stop, journal, targets;
-  - expiry and cancel rules, `_forgotten` (:197);
+  - `protect_fill` (`entries_acts.on_fill`): withdraw the remainder, protect, plan stop, journal, targets;
+  - expiry and cancel rules, a forgotten entry (`entries._poll_one`);
   - OCO sibling cancels (`entries_fills.py:142-254`);
-  - the governor/pause sweep (`guardian_positions.py:262`);
-  - the HALTED sweep (:307-313).
+  - the governor/pause sweep and the HALTED sweep (`entry_gates.sweep`, `halt_sweep`).
 - `entry_reconcile` (60 s): `entry_intents.py:125/139/183/275`.
 - `tranches.cancel_legs` (:80) on a full close.
 
@@ -213,7 +213,7 @@ B is the same pattern, with the guardian as one more surface. A and B share step
   - journal-first, send, resolve, protect.
 - **Hard caps:** the gateway re-checks them under `killswitch.effective_limits` (research override if active, else `.env`), the same limits the guardian's loss trips use.
 - **Guardian-origin intents** run under the `.env` baseline, as today. A per-intent limits context, like `weight.tagged`, keeps "the AWS guardian always uses the `.env` baseline" true inside a shared process.
-- **The journal never makes an event loop wait** (#79, `journal_writer.py`). Receipt and start are one unit the caller awaits before anything runs; the result is posted. Journal-first has one exception: a protective guardian intent (`restore_stop`, `force_close`, `cap_stop`: idempotent sends, by client id and one closePosition stop per side) waits at most `CLAIM_WAIT_S` (2 s) while another process holds the write lock, then runs; its rows are posted and marked `journal_late`. Session, CLI and risk-adding intents always wait for their row.
+- **The journal never makes an event loop wait** (#79, `journal_writer.py`). Receipt and start are one unit the caller awaits before anything runs; the result is posted. Journal-first has one exception: a protective intent whose sends are idempotent waits at most `CLAIM_WAIT_S` (2 s) while another process holds the write lock, then runs; its rows are posted and marked `journal_late`. The set is `gateway.LATE_OK`, each kind justified there: `restore_stop`, `force_close`, `cap_stop` (by client id, one closePosition stop per side), `protect_fill` (a fill's stop must never wait), `cancel_entry` and `withdraw_entries` (removing resting risk, rows by compare-and-set; the latter also for the session watchdog). Every other session, CLI and risk-adding intent waits for its row.
 
 ### 4.2 Intents
 | intent | today | preconditions / idempotency | class |
@@ -228,7 +228,7 @@ B is the same pattern, with the guardian as one more surface. A and B share step
 | `Add{symbol, notional, new_stop, reason}` | `_add` | winners only, `check_add`, governor room | raise |
 | `SyncTargets{symbol, why}` / `PullTargets` | targets_sync | the book against the plan: idempotent by construction | reduce |
 | `Halt{state, reason}` / `Flatten{reason, lesson}` | killswitch_ops | trip (journal), then `CancelEntries(all)`, then `Close(1.0)` per position | reduce |
-| guardian: `RestoreStop`, `CapStop`, `ForceClose`, `ProtectFill{entry_id}`, `ResolveEntry{entry_id}`, `CancelPrearm`, `SweepOrders` | ensure_stop, cap_stop, the forced close, `_on_fill`, `entry_intents.resolve`... | the same re-reads as today, inside the turn | reduce |
+| guardian: `restore_stop`, `cap_stop`, `force_close`, `plan_step`, `pull_targets{symbol}`; entry rows (ctx = the `EntryDesk`, `entries_acts.py`): `protect_fill{entry_id, order}` (OCO siblings included), `cancel_entry{entry_id, status, reason}`, `forget_entry{entry_id}`, `withdraw_entries{reason, ids}`, `withdraw_order{entry_id, order_id}`, `rollback_split{entry_id, tranche}`, `cancel_prearm{entry_id, order_id}`, `sweep_orphans{symbol}` | ensure_stop, cap_stop, the forced close, the plan, the fill poll, the sweeps, `entry_intents.reconcile`, the orphan sweep | the same re-reads as today, inside the turn; the caller decides from reads, the handler sends | reduce |
 
 **Plan executor.** The guardian decides (`manager.plan_actions`) and sends `Close{of_original}` and `MoveStop`, both idempotent. Where several actions must see one view, it sends `PlanStep{trade_id, expect{contracts, stop}}`. Today's "decide again under the lock" (guardian_plan.py:42-56) becomes these preconditions.
 
@@ -269,7 +269,7 @@ Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe rece
   1. `received` rows from a previous run become `expired`. An intent never runs late on an old decision; the guardian re-issues its intents on its next pass.
   2. `running` rows become `interrupted`, and their `intent_orders` client ids are collected.
   3. The existing reconcilers run, in this order:
-     - `targets_sync.settle_flat` and `settle` (fills first, #65);
+     - a flat symbol's targets (`targets_sync.pull_flat`) and `settle` (fills first, #65);
      - `entry_intents.reconcile`;
      - `reconcile.reconcile` (`opening` rows, closed trades);
      - `RestoreStop` for every position (closePosition stop present, bridges swept);
@@ -335,12 +335,12 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 | 0 | **Public `Trader`** (done). Public names for the 8 privates used elsewhere (`place_close_stop`, `close_market`, `open_market`, `prepare`, `raw_positions`, `verified_position`, `find_stop`, `set_alert`); 5 more primitives (`cancel`, `place_limit`, `edit_limit`, `place_reduce_stop`, `place_reduce_limit`) carry the raw `tr.t` writes of 8 modules; callers moved, wire and results unchanged. Probes stay raw (§1.2) | as today | existing suite; `test_trader_public.py`: no `Trader._` name outside trading*, no raw write outside the primitives and probes | ~300 |
 | 1 | **Command registry** (done). One declaration per command in `commands.py`: MCP name, CLI name, args typed by the body's signature, read / write, weight class, stale-exempt, CLI hint. It generates the MCP tool and the argparse subcommand. The six tables, `stale_guard.CLI` and `cli.tool_body` are gone. Pairs whose bodies differed now share the MCP body, and the weight classes agree (`set-params`, `flatten` and `kill-switch` are protective) | as today | `test_commands.py`; `test_cli_fallback.py` (every write has a CLI form the parser accepts); the `commands` block in `surface.json`; `tools/list` unchanged | ~400 |
 | 2a | **Intents in-process** (done). `Intent`, the `Gateway` protocol, `LocalGateway` running today's code; every MCP and CLI write submits one intent (killswitch_ops and ladder_apply run inside their command's); the guardian's `restore_stop`, `force_close`, `cap_stop` and `plan_step` are intents of its jobs; `intents` + `intent_orders` tables; the interrupted-intent sweep | as today | `test_intents.py`: journal first, a resubmitted id runs once, in progress, busy re-runs, status mapping, append-only rows, sweep; `test_intent_paths.py`: one intent per write on both surfaces, linked orders and decisions, a crash mid-send resolved as before, guardian actors | ~600 + tests |
-| 2b | **The guardian's other writes as intents:** the fill poll (protect a fill, OCO sibling cancels, expiry and cancel rules, `_forgotten`, tranche joins), the HALTED and governor/pause sweeps, `entry_intents.reconcile`'s resolutions, `targets_sync.settle_flat`, and the session watchdog's stale-heartbeat halt (it runs from reads). Each per-row decision split from its send. After it, step 6 is a transport change only | as today | each write in the fill poll and sweeps is an intent of its job | ~300 |
+| 2b | **The guardian's other writes as intents** (done). The fill poll (protect a fill with its OCO siblings and tranche joins, expiry and cancel rules, a forgotten entry), the HALTED and governor/pause/resize sweeps, `entry_intents.reconcile`'s resolutions, the orphan sweep, a flat symbol's targets, and the session watchdog's withdrawal (from a read: an intent of the reader; from a write's gate: inside that write's). Each caller decides from reads; a handler sends (`entries_acts.py`, ctx = the `EntryDesk`; `pull_targets`, ctx = the guardian). A withdrawal that keeps failing is resubmitted 5, 10, 20, 40, then 60 s apart (`entry_gates.Retry`), not every 5 s pass. The listen key is the one allowlisted exception (§1.2). After it, step 6 is a transport change only | as today | the lock audit fails any write reached from the guardian (or the watchdog) outside an intent; `test_guardian_intents*.py`: each site's kind and actor, stored requests re-bind their handlers, a quiet pass submits none, 10 failing passes ≤ 5 rows; `test_guardian_late.py`: late_ok kinds send under a held lock, a strict one journals first | ~450 + tests |
 | 3 | **Typed results + generic resolver** for market sends of unknown outcome (gap 3), on #37's types | as today | fakes: a close/add that times out is resolved by client id; nothing is re-sent | ~250 |
-| 4 | **Gateway process + socket client**, behind `SHORTBOT_GATEWAY=off\|session` (default off). With `session`, MCP and CLI go through the gateway; the guardian still writes directly. Break-glass for risk-reducing actions; `gateway_heartbeat`; global admission (gap 4); self-restart on a stale closure; launchd plist + compose service in DEPLOY.md | the gateway also takes it per sequence, so mixed writers stay serialised | a real socket in tests: deadline/expired, busy, disconnect mid-run, receipt-unknown → `status`, mode mismatch, break-glass only for the allowed set, peer-uid refusal | ~600 |
+| 4 | **Gateway process + socket client**, behind `SHORTBOT_GATEWAY=off\|session` (default off). With `session`, MCP and CLI go through the gateway; the guardian still writes directly. Break-glass for risk-reducing actions; `gateway_heartbeat`; global admission (gap 4); self-restart on a stale closure; launchd plist + compose service in DEPLOY.md. The per-symbol queues split the cross-symbol intents into a parent plus one step per symbol: `protect_fill` (its OCO siblings), `cancel_entry_group`, `flatten_all` (in-process each holds one symbol lock at a time) | the gateway also takes it per sequence, so mixed writers stay serialised | a real socket in tests: deadline/expired, busy, disconnect mid-run, receipt-unknown → `status`, mode mismatch, break-glass only for the allowed set, peer-uid refusal | ~600 |
 | 5 | **Sessions on by default** after a demo soak (D6). The stale guard for writes becomes a protocol check (D5) | belt and braces | the stale-guard tests are rewritten for intents | ~100 |
 | 6 | **The guardian becomes a client:** its writes are intents; startup reconciliation runs in the gateway (§5) | break-glass only | guardian suites against a gateway fixture; kill -9 mid-swap, mid-open and mid-close, then restart → reconciled and alerted | ~500 |
-| 7 | **Enforcement:** `GuardedUSDM.fetch` refuses any non-GET outside the gateway's write context or a break-glass context; the lock audit adds the 3 `set_*` writes | break-glass only | a stray `create_order` from an MCP path raises in tests | ~150 |
+| 7 | **Enforcement:** `GuardedUSDM.fetch` refuses any non-GET outside the gateway's write context or a break-glass context; the lock audit adds the 3 `set_*` writes. It must allow POST/PUT `/fapi/v1/listenKey` from the guardian's user stream until step 9 moves the stream into the gateway (§1.2) | break-glass only | a stray `create_order` from an MCP path raises in tests | ~150 |
 | 8 | **Side-aware primitives** (§7); LONG_BUILD phase 2 builds here | — | the `Side` table; the short suite unchanged | ~400 |
 | 9 | optional: user data stream (§5); research lanes moved out of the guardian | — | — | later |
 
@@ -367,7 +367,7 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 
 **Decisions (settled 2026-10-03; the owner agreed to one desk host and left the rest to practicality):**
 - **D1 Where:** its own process, `shortbot-gateway`. Merges restart the guardian, so the gateway must not restart with it.
-- **D2 Topology:** one desk host holds the journal, the gateway, the guardian and the trading sessions. Today that host is the laptop. When the AWS box is set up, all four move together, with sessions in tmux over SSH (DEPLOY §5). The journal and the order path are never split across hosts.
+- **D2 Topology:** one desk host holds the journal, the gateway, the guardian and the trading sessions. The desk host is the EC2 box (eu-central-1) since 2026-10-03; journal, guardian, gateway and sessions all run there, with sessions in tmux over SSH (DEPLOY §5). The journal and the order path are never split across hosts.
 - **D3 Break-glass when the gateway is down:** same host only, for the `killswitch.ALLOWED` set and guardian protection; cross-host callers fail closed.
 - **D4 Longs:** LONG_BUILD phase 2 waits for step 8.
 - **D5 Stale guard after step 5:** only the protocol version is checked for intents. The gateway runs the code on disk, so a stale client can't send a stale order path.

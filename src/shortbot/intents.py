@@ -2,7 +2,8 @@
 anything runs, under an id its caller picks (a ULID). gateway.py runs them; this module is the record.
 
 - An intent is a write command (its kind is the command's, its args the body's keyword arguments: commands.py) or a
-  guardian action (restore_stop, force_close, cap_stop, plan_step). It goes received -> running -> a final status:
+  guardian action: restore_stop, force_close, cap_stop, plan_step, pull_targets, and the entry-row sends of the fill
+  poll, the sweeps and the reconciler (entries_acts.py, orphans.py). It goes received -> running -> a final status:
   done | refused | failed | unknown | interrupted | expired, or busy (nothing sent: it may run again under its id).
   Until step 3 types the results, the status is today's outcome: refused = the result said ok: false.
 - The row replaces the #24 `call` decision row of a write: it holds the request (args, actor, Claude session, code)
@@ -13,10 +14,10 @@ anything runs, under an id its caller picks (a ULID). gateway.py runs them; this
   reached through that id; nothing is copied.
 - A process that died mid-intent leaves it open: `sweep` (the guardian's reconcile job) ends it, expired if it never
   started, interrupted if it did, and lists its client ids; the existing reconcilers resolve the orders themselves.
-- Journal-first, with one exception (#79): a guardian intent whose handler is registered late_ok (restoring or capping a
-  stop, closing a naked position) sends after CLAIM_WAIT_S without its row when another process holds the journal's
-  write lock. Its rows are posted, stamped when it ran, and marked journal_late; its sends are idempotent (client
-  ids, one closePosition stop per side).
+- Journal-first, with one exception (#79): an intent whose handler is registered late_ok (restoring or capping a stop,
+  closing a naked position, protecting a fill, withdrawing resting entries: gateway.LATE_OK) sends after CLAIM_WAIT_S
+  without its row when another process holds the journal's write lock. Its rows are posted, stamped when it ran, and
+  marked journal_late; its sends are idempotent (client ids, one closePosition stop per side, compare-and-set rows).
 
 Every function takes the journal and runs plain synchronous SQLite: the gateway runs each as a unit (journal.write /
 post, journal_writer.py), so an event loop never waits for the write lock. A time is the caller's (`at`): a posted row

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from shortbot.trading import Trader
+from tests import conftest
 from tests.conftest import PRIMITIVES
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "shortbot"
@@ -17,6 +18,12 @@ RAW_OK = ("probe*.py",)   # demo-only probes observe Binance's raw answers by de
 # inside the mixins, the primitives (close_market and open_market through their send loops) are all that send
 SENDERS = {"prepare", "place_close_stop", "_close_sends", "_sell_once", "cancel", "place_limit", "edit_limit",
            "place_reduce_stop", "place_reduce_limit", "listen_key", "keep_listen_key"}
+# #36 step 2b: the guardian sends through these outside an intent, by design (GATEWAY.md §1.2). The user-data stream's
+# listen key changes no order or position, the stream must never wait for the journal (its REST calls are time-boxed),
+# and step 9 moves the stream into the gateway; until then step 7's enforcement must allow it.
+NO_INTENT = {"listen_key": "POST /fapi/v1/listenKey: the user-data stream's key, no order or position",
+             "keep_listen_key": "PUT /fapi/v1/listenKey: its keepalive, no order or position"}
+GUARDIAN = ("guardian*.py", "user_stream.py")   # the guardian's own modules (its shared flows: the runtime guard)
 
 
 def mixins() -> list[Path]:
@@ -114,3 +121,37 @@ def test_the_lock_audits_primitives_are_public_trader_methods():
     for origin in PRIMITIVES - {"entries_cancel.withdraw"}:
         stem, name = origin.split(".")
         assert not name.startswith("_") and getattr(Trader, name).__module__ == f"shortbot.{stem}", origin
+
+
+def _handlers(tree: ast.AST) -> set[str]:
+    """Functions registered as intent handlers: decorated @handler(...) (gateway.handler)."""
+    return {f.name for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(isinstance(d, ast.Call) and getattr(d.func, "id", getattr(d.func, "attr", None)) == "handler"
+                    for d in f.decorator_list)}
+
+
+def primitive_calls(tree: ast.AST) -> list[tuple[str, int, str]]:
+    """(enclosing function, line, primitive) for each call of a public sending primitive (task.cancel() has no
+    arguments: not Trader.cancel)."""
+    sends = {n for n in SENDERS | {p.split(".")[1] for p in PRIMITIVES} if not n.startswith("_")}
+    return [(f.name, n.lineno, n.func.attr) for f in ast.walk(tree)
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) for n in ast.walk(f)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in sends
+            and (n.args or n.func.attr in NO_INTENT)]
+
+
+def test_the_guardian_sends_only_from_intent_handlers_and_the_listen_key():
+    """#36 step 2b: in the guardian's own modules a primitive is called only inside an intent handler, or is one the
+    allowlist names (NO_INTENT, mirrored by the runtime guard in conftest). Its shared flows (entries, entry_intents,
+    orphans, targets_sync, killswitch) are checked at run time: conftest.order_lock_audit."""
+    bad, seen = [], set()
+    for p in [p for g in GUARDIAN for p in sorted(SRC.glob(g))]:
+        tree = ast.parse(p.read_text())
+        inner = {(line, name) for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and f.name in _handlers(tree) for _, line, name in primitive_calls(f)}
+        seen |= {(p.stem, name, (line, name) in inner) for _, line, name in primitive_calls(tree)}
+        bad += [f"{p.name}:{line}: {fn} calls .{name}()" for fn, line, name in primitive_calls(tree)
+                if (line, name) not in inner and name not in NO_INTENT]
+    assert {("guardian_positions", "close_market", True), ("user_stream", "listen_key", False)} <= seen   # not vacuous
+    assert not bad, "send it from an intent handler (gateway.handler):\n" + "\n".join(bad)
+    assert set(NO_INTENT) <= SENDERS and set(conftest.NO_INTENT.values()) == set(NO_INTENT)

@@ -11,7 +11,9 @@ a fresh listing of that symbol, it cancels one of OURS when both hold:
 - nothing needs it as protection: the symbol is flat, or a closePosition stop rests (it covers the whole position). With
   a position and no closePosition stop it may be the only stop: it stays (the guardian restores the closePosition stop,
   then the next sweep cancels it), told once
-Orders without our client-id prefix are never touched. Each cancel is told once."""
+Orders without our client-id prefix are never touched. Each cancel is told once. Each suspect symbol is swept in a
+sweep_orphans intent of the reconcile job (#36 step 2b): the all-symbol listing decides which, the handler re-lists
+and cancels under the lock."""
 
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ from typing import Any
 
 from . import clientid, errors, stops
 from .exchange import to_symbol
+from .gateway import handler
+from .intents import Intent
 from .symlock import SymbolBusy
 
 log = logging.getLogger("shortbot.entries")
@@ -58,8 +62,7 @@ async def sweep(desk) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for sym in suspects:
         try:
-            async with desk.tr.symbol_lock(sym, "orphan sweep: our reduce-only stops nothing owns"):
-                events += await _symbol(desk, sym)
+            events += await desk.gw.submit(Intent("sweep_orphans", {"symbol": sym}, sym))
         except SymbolBusy:
             continue   # a session acts on it: the next sweep
         except Exception as e:  # noqa: BLE001 - the other symbols still get swept; the next sweep retries this one
@@ -68,6 +71,14 @@ async def sweep(desk) -> list[dict[str, Any]]:
             else:
                 await errors.report(desk.tr.alert, "orphans.sweep", e, sym)
     return events
+
+
+@handler("sweep_orphans")
+async def sweep_symbol(desk, symbol: str) -> list[dict[str, Any]]:
+    """SweepOrders (GATEWAY.md §4.2), ctx = the EntryDesk: one suspect symbol, under its lock, on a fresh listing.
+    Strict (journal first): cleanup, never protection (a stop that may be a position's only one stays)."""
+    async with desk.tr.symbol_lock(symbol, "orphan sweep: our reduce-only stops nothing owns"):
+        return await _symbol(desk, symbol)
 
 
 async def _symbol(desk, sym: str) -> list[dict[str, Any]]:

@@ -16,7 +16,9 @@ them by client id, never by resending (clientid.py):
   known stop until it leaves the book: 'external_filled' while the position it made is open, else 'external_gone');
   a late 'sb-' order whose row is already dead -> cancelled (adopted instead if it has a fill)
 Transitions are compare-and-set (EntryDesk._settle: one UPDATE ... WHERE status=?), so the MCP server and the
-guardian never overwrite each other, and no write transaction is held across an exchange call.
+guardian never overwrite each other, and no write transaction is held across an exchange call. The sends are intents
+of the caller's job (#36 step 2b, entries_acts.py: rollback_split, withdraw_order, cancel_prearm; orphans.py): this
+module decides from reads and journals what they answer.
 Known gap (accepted): a propose call that dies after every split leg is acked but before tranches.finalize leaves
 the legs resting, unpinned; only a leg still 'placing' gets its split rolled back.
 """
@@ -71,7 +73,7 @@ def _age_s(r: dict[str, Any]) -> float:
     return time.time() - datetime.fromisoformat(r["created_at"]).timestamp()
 
 
-def _unit(r: dict[str, Any]) -> dict[str, Any]:
+def unit(r: dict[str, Any]) -> dict[str, Any]:
     """An entry row in the shape _place_one returns (what _rollback and tranches.finalize read)."""
     return {"entry_id": r["id"], "amount": r["amount"],
             "risk_usdt": round(r["amount"] * (r["stop_price"] - r["limit_price"]), 2)}
@@ -133,9 +135,7 @@ async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
             return None
         r = {**r, "status": "unknown", "abandon": 1}
         if r.get("tranche"):   # a split entry is one unit: the dead call's acked, never-pinned legs go too
-            legs = desk._rows("tranche=? AND status='pending'", (r["tranche"],))
-            async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: roll back a dead call's split"):
-                await desk._rollback([_unit(x) for x in legs if "ladder_live" not in x["plan"]])
+            await desk.act("rollback_split", r, tranche=r["tranche"])
     t = desk.tr.t
     o = await clientid.lookup(t, r["symbol"], r["client_id"])
     if o is None:
@@ -147,9 +147,7 @@ async def resolve(desk, r: dict[str, Any]) -> dict[str, Any] | None:
         return await _done(desk, r, "expired" if o["status"] == "expired" else "cancelled",
                            f"found {o['status']} and unfilled", order_id=o["id"])
     if r["abandon"] and not filled:
-        from .entries_cancel import withdraw
-        async with desk.tr.symbol_lock(r["symbol"], f"entry #{r['id']}: withdraw an abandoned intent"):
-            got = await withdraw(desk.tr, {**r, "order_id": o["id"]}, desk.tr.alert)
+        got = await desk.act("withdraw_order", r, order_id=o["id"])
         if got == "unknown":
             return None   # the cancel failed: look again next tick
         if got == "unfilled":
@@ -161,7 +159,7 @@ async def _adopt(desk, r: dict[str, Any], oid: str, why: str) -> dict[str, Any] 
     """From here on an ordinary pending entry: the poll adopts its fill and protects it with the plan's stop."""
     if r.get("tranche") and "ladder_live" not in r["plan"]:
         from . import tranches
-        await desk.j.write(lambda j: tranches.finalize(j.db, [_unit(r)]))   # rolled back: pinned to its own size
+        await desk.j.write(lambda j: tranches.finalize(j.db, [unit(r)]))   # rolled back: pinned to its own size
     return await _done(desk, r, "pending", f"{why}: adopted", urgent=bool(r["abandon"]) or r["status"] != "unknown",
                        order_id=oid)
 
@@ -190,15 +188,13 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
                     await desk.tr.alert("prearm_unresolved", f"entry #{r['id']} ({r['status']}): pre-armed stop "
                                         f"{r['prearm_cid']} not among the open stops; check Binance", sym, False)
                 continue
-            if r["status"] != "pending":   # its entry is gone, so its stop must go too
+            if r["status"] != "pending":   # its entry is gone, so its stop must go too (Gone counts as done)
                 try:
-                    async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a dead entry's pre-arm"):
-                        await desk.tr.cancel(sym, o["id"], trigger=True)
-                except Exception as e:  # noqa: BLE001 - Gone: off the book already; else retried next tick
-                    if errors.classify(e) is not errors.Gone:
-                        await _carry_on(desk, f"pre-arm of dead entry #{r['id']} not cancelled",
-                                        "entry_intents._resolve_prearms", e, sym)
-                        continue
+                    await desk.act("cancel_prearm", r, order_id=o["id"])
+                except Exception as e:  # noqa: BLE001 - retried next tick (reported unless transient)
+                    await _carry_on(desk, f"pre-arm of dead entry #{r['id']} not cancelled",
+                                    "entry_intents._resolve_prearms", e, sym)
+                    continue
             await desk._update(r["id"], prearm_id=o["id"])
             events.append({"entry_id": r["id"], "event": "prearm_resolved", "cancelled": r["status"] != "pending"})
     return events
@@ -289,9 +285,7 @@ async def _late(desk, r: dict, o: dict, oid: str, cid: str | None, sym: str) -> 
             await desk.tr.alert("zombie_order", f"entry #{r['id']} is {r['status']} in the journal but its order "
                                 f"{oid} still rests; check Binance", sym, True)
         return None
-    from .entries_cancel import withdraw
-    async with desk.tr.symbol_lock(sym, f"entry #{r['id']}: cancel a late order"):   # cancel first; a fill is kept
-        got = await withdraw(desk.tr, {**r, "order_id": oid}, desk.tr.alert)
+    got = await desk.act("withdraw_order", r, order_id=oid)   # cancel first; a fill is kept
     if got == "unknown":
         return None   # the next sweep retries
     if got == "filled" and r["status"] != "filled":

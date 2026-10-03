@@ -3,18 +3,21 @@ receipt, run once per id, and answered with today's result. Step 2 runs it in th
 MCP tools and `shortbot` subcommands that write (commands.py) and the guardian's protective actions all go through
 `submit`. Step 4 puts the same interface behind a socket.
 
-- Handlers are found by kind: a write command's body (commands.by_kind), or a function registered with @handler
-  (the guardian's restore_stop, force_close, cap_stop, plan_step), called as handler(ctx, **args). `ctx` is what the
-  gateway runs for: nothing for a command (its body finds the app itself), the guardian for its actions.
+- Handlers are found by kind: a write command's body (commands.by_kind), or a function registered with @handler,
+  called as handler(ctx, **args). `ctx` is what the gateway runs for: nothing for a command (its body finds the app
+  itself); the guardian for its position-pass actions (restore_stop, force_close, cap_stop, plan_step, pull_targets);
+  the EntryDesk for entry-row actions (entries_acts.py, orphans.sweep_symbol: submitted through the desk's own
+  gateway, EntryDesk.gw), whoever decided them: the guardian's fill poll, sweeps and reconciler, or a session's
+  watchdog (killswitch_ops.withdraw_resting).
 - Policy stays where it is (§4.1): vetoes, budget and sizing run inside the bodies, as before. The intent records the
   call and runs it.
 - One intent at a time per task: a submit inside a running intent is a bug, like nested symbol locks.
 - A resubmitted id never runs again: it answers the stored result, or "in progress" (unknown: never resend it).
   Only a busy intent (nothing sent: a symbol or the account lock was held) runs again under its id (§3.5).
 - The journal never makes the caller's event loop wait (#79): receipt and start are one unit the caller awaits before
-  anything runs (journal-first), the result a posted unit. A handler registered late_ok (the guardian's restore_stop,
-  force_close, cap_stop: protection before journal-first) waits at most CLAIM_WAIT_S for that unit while another
-  process holds the write lock, then runs anyway; its rows are posted, marked journal_late (intents.py)."""
+  anything runs (journal-first), the result a posted unit. A handler registered late_ok (LATE_OK: protection before
+  journal-first) waits at most CLAIM_WAIT_S for that unit while another process holds the write lock, then runs
+  anyway; its rows are posted, marked journal_late (intents.py)."""
 
 from __future__ import annotations
 
@@ -33,7 +36,18 @@ from .symlock import AccountBusy, SymbolBusy
 
 log = logging.getLogger("shortbot.gateway")
 HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {}
-LATE_OK: set[str] = set()   # kinds that run without their row while the journal is locked (protection, idempotent)
+# Kinds that run without their row while the journal is locked: protective, and every send idempotent. Each registers
+# itself (@handler(kind, late_ok=True)); test_guardian_intents pins the set:
+# - restore_stop: a closePosition stop, one per side, found before one is placed; bridges swept by client id.
+# - force_close: a reduce-only market close, re-checked under the lock (a stop now resting or a flat position: none).
+# - cap_stop: a tighter closePosition stop, decided again under the lock; one per side.
+# - protect_fill: a fill's whole-position stop (listed before it is placed), its pre-arm's cancel (Gone is done), its
+#   remainder's cancel (withdraw believes what filled), the plan stop (tighten only: a no-op at the same tick), the OCO
+#   siblings' cancels (rows by compare-and-set). A held lock must never delay a fill's stop.
+# - cancel_entry: one resting row withdrawn (cascade, cancel_below, the OCO sibling retry, a closed split's leg,
+#   expiry): re-read under the lock, compare-and-set; withdraw believes fills.
+# - withdraw_entries: the HALTED, governor, pause and resize sweeps and the session watchdog: as cancel_entry, per row.
+LATE_OK: set[str] = set()
 CLAIM_WAIT_S = 2.0          # how long a late_ok intent waits for its row first
 
 

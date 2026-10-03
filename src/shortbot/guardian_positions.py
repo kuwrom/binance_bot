@@ -3,7 +3,8 @@
 guardian_watch.py. Alert thresholds live here.
 
 A stop restore and a forced close are intents (#36 step 2, gateway.py), actor guardian:<job>: the pass decides, the
-handlers below run it (with the guardian as their context). The reconcile job also ends the intents of a process that
+handlers below run it (with the guardian as their context). So are the fill poll's, the sweeps' and the reconciler's
+sends (step 2b: entries_acts.py, through the desk's gateway). The reconcile job also ends the intents of a process that
 died mid-run (intents.sweep)."""
 
 from __future__ import annotations
@@ -15,14 +16,13 @@ import time
 from datetime import datetime
 
 from . import killswitch as ks
-from . import entry_gates, entry_intents, errors, intents, reconcile, stops, targets_sync
+from . import entry_gates, entry_intents, errors, intents, reconcile, stops
 from .exchange import to_raw
 from .gateway import handler
 from .guardian_loop import guarded, send_safe
 from .intents import Intent
 from .journal import Journal
 from .killswitch import ACTIVE, HALTED, REDUCING
-from .killswitch_ops import cancel_resting
 from .risk_budget import track_day_peak
 from .symlock import SymbolBusy
 
@@ -32,7 +32,6 @@ RESYNC_EVERY_S = 600
 FALLBACK_STOP_PCT = 10.0
 MAX_STOP_RESTORE_FAILS = 3
 UNTRACKED_GRACE_S = 120     # untracked this long (and no limit of ours resting on it) = reconciliation trip
-HALT_SWEEP_TIMEOUT_S = 60   # a hung cancel must not hold up the fill poll behind it
 ACCOUNT_TIMEOUT_S = 30      # the pass's account read (balance, positions, income): the fill poll waits behind it
 PNL_UNVERIFIED_PASSES = 3   # passes in a row without a day P&L (about 3 min) before REDUCING
 PNL_UNVERIFIED, PNL_KEY = "day_pnl_unverified", "day_pnl"   # the trip's cause; the streak's key
@@ -42,7 +41,7 @@ SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mod
 class PositionChecks:
     """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
     kill_seen, pnl_streak, pnl_tripped, user_stream, _heartbeat, _triggered, MarginChecks.margin_pass and
-    PlanChecks._run_plan."""
+    PlanChecks._run_plan / _settle_flat."""
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:
@@ -56,7 +55,7 @@ class PositionChecks:
             self._last_resync = time.time()
         t0, verified = time.time(), True   # protection is verified as of this read, not of the pass's end
         live = await tr.raw_positions()
-        await self._targets(targets_sync.settle_flat(tr, live))   # their fills first: a target exit reads as one (#65)
+        await self._targets(self._settle_flat(live))   # their fills first: a target exit reads as one (#65)
         try:   # journalling closed trades must never cost the stop checks below
             closed = await reconcile.reconcile(tr, live)
         except Exception as e:  # noqa: BLE001
@@ -265,7 +264,7 @@ class PositionChecks:
         if not self.ex.trade:
             return
         if state == HALTED:   # every pass: catches entries a session placed before it saw the trip
-            await self._halt_sweep()
+            await entry_gates.halt_sweep(self.entries, self.n)
         else:   # a governor halt or a market pause withdraws resting entries too (#12)
             await entry_gates.guardian_sweep(self.entries, self.n)
         for ev in await self.entries.poll():   # pending rows and sends of unknown outcome (#60)
@@ -320,23 +319,6 @@ class PositionChecks:
         """The state the previous guardian run last saw; unreadable = never seen."""
         st = ks._parse(self.j.get(self.j.mode_key(SEEN_KEY)))
         return {**st, "level": ks.LEVEL[st["state"]]} if st else None
-
-    async def _halt_sweep(self) -> None:
-        try:
-            r = await asyncio.wait_for(cancel_resting(self.entries, "kill switch HALTED (guardian sweep)"),
-                                       HALT_SWEEP_TIMEOUT_S)
-            if r["cancelled"]:
-                await send_safe(self.n, "kill_switch_sweep", f"HALTED: withdrew resting entries {r['cancelled']}"
-                                + (f"; left for the fill poll {r['left_for_fill_poll']}" if r["left_for_fill_poll"]
-                                   else ""), cooldown_s=0)
-            for x in self.entries._rows("status='external'"):   # not the desk's (maybe the owner's): never cancelled
-                await send_safe(self.n, f"external_while_halted:{x['order_id']}", f"external order {x['order_id']} on "
-                                f"{x['symbol']} ({x['amount']} @ {x['limit_price']}) still resting while HALTED; "
-                                "cancel it on Binance if it must not fill", x["symbol"], urgent=True, cooldown_s=3600)
-        except Exception as e:  # noqa: BLE001 (incl. TimeoutError) - the fill poll below must still run
-            log.exception("HALTED sweep failed")
-            await send_safe(self.n, "guardian_error:kill_switch", f"HALTED sweep: {type(e).__name__}: {e}",
-                            urgent=True, cooldown_s=1800)
 
     async def reconcile_entries(self) -> None:
         """Entry sends whose outcome the journal doesn't know, resolved by client id (entry_intents.py; it alerts), and
