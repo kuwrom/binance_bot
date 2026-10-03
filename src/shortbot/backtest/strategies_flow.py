@@ -178,9 +178,3 @@ def trials_flow() -> list[Trial]:
             + grid("ls_contrarian_short", ls_contrarian_short, {"z": [2.0, 3.0]})
             + grid("squeeze_fuel_long", squeeze_fuel_long, {"oi_up": [0.05, 0.10]})
             + grid("ls_contrarian_long", ls_contrarian_long, {"z": [-2.0, -3.0]}))
-
-
-LIB_IDS: dict[str, Any] = {
-    "long_trap_short": "lib.oi_price_funding_regime", "squeeze_fuel_long": "lib.oi_price_funding_regime",
-    "crowded_unwind_short": "lib.crowded_long_unwind_short", "ls_contrarian_short": "lib.ls_ratio_taker_contrarian",
-    "ls_contrarian_long": "lib.ls_ratio_taker_contrarian"}

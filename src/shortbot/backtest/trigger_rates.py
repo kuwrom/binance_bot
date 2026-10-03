@@ -9,7 +9,6 @@ def main() -> None:
     db = sqlite3.connect(f"file:{sys.argv[1] if len(sys.argv) > 1 else 'data/hist5m.db'}?mode=ro", uri=True)
     syms = [r[0] for r in db.execute("SELECT DISTINCT symbol FROM bars5")]
     M15 = 900_000
-    grid = None
     per = {}
     for s in syms:
         a = np.array(db.execute("SELECT ts, c, qv FROM bars5 WHERE symbol=? ORDER BY ts", (s,)).fetchall())

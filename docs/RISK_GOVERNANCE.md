@@ -98,4 +98,9 @@
   - Re-enable criteria are frozen at the stop (30 shadow episodes on ≥ 10 days, mean > 0, day-clustered t ≥ 1) and evaluated by code, never by the proposing agent.
   - A SHADOW setup is re-enabled only by the human, with `.venv/bin/shortbot-admin ladder-clear --setup X --reason ...` in a real terminal, and only once the frozen criteria pass (EU RTS 6 Art. 15(3), FIA 2024 §3.2). `shortbot-admin ladder-status` shows each setup's state and its criteria.
   - The setup returns at HALF.
+- **Epoch reset:**
+  - A journalled review can start a setup's ledger now: `.venv/bin/shortbot-admin ladder-reset --setup X --reason ...`. Human only (tty code). It records the old state, drawdown and high-water mark.
+  - Drawdown and high-water mark restart at 0.
+  - A SHADOW stop stays until `ladder-clear`.
+  - A new registry version resets the epoch on its own.
 - **Roll-up:** variants with daily-R correlation ≥ 0.5 over ≥ 20 common days, or ≥ 70% registry episode overlap, share the ladder.

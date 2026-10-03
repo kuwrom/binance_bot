@@ -7,6 +7,7 @@ from shortbot import clock, weight
 from shortbot.config import RiskLimits
 from shortbot.journal import Journal
 from shortbot.market import DataHub
+from shortbot.market import stream_read as R
 from shortbot.market import streams as S
 from shortbot.scanner import evaluate_tickers, log_scan
 from shortbot.signals import evaluate
@@ -156,21 +157,19 @@ def test_readers_never_return_rows_written_after_now(tmp_path):
              NOW)
     st.flush()
     p = tmp_path / "streams.db"
-    assert S.candles(SYM, "1h", 60, p, NOW, max_age_s=90) is not None
-    assert S.latest("mark", p, 120, NOW) and S.fresh_symbols("kline_1h", 90, p, NOW) == [RAW]
+    assert R.candles(SYM, "1h", 60, p, NOW, max_age_s=90) is not None
+    assert R.latest("mark", p, 120, NOW) and R.fresh_symbols("kline_1h", 90, p, NOW) == [RAW]
     past = NOW - 2 * H                                      # a replay two hours back: every row is from its future
-    assert S.candles(SYM, "1h", 60, p, past) is None       # closed bars that close after `past`
-    assert S.candles(SYM, "1h", 60, p, past, max_age_s=10 ** 6) is None
-    assert S.latest("mark", p, 10 ** 6, past) == {}
-    assert S.fresh_symbols("kline_1h", 10 ** 6, p, past) == []
-    assert S.stale("kline_1h", 10 ** 6, p, past) == [RAW]  # a future update is unusable now: stale
-    assert all(v["newest_s"] >= 0 for v in (S.freshness(p, past) or {}).values())
+    assert R.candles(SYM, "1h", 60, p, past) is None       # closed bars that close after `past`
+    assert R.candles(SYM, "1h", 60, p, past, max_age_s=10 ** 6) is None
+    assert R.latest("mark", p, 10 ** 6, past) == {}
+    assert R.fresh_symbols("kline_1h", 10 ** 6, p, past) == []
     with clock.at(past):                                     # the default "now" is the market clock
-        assert S.candles(SYM, "1h", 60, p) is None and S.latest("mark", p, 10 ** 6) == {}
+        assert R.candles(SYM, "1h", 60, p) is None and R.latest("mark", p, 10 ** 6) == {}
 
 
 def test_path_for_and_prune_count(tmp_path):
-    assert S.path_for(":memory:") is None and S.path_for("") is None and S.path_for(None) is None
-    assert S.path_for(tmp_path / "shortbot.db") == tmp_path / "streams.db"
+    assert R.path_for(":memory:") is None and R.path_for("") is None and R.path_for(None) is None
+    assert R.path_for(tmp_path / "shortbot.db") == tmp_path / "streams.db"
     st = fill(tmp_path, rows=bars(n=S.KEEP["1h"] + 30))
     assert st.prune(NOW) == 30 and st.prune(NOW) == 0

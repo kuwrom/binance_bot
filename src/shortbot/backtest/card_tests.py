@@ -37,7 +37,6 @@ from .. import cluster_se as C
 from .. import provenance as P
 from .carry_regime import DAY, STABLES, daily_funding
 
-H = 3_600_000
 
 
 def _t(xs: list[float]) -> float | None:

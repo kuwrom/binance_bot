@@ -152,7 +152,7 @@ def evaluate(bars15: dict[str, list[list[float]]], ticker: dict[str, dict[str, A
              listing_age_d: dict[str, float] | None = None, events: dict[str, str] | None = None,
              interval_h: dict[str, int] | None = None) -> list[Trigger]:
     """Every rule at a 15m close. bars15: candles(sym, "15m", ~120) per liquid coin (forming bar included);
-    ticker / mark: streams.latest(); liqs: recorded liquidations of the last hour per symbol."""
+    ticker / mark: stream_read.latest(); liqs: recorded liquidations of the last hour per symbol."""
     bars15, ticker, mark = _raw(bars15), _raw(ticker), _raw(mark)
     out: list[Trigger] = []
     for s, bars in bars15.items():

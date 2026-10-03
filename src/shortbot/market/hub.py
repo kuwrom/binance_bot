@@ -20,7 +20,7 @@ from typing import Any
 
 from .. import clock, weight
 from ..exchange import Exchanges, to_raw, to_symbol
-from . import streams
+from . import stream_read, streams
 
 _FUNDING_TTL = 60
 # How long a symbol's kline stream may have been quiet for its store candles to count, by the caller's weight class:
@@ -36,7 +36,7 @@ class DataHub:
         self._funding: tuple[float, dict, dict] | None = None
         self._funding_lock = asyncio.Lock()
         self.extensions: dict[str, Any] = {}   # optional feeds keyed by name
-        self.streams_db = streams.path_for(getattr(getattr(ex, "settings", None), "db_path", None))
+        self.streams_db = stream_read.path_for(getattr(getattr(ex, "settings", None), "db_path", None))
         try:  # guardian-recorded feeds (liquidations, social snapshots) live in the shared journal DB
             from .liquidations import LiquidationStore
             from .social import SocialStore
@@ -71,12 +71,12 @@ class DataHub:
     async def stream_candles(self, symbol: str, tf: str, limit: int,
                              max_age_s: float | None = None) -> list[list[float]] | None:
         """The store's bars when fresh for the caller (max_age_s, default by weight class), else None (use REST)."""
-        return await self._stream(streams.candles, symbol, tf, limit, max_age_s)
+        return await self._stream(stream_read.candles, symbol, tf, limit, max_age_s)
 
     async def stream_flow(self, symbol: str, tf: str, limit: int,
                           max_age_s: float | None = None) -> list[list[float]] | None:
         """[ts, o, h, l, c, v, taker_buy_vol] from the store when fresh and complete, else None (use REST)."""
-        return await self._stream(streams.flow_candles, symbol, tf, limit, max_age_s)
+        return await self._stream(stream_read.flow_candles, symbol, tf, limit, max_age_s)
 
     async def _stream(self, reader, symbol: str, tf: str, limit: int, max_age_s: float | None):
         if self.streams_db is None or tf not in streams.READABLE:

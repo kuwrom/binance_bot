@@ -1,9 +1,8 @@
-"""Round-1 backtest logic: failure-mode classifier and the pre-registered fixes (strategies_v2)."""
+"""Round-1 backtest logic: the pre-registered fixes (strategies_v2)."""
 
 import pytest
 
 from shortbot.backtest import strategies_v2 as v2
-from shortbot.backtest.failures import auc, failure_mode, mode_table, worked_after
 from shortbot.backtest.features import Market
 from shortbot.backtest.sim import Plan
 from shortbot.backtest.strategies import trials
@@ -11,38 +10,6 @@ from tests.test_backtest import T0, _synthetic, _truncate
 
 H = 3_600_000
 SAT = 1790380800000                   # 2026-09-26 00:00 UTC (a Saturday)
-
-
-def _t(**kw):
-    base = {"r": -1.0, "r_gross": -0.9, "funding_pct": 0.0, "fees_pct": 0.1, "slip_pct": 0.05, "reason": "stop",
-            "bars": 5, "mae_r": 1.0, "mfe_r": 0.2}
-    return {**base, **kw}
-
-
-def test_failure_modes_follow_the_documented_precedence():
-    assert failure_mode(_t(r=0.3)) == "win"
-    assert failure_mode(_t(r=-0.1, r_gross=0.05)) == "e_cost"
-    assert failure_mode(_t(r=-0.3, r_gross=0.0, funding_pct=-0.5)) == "f_funding"
-    assert failure_mode(_t(bars=1), worked=True) == "b_stop_then_worked"
-    assert failure_mode(_t(bars=1)) == "a_instant_squeeze"
-    assert failure_mode(_t(bars=6, reason="stop_gap")) == "h_stop_thesis_wrong"
-    assert failure_mode(_t(reason="time", r=-0.2, mae_r=0.3, mfe_r=0.4)) == "d_flat_time"
-    assert failure_mode(_t(reason="time", r=-0.4, mae_r=0.8, mfe_r=0.1)) == "h_time_drift"
-
-
-def test_worked_after_only_looks_at_the_window_after_the_exit():
-    rows = [{"l": 100.0} for _ in range(40)]
-    rows[5]["l"] = 90.0                                   # before the exit: ignored
-    assert not worked_after(rows, 10, 95.0)
-    rows[34]["l"] = 94.0                                  # 24h after the exit bar 10
-    assert worked_after(rows, 10, 95.0) and not worked_after(rows, 10, 95.0, hours=23)
-
-
-def test_mode_table_shares_sum_to_100_and_auc_is_rank_based():
-    tr = [{"r": -1.0, "mode": "a"}, {"r": -3.0, "mode": "b"}, {"r": 2.0, "mode": "win"}]
-    tab = mode_table(tr)
-    assert tab["b"]["share_pct"] == 75.0 and sum(v["share_pct"] for v in tab.values()) == pytest.approx(100)
-    assert auc([3, 4], [1, 2]) == 1.0 and auc([1, 2], [1, 2]) == 0.5 and auc([], [1]) is None
 
 
 def _coin(sym="AAA/USDT:USDT", n=60, tags=("Meme",), btc_ramp=0.0, prem=0.0, funding=None, taker=None, t0=T0):

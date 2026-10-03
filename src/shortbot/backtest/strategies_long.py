@@ -138,7 +138,3 @@ def trials_long() -> list[Trial]:
             + grid("oversold_bounce", oversold_bounce, {"drop": [0.07, 0.12]})
             + grid("capitulation", capitulation, {"drop7d": [0.30, 0.40], "time": [72, 168]})
             + grid("premium_discount", premium_discount, {"z": [-3.0, -4.0]}))
-
-
-LIB_IDS = {"flush_reclaim": "lib.long_liq_flush_reclaim_long", "oversold_bounce": "lib.oversold_bounce_majors",
-           "capitulation": "lib.capitulation_forced_selling_long", "premium_discount": "lib.premium_index_reversion"}

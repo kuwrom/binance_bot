@@ -5,7 +5,7 @@
 Each round has four steps. **Diagnose** only on in-sample trades, meaning entries before the window midpoint (2026-08-29 19:30 UTC). **Pre-register** at most 5 fixes, with thresholds written down here *before* any out-of-sample (OOS) run. **Run** every variant once. **Judge** each one with the same bar as `docs/BACKTEST.md`. Every variant is added to the trial ledger, so the Deflated Sharpe counts every idea ever tried.
 
 Code:
-- `backtest/failures.py`: the loss classifier.
+- `backtest/failures.py`: the loss classifier (removed 2026-10-03 as unused; in git at f142b6f).
 - `backtest/strategies_v2.py`: the variants and `ledger()`.
 - Run: `.venv/bin/python -m shortbot.backtest.run --days60 --round1 --out DIR`.
 - Tests: `tests/test_backtest_v2.py`.

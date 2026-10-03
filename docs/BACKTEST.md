@@ -12,7 +12,7 @@ walk-forward and a multiple-testing haircut. Read-only: it never touches the exc
 | `strategies.py`, `strategies_more.py` | pre-registered strategies + grids, placebos, random baseline |
 | `stats.py`, `report.py`, `run.py` | cluster t, drawdown, Deflated Sharpe, walk-forward, splits, markdown |
 | `../cluster_se.py`, `register_rows.py`, `../trial_register.py` | #31: the t of the pooled mean (day, coin, two-way); what each study records in the trial register; the register itself |
-| `failures.py`, `strategies_v2.py` | loss classifier + round-1 fixes (`--round1`); results and the improvement loop in `docs/FAILURES.md` |
+| `strategies_v2.py` | round-1 fixes (`--round1`); results and the improvement loop in `docs/FAILURES.md` (the loss classifier, `failures.py`, was removed 2026-10-03 as unused; it is in git at f142b6f) |
 | `strategies_v3.py`, `report_v3.py` | round 2 (`--round2`): breakdown entry types (limit / sell-stop / market), exit management, re-entry, funding budget |
 | `strategies_v4.py`, `report_v4.py` | round 3 (`--round3`): live vetoes as blocked vs allowed partitions, premium buckets, OI flush / squeeze events |
 | `placebo.py`, `trials_eff.py`, `report_v5.py` | round 4 (`--round4`): volatility/liquidity-matched same-hour placebo, effective-N Deflated Sharpe, corrections table ([failures/ROUND4.md](failures/ROUND4.md)) |

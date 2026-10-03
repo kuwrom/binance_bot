@@ -130,35 +130,6 @@ def flow_candles(symbol: str, tf: str, n: int, path: str | Path = DB_PATH, now_m
     return _read(symbol, tf, n, True, path, now_ms, max_age_s)
 
 
-def freshness(path: str | Path = DB_PATH, now_ms: int | None = None) -> dict[str, Any] | None:
-    """Per stream kind: {"symbols": n, "oldest_s": age, "newest_s": age} of the last updates (None: no file)."""
-    db = _ro(path)
-    if db is None:
-        return None
-    now = _now(now_ms)
-    try:
-        return {stream: {"symbols": n, "oldest_s": round((now - lo) / 1000), "newest_s": round((now - hi) / 1000)}
-                for stream, n, lo, hi in db.execute("SELECT stream, COUNT(*), MIN(ts), MAX(ts) FROM fresh "
-                                                    "WHERE ts <= ? GROUP BY stream", (now,))}
-    except sqlite3.Error:
-        return None
-    finally:
-        db.close()
-
-
-def stale(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int | None = None) -> list[str]:
-    """Symbols whose last `stream` update is older than max_age_s (or after now: unusable at now)."""
-    db = _ro(path)
-    if db is None:
-        return []
-    now = _now(now_ms)
-    try:
-        return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND (ts < ? OR ts > ?) "
-                                         "ORDER BY symbol", (stream, now - max_age_s * 1000, now))]
-    finally:
-        db.close()
-
-
 def fresh_symbols(stream: str, max_age_s: float, path: str | Path = DB_PATH, now_ms: int | None = None) -> list[str]:
     """Symbols whose last `stream` update is at most max_age_s old: what the collector is streaming right now."""
     db = _ro(path)

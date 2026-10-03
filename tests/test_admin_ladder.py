@@ -142,3 +142,47 @@ def test_ladder_commands_parse_and_stay_out_of_the_agent_cli():
     assert admin.parser().parse_args(["ladder-status"]).cmd == "ladder-status"
     with pytest.raises(SystemExit):
         admin.parser().parse_args(["ladder-clear", "--setup", "pump_fade"])     # a reason is required
+
+
+def reset(setup="pump_fade", reason="rules reviewed after the stop"):
+    return SimpleNamespace(cmd="ladder-reset", setup=setup, reason=reason)
+
+
+async def test_ladder_reset_needs_a_human_and_a_reason(monkeypatch):
+    j = shadowed()
+    before = j.get(KEY)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert "Claude Code" in (await admin.run(reset(), SETTINGS, j))["error"]
+    monkeypatch.delenv("CLAUDECODE")
+    assert "reason" in (await admin.run(reset(reason=" "), SETTINGS, j))["error"]
+    monkeypatch.setattr(admin, "_tty", lambda: Tty("ABCD"))
+    assert "did not match" in (await admin.run(reset(), SETTINGS, j))["error"]
+    assert j.get(KEY) == before
+
+
+async def test_ladder_reset_restarts_the_ledger_journals_old_values_and_keeps_the_shadow_stop(monkeypatch):
+    j = shadowed()
+    monkeypatch.setattr(admin, "_tty", lambda: Tty())
+    args = admin.parser().parse_args(["ladder-reset", "--setup", "pump_fade", "--reason", "rules changed"])
+    with audit.acting(f"admin:{args.cmd}"):
+        r = await admin.run(args, SETTINGS, j)
+    assert r["ok"] and r["epoch"] and r["old"]["state"] == "SHADOW" and r["state"] == "SHADOW"
+    assert "SHADOW stop stays" in Tty.shown
+    d = [x for x in j.decisions() if x["action"] == "setup_ladder_epoch_reset"][0]
+    snap = json.loads(d["snapshot"])
+    assert snap["old"]["dd_r"] is not None and snap["new_epoch"] == r["epoch"] and d["actor"] == "admin:ladder-reset"
+    assert json.loads(j.get(KEY))["log"][-1]["kind"] == "epoch_reset"
+    assert [a for a in j.alerts() if a["kind"] == "setup_ladder_epoch_reset"]
+
+
+async def test_ladder_reset_fails_if_the_ladder_changes_while_the_human_types(monkeypatch):
+    j = shadowed()
+
+    class Busy(Tty):
+        def readline(self, *a):
+            L.reset_epoch(j, "pump_fade", "someone", "concurrent review")
+            return super().readline()
+    monkeypatch.setattr(admin, "_tty", lambda: Busy())
+    r = await admin.run(reset(), SETTINGS, j)
+    assert not r["ok"] and "re-run" in r["error"]
+    assert [x for x in j.decisions() if x["action"] == "setup_ladder_epoch_reset"] == []

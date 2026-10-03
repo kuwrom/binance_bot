@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
     import time
     from .exchange import to_raw
     names = sys.argv[1:] if argv is None else argv
-    store = S.path_for(str(db_path().parent.parent / "shortbot.db"))
+    store = R.path_for(str(db_path().parent.parent / "shortbot.db"))
     now = int(time.time() * 1000)   # wall-clock: a live read
     for n in names:
         v = view(store, to_raw(n), now)

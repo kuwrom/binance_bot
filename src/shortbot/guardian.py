@@ -28,7 +28,7 @@ from .guardian_positions import PositionChecks
 from .guardian_watch import WatchChecks
 from .killswitch import HEARTBEAT_KEY
 from .margin import ADL_PERSIST_PASSES
-from .market import streams
+from .market import stream_read
 from .market.liquidations import LiquidationRecorder, LiquidationStore
 from .market.social import SocialStore
 from .notify import Notifier
@@ -101,7 +101,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self._fund_ts: dict[str, float] = {}
         self._tasks: list[asyncio.Task] = []
         self.lanes: dict[str, Lane] = {}
-        self.streams_db = streams.path_for(self.app.settings.db_path)   # None for an in-memory journal (tests)
+        self.streams_db = stream_read.path_for(self.app.settings.db_path)   # None for an in-memory journal (tests)
         self.tiered = TieredScan(self.ex, self.j, self.n, self.streams_db, self.app.settings.db_path)
 
     def _lanes(self) -> dict[str, Lane]:

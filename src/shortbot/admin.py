@@ -1,13 +1,15 @@
 """`shortbot-admin`: the HUMAN side of the kill switch (killswitch.py) and the setup ladder (setup_ladder.py).
 Loosening lives in this separate console script because the agent's allowlist, `Bash(.venv/bin/shortbot *)`,
-auto-approves every `shortbot` subcommand, so a `shortbot` subcommand can't tell the human from the agent. Three
+auto-approves every `shortbot` subcommand, so a `shortbot` subcommand can't tell the human from the agent. Four
 loosenings live here:
 - `clear`: lowers the state, and holds the loss trips at the readings it shows (killswitch_rearm.py) so they don't
   re-fire on the loss just reviewed;
 - `equity-peak reset`: moves the drawdown peak to today's live equity (equity_marks.reset_peak);
 - `ladder-clear --setup X`: re-enables a SHADOWed setup at half size (setup_ladder.reenable), and only when the
   criteria frozen at its stop pass on the shadow evidence since. Code evaluates them; the human's code is the
-  sign-off live mode needs (RTS 6 / FIA), never an override. `ladder-status` lists what a clear would get now.
+  sign-off live mode needs (RTS 6 / FIA), never an override. `ladder-status` lists what a clear would get now;
+- `ladder-reset --setup X`: a journalled review that starts the setup's ledger now (setup_ladder.reset_epoch;
+  docs/PROPOSALS.md P2): drawdown and high-water mark restart at 0. A SHADOW stop stays until ladder-clear.
 All swap only what the human confirmed: if it changed meanwhile, nothing changes and they re-run.
 
 Speed bumps and a tripwire, not a security boundary (an agent with a shell can still write the SQLite file):
@@ -16,7 +18,8 @@ Speed bumps and a tripwire, not a security boundary (an agent with a shell can s
   mode);
 - a real terminal: the confirmation code is read from /dev/tty, which Claude Code's Bash tool doesn't have, and
   it refuses to run when CLAUDECODE is set;
-- every change is journalled (`kill_switch_clear`, `equity_peak_reset`, `setup_ladder_clear`) and alerted, so a
+- every change is journalled (`kill_switch_clear`, `equity_peak_reset`, `setup_ladder_clear`,
+  `setup_ladder_epoch_reset`) and alerted, so a
   clear nobody typed gets noticed.
 """
 
@@ -90,6 +93,8 @@ async def run(args: argparse.Namespace, settings: Settings | None = None, journa
         return {"ok": True, "mode": s.mode, "setups": view.listing(j)}
     if args.cmd == "ladder-clear":
         return await ladder_clear(j, s, args.setup, args.reason)
+    if args.cmd == "ladder-reset":
+        return await ladder_reset(j, s, args.setup, args.reason)
     shown = j.get(ks.KV_KEY)   # the exact row the human confirms; the clear swaps only that row
     st = ks.read(j)
     if ks.LEVEL[args.to] >= st["level"]:
@@ -185,6 +190,42 @@ async def ladder_clear(j: Journal, s: Settings, setup: str, reason: str) -> dict
     return {**out, "setup": setup, "state": (risk_budget._ladder(j, setup) or {}).get("state")}
 
 
+async def ladder_reset(j: Journal, s: Settings, setup: str, reason: str) -> dict[str, Any]:
+    """Start the setup's ledger now: the P2 spec's journalled review (who, why, old / new high-water mark). Shows the
+    state it replaces and swaps only the ladder row the human saw; a SHADOW stop stays until ladder-clear."""
+    if not (reason or "").strip() or _under_claude():
+        return {"ok": False, "error": _under_claude() or "ladder-reset needs a --reason"}
+    old = risk_budget._ladder(j, setup) or {}
+    key = L.key(j, setup)
+    shown = j.get(key)
+    why = confirm(f"setup ladder {setup}: {old.get('state')}, drawdown {old.get('dd_r')}R, high-water mark "
+                  f"{old.get('hwm_r')}R since {old.get('epoch') or 'its first trade'}\n"
+                  f"start a new ledger now ({s.mode} mode): drawdown and high-water mark restart at 0"
+                  + (" (the SHADOW stop stays until ladder-clear)" if old.get("state") == "SHADOW" else ""))
+    if why:
+        return {"ok": False, "error": why}
+    by, note = _by(), reason.strip()
+    j.db.commit()
+    j.db.execute("BEGIN IMMEDIATE")   # check-and-reset under one write lock
+    try:
+        if j.get(key) != shown:
+            return {"ok": False, "error": f"the {setup} ladder changed while you were confirming: nothing changed, "
+                                          "re-run"}
+        out = L.reset_epoch(j, setup, by, note)   # its write commits
+    finally:
+        if j.db.in_transaction:
+            j.db.rollback()
+    before = {k: old.get(k) for k in ("state", "dd_r", "hwm_r", "cum_r", "epoch")}
+    new = risk_budget._ladder(j, setup) or {}
+    j.log_decision("setup_ladder_epoch_reset", f"{setup} ledger restarted by {by}: {note}", None,
+                   snapshot={"setup": setup, "mode": s.mode, "by": by, "old": before, "new_epoch": out["epoch"],
+                             "new": {k: new.get(k) for k in ("state", "dd_r", "hwm_r")}})
+    await ks.notify(j, s, "setup_ladder_epoch_reset", f"{setup} ledger restarted by {by} ({s.mode}): {note}. Was "
+                    f"{before['state']}, drawdown {before['dd_r']}R, high-water mark {before['hwm_r']}R",
+                    urgent=False)
+    return {"ok": True, "setup": setup, "epoch": out["epoch"], "old": before, "state": new.get("state")}
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="shortbot-admin", description="Human-only kill-switch, equity-peak and "
                                 "setup-ladder controls. Run it in your own terminal, not through Claude.")
@@ -204,6 +245,10 @@ def parser() -> argparse.ArgumentParser:
                                              "its stop pass (asks for a code on this terminal)")
     lc.add_argument("--setup", required=True)
     lc.add_argument("--reason", required=True, help="what you reviewed (the shadow evidence, why the stop fired)")
+    lr = sub.add_parser("ladder-reset", help="start a setup's ledger now: drawdown and high-water mark restart at 0 "
+                                             "(a SHADOW stop stays; asks for a code on this terminal)")
+    lr.add_argument("--setup", required=True)
+    lr.add_argument("--reason", required=True, help="what you reviewed (e.g. the rules changed, the losses explained)")
     sub.add_parser("ladder-status", help="every setup ladder: state, drawdown, its stop and what a clear would get now")
     return p
 

@@ -255,8 +255,8 @@ class MarketJobs:
         """Forward check of a per-rule tier-1 cadence (cadence_shadow.py, docs/SCANNING.md "Cadence"): logs the minutes
         two rules hold on live 1m bars. No deep scores, no alerts, no orders."""
         from . import cadence_shadow
-        from .market import streams
-        store = streams.path_for(self.app.settings.db_path)
+        from .market import stream_read
+        store = stream_read.path_for(self.app.settings.db_path)
         if store is not None and store.exists():
             r = await asyncio.to_thread(cadence_shadow.run, store, int(time.time() * 1000))
             log.debug("cadence shadow: %s", r)
@@ -264,8 +264,8 @@ class MarketJobs:
     async def mtf_views(self) -> None:
         """Every streamed coin's 5m/15m/1h/4h/1d state, logged once per 15m close (mtf_live.py). Local reads only."""
         from . import mtf_live
-        from .market import streams
-        store = streams.path_for(self.app.settings.db_path)
+        from .market import stream_read
+        store = stream_read.path_for(self.app.settings.db_path)
         if store is not None and store.exists():
             r = await asyncio.to_thread(mtf_live.run, store, int(time.time() * 1000))
             if r.get("logged"):

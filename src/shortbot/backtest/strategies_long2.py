@@ -83,6 +83,3 @@ def rs_leader_pullback(m: Market, coin: Coin, p: dict) -> Iterable[tuple[int, Pl
 def trials_long2() -> list[Trial]:
     return (grid("breakout_continuation", breakout_continuation, {"look": [72, 168], "time": [24, 72]})
             + grid("rs_leader_pullback", rs_leader_pullback, {"top": [5, 10]}))
-
-
-LIB_IDS = {"breakout_continuation": "lib.breakout_20d_overlay", "rs_leader_pullback": "lib.beta_hedged_rs_pair"}

@@ -13,6 +13,7 @@ import pytest
 from shortbot import guardian as gmod
 from shortbot import stream_task as T
 from shortbot import weight
+from shortbot.market import stream_read as R
 from shortbot.market import streams as S
 from tests.fakes import FakeCcxt
 from tests.test_guardian import guardian_with, kinds
@@ -101,7 +102,7 @@ async def test_the_real_collector_fills_the_store_from_its_thread(tmp_path):
         return S.StreamCollector(store, symbols, connect=lambda url: Socket(), backfill=backfill)
     ex, db = Ex({A: 6e6}), tmp_path / "streams.db"
     task = asyncio.create_task(T.StreamTask(ex, db, collector=collector).run())
-    await until(lambda: S.fresh_symbols("kline_15m", 90, db) == ["AAAUSDT"] and S.latest("mark", db), timeout=5)
+    await until(lambda: R.fresh_symbols("kline_15m", 90, db) == ["AAAUSDT"] and R.latest("mark", db), timeout=5)
     await until(lambda: any(s[0] == "klines" for s in ex.seen))     # the gap backfill, via the guardian's loop
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -224,7 +225,7 @@ async def test_a_dead_socket_never_slows_the_protective_lane(monkeypatch, tmp_pa
 
 async def test_no_stream_task_or_scan_for_an_in_memory_journal(monkeypatch):
     g = fast_guardian(monkeypatch)
-    assert g.streams_db is None and S.path_for(":memory:") is None
+    assert g.streams_db is None and R.path_for(":memory:") is None
     task = asyncio.create_task(g.run())
     await asyncio.sleep(0.05)
     task.cancel()

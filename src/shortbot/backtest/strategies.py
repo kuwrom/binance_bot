@@ -20,7 +20,6 @@ from .sim import Plan
 
 WARMUP = 72                  # bars of history before any entry (72h beta / features)
 MIN_VOL24 = 1e6              # tradability floor at the signal ($ 24h quote volume); run.py --min-vol24 sets it (#73)
-LEGACY_MIN_VOL24 = 1e6       # the floor of rounds 0-4
 FADE_TARGETS = ((1.0, 0.5), (2.0, 0.5))   # (R multiple, fraction): half at 1R, rest at 2R
 ASIA_LATE_WKND = ("asia", "late")         # + every *_wknd bucket
 

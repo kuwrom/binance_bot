@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from shortbot.market import stream_read as R
 from shortbot.market import streams as S
 
 M15 = S.TF_MS["15m"]
@@ -58,10 +59,10 @@ def test_parses_all_market_and_kline_messages(tmp_path):
                                                      "h": "105", "l": "95"}]}, T0)
     assert S.handle(st, {"stream": "x", "data": {}}, T0) is None
     st.flush()
-    m = S.latest("mark", p, now_ms=T0)["BTCUSDT"]
+    m = R.latest("mark", p, now_ms=T0)["BTCUSDT"]
     assert m["premium"] == pytest.approx(0.01) and m["funding"] == 0.0001
-    assert S.latest("ticker", p, now_ms=T0)["BTCUSDT"]["pct"] == 5.5
-    assert S.latest("ticker", p, now_ms=T0 + 200_000) == {}            # older than max_age_s
+    assert R.latest("ticker", p, now_ms=T0)["BTCUSDT"]["pct"] == 5.5
+    assert R.latest("ticker", p, now_ms=T0 + 200_000) == {}            # older than max_age_s
 
 
 def test_candles_fresh_gapped_and_stale(tmp_path):
@@ -71,17 +72,15 @@ def test_candles_fresh_gapped_and_stale(tmp_path):
     S.handle(st, kmsg("ETHUSDT", T0 + 5 * M15, 15, False), T0 + 5 * M15 + 1000)
     st.flush()
     now = T0 + 5 * M15 + 2000
-    got = S.candles("ETH/USDT:USDT", "15m", 4, p, now_ms=now)
+    got = R.candles("ETH/USDT:USDT", "15m", 4, p, now_ms=now)
     assert [r[0] for r in got] == [T0 + i * M15 for i in (2, 3, 4, 5)] and got[-1][4] == 15
-    assert S.candles("ETHUSDT", "15m", 7, p, now_ms=now) is None        # window longer than the data
-    assert S.candles("ETHUSDT", "15m", 4, p, now_ms=now + 3 * M15) is None   # stale: last close 3 bars old
+    assert R.candles("ETHUSDT", "15m", 7, p, now_ms=now) is None        # window longer than the data
+    assert R.candles("ETHUSDT", "15m", 4, p, now_ms=now + 3 * M15) is None   # stale: last close 3 bars old
     st.db.execute("DELETE FROM candles WHERE ts=?", (T0 + 3 * M15,))
     st.db.commit()
-    assert S.candles("ETHUSDT", "15m", 4, p, now_ms=now) is None        # a gap inside the window
-    assert S.candles("ETHUSDT", "15m", 2, p, now_ms=now) is not None    # the gap is outside a short window
-    assert S.candles("ETHUSDT", "15m", 4, tmp_path / "missing.db") is None
-    assert S.stale("kline_15m", 60, p, now_ms=now + 120_000) == ["ETHUSDT"]
-    assert S.freshness(p, now_ms=now)["kline_15m"]["symbols"] == 1
+    assert R.candles("ETHUSDT", "15m", 4, p, now_ms=now) is None        # a gap inside the window
+    assert R.candles("ETHUSDT", "15m", 2, p, now_ms=now) is not None    # the gap is outside a short window
+    assert R.candles("ETHUSDT", "15m", 4, tmp_path / "missing.db") is None
 
 
 def test_disconnect_then_gap_backfill_once(tmp_path):
@@ -109,7 +108,7 @@ def test_disconnect_then_gap_backfill_once(tmp_path):
     with pytest.raises(ConnectionError):
         asyncio.run(col.run_one(names))
     assert calls == [("SOL/USDT:USDT", "15m", T0 + 2 * M15, S.BACKFILL["15m"])]   # only the missing bars
-    got = S.candles("SOLUSDT", "15m", 6, p, now_ms=later)
+    got = R.candles("SOLUSDT", "15m", 6, p, now_ms=later)
     assert [r[0] for r in got] == [T0 + i * M15 for i in range(6)] and got[-1][4] == 15
     asyncio.run(col.fill_gaps(col.symbols))
     assert len(calls) == 1                                               # no gap left, nothing re-fetched
@@ -120,14 +119,17 @@ def test_failed_backfill_is_not_retried_and_leaves_none(tmp_path):
     clock = Clock()
     clock.t = (T0 + 10 * M15) / 1000
 
+    calls = []
+
     async def boom(*a):
+        calls.append(a)
         raise TimeoutError("rest down")
 
     col = S.StreamCollector(st, ["XRPUSDT"], tfs=("15m",), backfill=boom, clock=clock)
     asyncio.run(col.fill_gaps(col.symbols))
     asyncio.run(col.fill_gaps(col.symbols))
-    assert col.backfill_calls == 1
-    assert S.candles("XRPUSDT", "15m", 3, p, now_ms=T0 + 10 * M15) is None
+    assert len(calls) == 1
+    assert R.candles("XRPUSDT", "15m", 3, p, now_ms=T0 + 10 * M15) is None
 
 
 def test_groups_respect_the_stream_cap():

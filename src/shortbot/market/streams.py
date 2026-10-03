@@ -21,7 +21,7 @@ taker-buy base and quote volumes, so the flow features read the store too.
 After each (re)connect, a (symbol, tf) whose last closed bar is older than the previous bar is backfilled once over
 REST, to the depth its readers use (BACKFILL, weight 1-2 per call).
 
-    readers: candles(symbol, tf, n), flow_candles(symbol, tf, n) -> rows or None when not fresh or gapped
+    readers (market/stream_read.py): candles(symbol, tf, n), flow_candles(symbol, tf, n) -> rows or None
 """
 
 from __future__ import annotations
@@ -189,7 +189,6 @@ class StreamCollector:
         self.connect, self.backfill, self.clock = connect, backfill, clock
         self.counts: dict[str, int] = {}
         self.backfilled: set[tuple[str, str, int]] = set()
-        self.backfill_calls = 0
 
     def _symbols_of(self, names: list[str]) -> list[str]:
         ids = {n.split("@")[0].upper() for n in names if "@kline_" in n}
@@ -204,7 +203,6 @@ class StreamCollector:
             if (s, tf, since) in self.backfilled:
                 continue
             self.backfilled.add((s, tf, since))
-            self.backfill_calls += 1
             try:
                 n += self.store.bars(s, tf, await self.backfill(s, tf, since, BACKFILL[tf]),
                                      int(self.clock() * 1000))
@@ -258,12 +256,3 @@ class StreamCollector:
 def _ssl() -> ssl.SSLContext:
     import truststore   # the OS trust store, like market/liquidations.py
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-
-
-# ------------------------------------------------------------------ readers: stream_read.py (re-exported here)
-from .stream_read import (  # noqa: E402  (stream_read imports this module's constants)
-    candles, flow_candles, fresh_symbols, freshness, latest, path_for, stale)
-
-__all__ = ["BACKFILL", "DERIVED", "KEEP", "READABLE", "TFS", "TF_MS", "StreamCollector", "StreamStore", "candles",
-           "flow_candles", "fresh_symbols", "freshness", "gaps", "groups", "handle", "latest", "path_for", "raw_id",
-           "stale"]

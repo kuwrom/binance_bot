@@ -36,7 +36,7 @@ from . import clock, scan_job, weight
 from . import scan_triggers as TR
 from .exchange import NO_DELIVERY, to_symbol
 from .guardian_loop import send_safe
-from .market import streams
+from .market import stream_read, streams
 from .market.liquidations import raw_to_ccxt, recent_many
 
 log = logging.getLogger("shortbot.scan")
@@ -59,17 +59,17 @@ def snapshot(streams_db: Path | str, journal_db: Path | str | None, now_ms: int,
              bars_for: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Tier-1 inputs as of now_ms (blocking reads: run it in a thread). The universe is the coins whose 15m kline
     stream is live; bars_for limits the bar reads (the fast path needs BTC and ETH only)."""
-    universe = streams.fresh_symbols("kline_15m", FRESH_S, streams_db, now_ms)
+    universe = stream_read.fresh_symbols("kline_15m", FRESH_S, streams_db, now_ms)
     live = set(universe)
     bars15 = {}
     for s in (universe if bars_for is None else [s for s in bars_for if s in live]):
-        b = (streams.candles(s, "15m", BARS15, streams_db, now_ms, FRESH_S)
-             or streams.candles(s, "15m", BARS15_MIN, streams_db, now_ms, FRESH_S))
+        b = (stream_read.candles(s, "15m", BARS15, streams_db, now_ms, FRESH_S)
+             or stream_read.candles(s, "15m", BARS15_MIN, streams_db, now_ms, FRESH_S))
         if b:
             bars15[s] = b
 
     def pick(kind: str) -> dict[str, Any]:
-        return {s: v for s, v in streams.latest(kind, streams_db, FRESH_S, now_ms).items() if s in live}
+        return {s: v for s, v in stream_read.latest(kind, streams_db, FRESH_S, now_ms).items() if s in live}
     liqs = recent_many(journal_db, [raw_to_ccxt(s) for s in universe], now_ms - H1, now_ms) if journal_db else {}
     return {"universe": universe, "bars15": bars15, "ticker": pick("ticker"), "mark": pick("mark"), "liqs": liqs}
 
