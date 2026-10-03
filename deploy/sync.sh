@@ -7,6 +7,6 @@ KEY=${2:-}
 SSH="ssh${KEY:+ -i $KEY}"
 rsync -az --delete -e "$SSH" \
   --exclude .venv --exclude .env --exclude data --exclude .git --exclude __pycache__ --exclude .pytest_cache \
-  --exclude .ruff_cache --exclude '.fuse_hidden*' --exclude .claude/settings.local.json \
+  --exclude .ruff_cache --exclude '.fuse_hidden*' --exclude .claude/settings.local.json --exclude .claude/worktrees \
   "$(dirname "$0")/../" "$HOST:~/binance_bot/"
 echo "synced. On the server: cd ~/binance_bot && docker compose up -d --build"
