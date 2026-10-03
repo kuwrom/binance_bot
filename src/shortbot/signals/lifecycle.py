@@ -21,7 +21,7 @@ def stage_of(age_d: float | None, delisting: bool, monitoring: bool, unlock_soon
     m30 = d1[-30:]
     hi30, lo30 = (max(c[2] for c in m30), min(c[3] for c in m30)) if m30 else (None, None)
     ath = max((c[2] for c in d1), default=None)   # high since listing, or over the last 200 days
-    ret = lambda n: (last / closes[-n - 1] - 1) * 100 if last and len(closes) > n and closes[-n - 1] else None  # noqa
+    ret = lambda n: (last / closes[-n - 1] - 1) * 100 if last and len(closes) > n and closes[-n - 1] else None  # noqa: E731
     nums = {"lc_dd_from_high_pct": round((1 - last / ath) * 100, 1) if last and ath else None,
             "lc_ret_1d_pct": _r(ret(1)), "lc_ret_7d_pct": _r(ret(7)), "lc_ret_30d_pct": _r(ret(30)),
             "lc_pump_multiple_30d": round(hi30 / lo30, 2) if hi30 and lo30 else None,

@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import types
+import zlib
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -135,7 +136,7 @@ def test_tampered_backup_and_corrupt_database_are_refused(tmp_path):
     with pytest.raises(B.BackupError, match="sha256"):
         B.restore(f, tmp_path / "r.db")
     R.manifest_of(f).unlink()                       # without its manifest the gzip CRC still catches it
-    with pytest.raises(Exception):
+    with pytest.raises((gzip.BadGzipFile, zlib.error)):
         B.restore(f, tmp_path / "r.db")
     assert not (tmp_path / "r.db").exists() and not (tmp_path / "r.db.partial").exists()
 

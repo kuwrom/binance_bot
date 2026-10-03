@@ -26,7 +26,6 @@ from __future__ import annotations
 import bisect
 import statistics
 from collections.abc import Iterable
-from typing import Any
 
 from .features import Coin, Market, _extra_at
 from .sim import H, Plan

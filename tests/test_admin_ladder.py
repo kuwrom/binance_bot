@@ -126,7 +126,8 @@ async def test_ladder_clear_fails_if_the_ladder_changes_while_the_human_types(mo
 
 async def test_ladder_status_lists_every_ladder_and_the_reenable_evidence():
     j = shadowed(episodes=GOOD[:29])
-    j.closed_results = lambda all_modes=False, rs=rows([2] + [-1] * 13) + rows([1, 1], "funding_hi", 5): rs
+    rs = rows([2] + [-1] * 13) + rows([1, 1], "funding_hi", 5)
+    j.closed_results = lambda all_modes=False: rs
     r = await admin.run(SimpleNamespace(cmd="ladder-status"), SETTINGS, j)
     assert r["ok"] and r["mode"] == "demo" and set(r["setups"]) == {"pump_fade", "funding_hi"}
     pf, fh = r["setups"]["pump_fade"], r["setups"]["funding_hi"]

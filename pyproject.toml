@@ -18,7 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pyflakes>=3"]
+# exact versions in uv.lock: a ruff or mypy bump can bring new findings, so it moves deliberately (`uv lock -P ruff`)
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.16.10", "mypy>=2.4.0"]
 
 [project.scripts]
 shortbot = "shortbot.cli:main"
@@ -39,3 +40,39 @@ environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]   # lapto
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+# ---------------------------------------------------------------- lint (scripts/check lint; #43)
+# https://docs.astral.sh/ruff/settings/. target-version comes from requires-python.
+[tool.ruff.lint]
+# Listed, never the built-in default: ruff 0.16's is 416 rules (524 findings on 0f0f45d) and it changes between releases.
+select = [
+    "F",        # pyflakes (replaces `uvx pyflakes`; honours the registration `# noqa: F401` in signals/__init__.py)
+    "E9",       # syntax and IO errors
+    "B",        # bugbear
+    "PGH004",   # a noqa names its rule
+    "RUF006",   # an asyncio task dropped before it finishes
+    "DTZ",      # naive datetimes
+    "T10",      # a debugger left in
+    "G",        # logging calls format lazily
+]
+# zip() without strict= (69 sites): strict=True raises on a length mismatch, a behaviour change decided per site
+ignore = ["B905"]
+# `# noqa: BLE001 - <reason>` is the #37 lint's syntax (tests/test_error_lint.py: alert or re-raise), not ruff's
+# BLE001 (re-raise or logging.exception): ruff calls 40 of those reasons unused, and RUF100 --fix would delete them.
+external = ["BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Known findings, kept on for every other file (cleanup commit after #36 step 2: noqa per line or a rename, then drop).
+# B023: each closure is called in the loop iteration that defines it, so it sees the right value (18, checked by hand).
+"src/shortbot/backtest/strategies.py" = ["B023"]
+"src/shortbot/backtest/strategies_more.py" = ["B023"]
+"src/shortbot/histdata.py" = ["B023"]
+"src/shortbot/patterns.py" = ["B023"]
+"tests/test_liq_stops.py" = ["B023"]
+# B007: an unused loop variable (6): cosmetic
+"src/shortbot/backtest/hedge_report.py" = ["B007"]
+"src/shortbot/backtest/trigger_rates.py" = ["B007"]
+"src/shortbot/cadence_shadow.py" = ["B007"]
+"src/shortbot/lifecycle_report.py" = ["B007"]
+"src/shortbot/signals/social.py" = ["B007"]
+"tests/test_day_pnl.py" = ["B007"]
