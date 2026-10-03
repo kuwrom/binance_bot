@@ -226,7 +226,37 @@ Mark and premium klines have no kline stream. Building them from `!markPrice@arr
 
 **Expected tier-2 cost:** ~20 weight per coin, down from ~29. The 1d, 4h, 5m / 1m / 15m / 1h flow and 1h candle reads move to the store. Confirm from `scan_windows.tier2_weight` after the restart, then re-set `TIER2_CAP`.
 
-**Cadence (next, task #40):** tier 1 still evaluates at 15m closes, with the fast events every 15 s. With 1m bars in the store, the same rules can run on windows ending at every minute. The replay's latency cost says that should pay. The pre-registered study on 93 days of 1m replay bars decides the cadence before it is wired.
+## Cadence: how often tier 1 runs (task #40, 2026-10-03)
+`backtest/cadence_study.py` evaluated the bar rules every 1, 5 and 15 minutes, on 15m windows aligned to the evaluation minute. Data: the replay's 1m perp bars, 180 coins, 93 days.
+
+An episode is a (coin, rule) trigger after 60 quiet minutes. Lead is how much earlier than the 15-minute cadence it fires. A transient is an episode no 15-minute evaluation sees within 60 minutes: a spike that reverts first.
+
+| rule | episodes/day 1m / 5m / 15m | median lead 1m / 5m | transients 1m / 5m |
+|---|---|---|---|
+| move_1h | 554 / 470 / 370 | 8 / 5 min | **40% / 25.1%** |
+| move_4h | 238 / 206 / 171 | 9 / 5 min | 36% / 22% |
+| volume_surge | 436 / 420 / 397 | 8 / 5 min | 14% / 9% |
+| lower_high_after_pump | 122 / 113 / 100 | 7 / 5 min | 20% / 13% |
+
+New episodes per 15 minutes (the tier-2 load):
+
+| cadence | mean | p95 | p99 |
+|---|---|---|---|
+| 1m | 14.1 | 32 | 71 |
+| 5m | 12.6 | 29 | 67 |
+| 15m | 10.8 | 25 | 59 |
+
+**Pre-registered decision: keep 15 minutes.**
+- The rule: 1m if the median lead ≥ 5 min, every rule's transients ≤ 25% and the p95 load ≤ 30; else 5m with a lead ≥ 3 min; else 15m.
+- 1m fails on transients (40%) and load (32).
+- 5m misses by a hair: move_1h transients are 25.1%.
+- The fast events (liquidation bursts, premium spikes, the BTC/ETH impulse) still run every 15 s.
+
+**Post hoc:**
+- The price-move rules are the noisy ones.
+- volume_surge and lower_high_after_pump pass every threshold even at 1m: a 7-8 min lead with 14-20% transients. lower_high_after_pump is the pump-fade trigger, the setup whose entries lose 0.022 R per 5 minutes of delay.
+- Choosing per rule after seeing the pooled result would be a researcher degree of freedom. So the per-rule cadence is a hypothesis.
+- It is being checked forward: the two rules evaluated every minute on live data, logged, not acted on, and judged on the same thresholds after 2 weeks.
 
 ## Tier-2 order book: depth stays at limit 500 (measured 2026-10-02)
 The depth signal (`signals/depth.py`) sums the book within ±1% of mid. A 500-level book costs 10 weight; 100 levels cost 5. Of the ~29 weight a deep score costs (binance-bot-99's #72 measurement), 10 is the book.
