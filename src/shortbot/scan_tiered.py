@@ -11,9 +11,11 @@ Each tick (guardian.SCAN):
 - Tier 2 deep-scores as many selected coins as fit weight.tier2_room() at the measured weight per coin (an EWMA from
   the prior EST_COIN_WEIGHT). The rest queue for the next close, and so does a coin the weight guard starved
   (data_deferred).
-- Tier 3: scan_job.score_and_alert logs the research candidates and picks alerts.
+- Tier 3: scan_job.score_and_alert picks alerts.
 - Every close, and every fast window that fired, writes a scan_windows row to the journal DB: counts per rule,
-  selected, scored, queued, skipped and the tier-2 weight spent. The triggers are evaluated from these rows.
+  selected, scored, queued, skipped and the tier-2 weight spent. The triggers are evaluated from these rows. The row
+  and its batch's research candidates, brackets and alert markers are one unit (#79): all or nothing, and the event
+  loop never waits for the write lock.
 
 Tier-1 data comes from the stream store, the recorded liquidations and the unlock calendar, read in worker threads:
 no exchange calls, no SQLite on the event loop (#78).
@@ -78,6 +80,7 @@ def snapshot(streams_db: Path | str, journal_db: Path | str | None, now_ms: int,
 class TieredScan:
     def __init__(self, ex, journal, notifier, streams_db: Path | None, journal_db: Path | str | None):
         self.ex, self.j, self.n = ex, journal, notifier
+        journal.db.execute(SCHEMA)   # here, never inside a window's unit
         self.streams_db, self.journal_db = streams_db, journal_db
         self.now_ms: Callable[[], int] = clock.now_ms
         self.window: int | None = None                  # the last 15m window evaluated in full
@@ -159,18 +162,12 @@ class TieredScan:
                "selected": [{k: c[k] for k in ("symbol", "strength", "rules")} for c in sel["selected"]],
                "scored": [c["symbol"] for c in done], "queued": [c["symbol"] for c in later],
                "skipped": sel["skipped"], "tier2_weight": spent}
-        self._record(row)
+        await self.j.write(_journal_window, res, row)   # the batch's rows and its window: one unit (#79)
         log.info("scan %s: %d coins, triggers %s; selected %d, scored %d, queued %d, skipped %d; tier 2 spent %.0f "
                  "weight (~%.1f/coin)", kind, row["coins"], counts or "none", len(sel["selected"]), len(done),
                  len(later), len(sel["skipped"]), spent, self.est)
         return {**row, "alerts": len(res["alerts"])}
 
-    def _record(self, row: dict[str, Any]) -> None:
-        self.j.db.execute(SCHEMA)
-        self.j.db.execute("INSERT INTO scan_windows VALUES (?,?,?,?,?,?,?,?,?)",
-                          (row["ts_ms"], row["kind"], row["coins"], *(json.dumps(row[k]) for k in
-                           ("counts", "selected", "scored", "queued", "skipped")), row["tier2_weight"]))
-        self.j.db.commit()
 
     def _recent(self, now: int) -> dict[str, set[str]]:
         self.scored = {s: v for s, v in self.scored.items() if now - v[0] < TR.RESCORE_S * 1000}
@@ -250,6 +247,15 @@ class TieredScan:
             except Exception as e:  # noqa: BLE001 - 8h for all until the next try
                 log.warning("funding intervals: %s: %s", type(e).__name__, e)
         return self._intervals_at[1]
+
+
+def _journal_window(j, res: dict[str, Any], row: dict[str, Any]) -> None:
+    """One window, one unit: its tier-2 batch's candidates, brackets and alert markers (scan_job.journal_batch), then
+    its scan_windows row. All or nothing: a window is never half-logged."""
+    scan_job.journal_batch(j, res)
+    j.db.execute("INSERT INTO scan_windows VALUES (?,?,?,?,?,?,?,?,?)",
+                 (row["ts_ms"], row["kind"], row["coins"], *(json.dumps(row[k]) for k in
+                  ("counts", "selected", "scored", "queued", "skipped")), row["tier2_weight"]))
 
 
 def _dedupe(trig: list[TR.Trigger]) -> list[TR.Trigger]:

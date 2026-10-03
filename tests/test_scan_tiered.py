@@ -219,6 +219,7 @@ async def test_score_and_alert_runs_tier2_logs_complete_rows_and_requeues_starve
                                        {"tier": 2, "wake": "close"},
                                        {"A/USDT:USDT": {"rules": ["move_1h"], "strength": 2.0, "carried": False}},
                                        now_s=1000.0)
+        await j.write(SJ.journal_batch, out)                  # written with its window (scan_tiered, #79)
     assert seen["cls"] == weight.TIER2
     assert out["scored"] == ["A/USDT:USDT"] and out["deferred"] == ["B/USDT:USDT"]
     logged = j.candidates(limit=10)
@@ -246,10 +247,12 @@ async def test_alert_dedup_survives_a_restart_and_housekeeping_prunes_it(monkeyp
     monkeypatch.setattr(scanner, "evaluate_tickers", fake_eval)
     j = Journal(":memory:")
     t0 = time.time()
-    first = await SJ.score_and_alert(None, j, [{"symbol": "A/USDT:USDT"}], "caution", {"tier": 2}, now_s=t0)
-    again = await SJ.score_and_alert(None, j, [{"symbol": "A/USDT:USDT"}], "caution", {"tier": 2}, now_s=t0 + 600)
-    later = await SJ.score_and_alert(None, j, [{"symbol": "A/USDT:USDT"}], "caution", {"tier": 2},
-                                     now_s=t0 + SJ.RENOTIFY_S + 1)
+
+    async def scored(now_s):
+        out = await SJ.score_and_alert(None, j, [{"symbol": "A/USDT:USDT"}], "caution", {"tier": 2}, now_s=now_s)
+        await j.write(SJ.journal_batch, out)
+        return out
+    first, again, later = await scored(t0), await scored(t0 + 600), await scored(t0 + SJ.RENOTIFY_S + 1)
     assert len(first["alerts"]) == 1 and again["alerts"] == [] and len(later["alerts"]) == 1
     g = guardian_with(FakeCcxt())
     g.j.set(SJ.KV_SEEN + "OLD/USDT:USDT", f"{time.time() - SJ.RENOTIFY_S - 60} 40")

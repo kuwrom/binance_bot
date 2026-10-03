@@ -59,19 +59,30 @@ def load_seen(journal, symbols: list[str], now_s: float) -> dict[str, dict[str, 
 async def score_and_alert(ex, journal, tickers: list[dict[str, Any]], regime: str, scan: dict[str, Any],
                           by_symbol: dict[str, dict[str, Any]] | None = None,
                           now_s: float | None = None) -> dict[str, Any]:
-    """Tiers 2-3 (docs/SCANNING.md, #72): deep-score these coins as TIER2 (its own weight cap), log each complete row
-    as a research candidate (features.scan = the window's wake plus the coin's triggers) and pick alerts.
+    """Tiers 2-3 (docs/SCANNING.md, #72): deep-score these coins as TIER2 (its own weight cap) and pick alerts; the
+    batch's rows are written by `journal_batch`, in one unit with its scan window (scan_tiered.py, #79).
     A coin whose inputs the weight guard held back (data_deferred) isn't logged: it comes back in `deferred` for the
     caller to requeue. Alert dedup lives in kv (KV_SEEN), so a guardian restart doesn't re-alert within RENOTIFY_S."""
     from . import scanner, weight
     with weight.tagged(weight.TIER2, wait_s=TIER2_WAIT_S):
         evals, rows = await scanner.evaluate_tickers(ex, tickers)
     done = [(ev, row) for ev, row in zip(evals, rows) if not ev.features.get("data_deferred")]
-    scanner.log_scan(journal, [ev for ev, _ in done], [row for _, row in done], regime, scan, by_symbol)
     now = now_s if now_s is not None else time.time()
     seen = load_seen(journal, [row["symbol"] for _, row in done], now)
     alerts = pick_alerts([row for _, row in done], regime, seen, now)
-    for a in alerts:
-        journal.set(KV_SEEN + a["symbol"], f"{now} {a['score']}")
     return {"scored": [ev.symbol for ev, _ in done], "alerts": alerts,
-            "deferred": [ev.symbol for ev in evals if ev.features.get("data_deferred")]}
+            "deferred": [ev.symbol for ev in evals if ev.features.get("data_deferred")],
+            "log": {"evals": [ev for ev, _ in done], "rows": [row for _, row in done], "regime": regime, "scan": scan,
+                    "by_symbol": by_symbol, "now": now}}
+
+
+def journal_batch(journal, res: dict[str, Any]) -> None:
+    """A scored batch's rows, inside the caller's unit: each complete row a research candidate (features.scan = the
+    window's wake plus the coin's triggers) with its research bracket, and each alert's dedup marker."""
+    log = res.get("log")
+    if not log:
+        return
+    from . import scanner
+    scanner.log_scan(journal, log["evals"], log["rows"], log["regime"], log["scan"], log["by_symbol"])
+    for a in res["alerts"]:
+        journal.set(KV_SEEN + a["symbol"], f"{log['now']} {a['score']}")
