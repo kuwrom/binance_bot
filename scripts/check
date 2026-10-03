@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# The checks CI runs (.github/workflows/ci.yml calls this file, one step each), from uv.lock, in this order:
+#   sync   uv sync --locked --extra dev   (the venv = uv.lock exactly; fails if the lock is stale)
+#   lint   ruff check                     ([tool.ruff] in pyproject.toml)
+#   types  mypy                           ([tool.mypy]: strict tier, lenient tier, debt list)
+#   test   pytest -q
+# Usage: scripts/check [step...]   (no step: all four)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+[ $# -gt 0 ] || set -- sync lint types test
+for step in "$@"; do
+  echo "== $step"
+  case "$step" in
+    sync)  uv sync --locked --extra dev ;;
+    lint)  uv run --no-sync ruff check ;;
+    types) uv run --no-sync mypy ;;
+    test)  uv run --no-sync pytest -q ;;
+    *) echo "unknown step: $step (sync, lint, types, test)" >&2; exit 2 ;;
+  esac
+done

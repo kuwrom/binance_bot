@@ -20,6 +20,6 @@ Guardian (Docker, AWS Tokyo): reconcile, restore stops, execute plan rules, Tele
 - **Quick start (local, demo):**
   1. `uv sync --locked --extra dev --python 3.13` (exact versions from `uv.lock`; see [deploy/DEPLOY.md](deploy/DEPLOY.md#9-dependencies-uvlock))
   2. `cp .env.example .env`, then add demo keys from demo.binance.com
-  3. `.venv/bin/pytest -q`
+  3. `scripts/check`: what CI runs (`uv sync --locked`, ruff, mypy, pytest); one step: `scripts/check test`
   4. `.venv/bin/shortbot brief`
   5. `claude`, then ask it to "run a trading session"

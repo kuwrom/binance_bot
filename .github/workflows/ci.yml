@@ -1,0 +1,44 @@
+# Lint, types and tests on every push and pull request (#43). Each step is scripts/check, so a local
+# `scripts/check` runs exactly this. Actions are pinned by commit (tag in the comment); uv by version and sha256.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04   # x86_64: the uv checksum below is that build's
+    timeout-minutes: 20
+    env:
+      RUFF_OUTPUT_FORMAT: github   # findings as inline annotations
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7   # v10.2.0
+        with:
+          version: "0.12.21"   # = Dockerfile and deploy/bootstrap.sh; bump all three together (deploy/DEPLOY.md §9)
+          # uv-x86_64-unknown-linux-gnu.tar.gz, as in deploy/bootstrap.sh
+          checksum: "23f02075b652bb1df64178cfae41b5caf160822e720e2663568f3f5d63bc52c0"
+          python-version: "3.13"
+          enable-cache: true
+      - name: sync (uv.lock)
+        id: sync
+        run: scripts/check sync
+      - name: lint (ruff)
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: scripts/check lint
+      - name: types (mypy)
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: scripts/check types
+      - name: test (pytest)
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: scripts/check test

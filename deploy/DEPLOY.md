@@ -167,16 +167,17 @@ launchctl print gui/$(id -u)/com.shortbot.backup | grep -i "last exit"
 
 ## 9. Dependencies (`uv.lock`)
 `uv.lock` pins every package, with sha256 hashes. The Dockerfile and `bootstrap.sh` install only from it with `uv sync --locked`, which also fails if the lock is stale against `pyproject.toml`. ccxt matters most: `stops.py` parses its response shapes and `tests/fakes.py` mirrors ccxt 4.5.84, so it only moves on purpose.
-- **Laptop venv:** `uv sync --locked --extra dev` makes `.venv` match the lock exactly. It also removes anything not in the lock. The editable install on its own is `uv pip install --python .venv/bin/python -e .` (the venv has no pip). That command doesn't read the lock.
+- **Laptop venv:** `uv sync --locked --extra dev` (the first step of `scripts/check`, which then runs ruff, mypy and pytest as CI does) makes `.venv` match the lock exactly. It also removes anything not in the lock. The editable install on its own is `uv pip install --python .venv/bin/python -e .` (the venv has no pip). That command doesn't read the lock.
 - **Changed a dependency in `pyproject.toml`:** run `uv lock`, which keeps the existing pins, and commit `uv.lock` in the same change.
 - **Upgrade deliberately:**
   1. `uv lock --upgrade-package ccxt`, or `ccxt==<version>`.
   2. Read the ccxt changelog for order and stop changes.
-  3. `uv sync --locked --extra dev`, then `.venv/bin/pytest -q`. If live responses differ, fix `tests/fakes.py` first.
+  3. `scripts/check`. If live responses differ, fix `tests/fakes.py` first.
   4. Commit the lock diff on its own.
+  ruff and mypy move the same way (`uv lock --upgrade-package ruff`): a new release can bring new findings, fixed in that commit.
 - **Base image and uv** are pinned by digest in the `Dockerfile`, so security fixes don't arrive on their own. To bump:
   - `docker buildx imagetools inspect python:3.13-slim` and `ghcr.io/astral-sh/uv:<version>` print the new digests.
-  - For uv, also update `UV_VERSION` and both sums in `bootstrap.sh` from the release's `uv-<arch>-unknown-linux-gnu.tar.gz.sha256` files.
+  - For uv, also update `UV_VERSION` and both sums in `bootstrap.sh` from the release's `uv-<arch>-unknown-linux-gnu.tar.gz.sha256` files, and `version` and the x86_64 `checksum` in `.github/workflows/ci.yml`.
   - `uv lock --check` with the laptop's uv confirms it still reads the lock.
 - **The pinned image is untested.** The commit that added these pins didn't build it; only the lock was verified (scratch venv, full suite). After the first `docker compose up -d --build`, check `docker compose run --rm guardian python -c "import ccxt; print(ccxt.__version__)"` prints `4.5.84`.
 
