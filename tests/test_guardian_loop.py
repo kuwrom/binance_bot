@@ -15,9 +15,10 @@ from shortbot.notify import Notifier
 from tests.fakes import SYM, FakeCcxt, FakeEx
 from tests.test_guardian import SETTINGS, guardian_with, kinds, open_trade
 
+# the scan lane's first pass blocks the loop ~0.2 s on its own (synchronous work asyncio can't pre-empt): hung here too
 SLOW_JOBS = ("watch_positions", "check_governor", "check_announcements", "record_social", "research_refresh",
              "housekeeping", "record_metrics", "label_research", "refresh_calendar", "market_map", "sweep_study",
-             "refresh_supply", "ladder_shadow", "laggard_study")
+             "refresh_supply", "ladder_shadow", "laggard_study", "tiered_scan", "cadence_shadow", "mtf_views")
 
 
 def lane_with(*jobs, journal=None, **kw):
@@ -206,6 +207,29 @@ async def test_trigger_runs_a_job_now():
     await asyncio.sleep(0.02)
     task.cancel()
     assert runs == [1, 1]
+
+
+async def test_a_burst_of_triggers_is_one_run_and_never_sooner_than_the_gap_after_the_last(caplog):
+    caplog.set_level("INFO", "shortbot.guardian")
+    runs, seen = [], []
+
+    async def positions():
+        runs.append(time.time())
+        seen.append(ln.triggered("positions"))
+    ln = lane_with(Job("positions", positions, 60, 5))
+    await ln.tick()                       # on schedule
+    t0 = time.monotonic()
+    for i in range(5):                    # a burst of events about one stop-out
+        ln.trigger("positions", why=f"ALGO_UPDATE stop FINISHED #{i}", at=t0, min_gap_s=0.05)
+    assert not await ln.tick()            # inside the gap after the scheduled run
+    await asyncio.sleep(0.06)
+    assert await ln.tick() and not await ln.tick()
+    assert len(runs) == 2 and runs[1] - runs[0] >= 0.05 and seen == [False, True]
+    st = ln.trigger_stats["positions"]
+    assert st["runs"] == 1 and st["events"] == 5 and 0.05 <= st["delay_max_s"] < 1 and st["ahead_max_s"] > 55
+    assert "ALGO_UPDATE stop FINISHED #0" in caplog.text and "ahead of its schedule" in caplog.text
+    ln.trigger("nope", why="unknown job")   # a job this lane doesn't run: ignored
+    assert not await ln.tick()
 
 
 async def test_lane_logs_when_the_event_loop_was_blocked(monkeypatch, caplog):

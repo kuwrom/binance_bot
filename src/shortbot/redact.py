@@ -1,7 +1,8 @@
 """Secrets that error texts carry into alerts: ccxt puts a signed request's full URL in its exception text (GET and
-DELETE calls carry `timestamp=` and `signature=` in the query), and httpx puts the Telegram URL, bot token included,
-in its HTTP errors. Every alert row (Journal.log_alert), alert log line and Telegram message goes through here, and
-every log record of a process whose entry point called install_log_redaction (guardian, MCP server, CLIs)."""
+DELETE calls carry `timestamp=` and `signature=` in the query), httpx puts the Telegram URL, bot token included, in
+its HTTP errors, and a user-data stream URL carries the account's `listenKey=` (user_stream.py). Every alert row
+(Journal.log_alert), alert log line and Telegram message goes through here, and every log record of a process whose
+entry point called install_log_redaction (guardian, MCP server, CLIs)."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import logging
 import re
 
 _BOT_TOKEN = re.compile(r"bot\d+:[\w-]+")
-_SIGNED = re.compile(r"\b(signature|timestamp)=[^&\s'\"]+")
+_SIGNED = re.compile(r"\b(signature|timestamp|listenKey)=[^&\s'\"]+")
 
 
 def redact(text: str) -> str:

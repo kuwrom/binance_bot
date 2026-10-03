@@ -34,7 +34,8 @@ SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mod
 
 class PositionChecks:
     """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
-    kill_seen, pnl_streak, pnl_tripped, _heartbeat, MarginChecks.margin_pass and PlanChecks._run_plan."""
+    kill_seen, pnl_streak, pnl_tripped, user_stream, _heartbeat, _triggered, MarginChecks.margin_pass and
+    PlanChecks._run_plan."""
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:
@@ -147,8 +148,11 @@ class PositionChecks:
 
     async def _position_busy(self, sym: str, e: SymbolBusy) -> None:
         """A session holds the symbol's lock (symlock.py; the guardian waits GUARDIAN_WAIT_S at most, so one busy
-        symbol never stalls the others). Not a failure: only a symbol that stays busy pass after pass escalates."""
+        symbol never stalls the others). Not a failure: only a symbol that stays busy pass after pass escalates, and
+        only scheduled passes count: a pass a user-data event ran early (#54) never makes it escalate sooner."""
         log.info("position %s skipped this pass: %s", sym, e)
+        if self._triggered("positions"):
+            return
         if self.pos_streak.fail(sym):
             await send_safe(self.n, "guardian_failing:position", f"busy {self.pos_streak.after} passes in a row since "
                             f"{self.pos_streak.started(sym)} ({e}). Its stop and plan are NOT being verified: check "
@@ -196,8 +200,11 @@ class PositionChecks:
                 return
             age = time.time() - self.untracked_since.setdefault(sym, time.time())
             if age >= UNTRACKED_GRACE_S:   # alerted only now: an early alert would arm a 24 h cooldown on a false alarm
+                seen = (self.user_stream.last_foreign.get(sym) if self.user_stream else None)
                 await send_safe(self.n, "untracked_position", "Position not opened via shortbot: stop is enforced but "
-                                "no plan/thesis. Journal it or close it.", sym, cooldown_s=86400)
+                                "no plan/thesis. Journal it or close it." + (
+                                    f" The user-data stream saw an order not placed by shortbot on it: {seen}."
+                                    if seen else ""), sym, cooldown_s=86400)
                 await ks.trip(self.j, self.app.settings, REDUCING, "guardian", f"reconciliation: {sym} position "
                               f"({p['contracts']}) not in the journal for {age / 60:.0f} min",
                               {"symbol": sym, "contracts": p["contracts"]}, cause="reconciliation")
@@ -260,6 +267,7 @@ class PositionChecks:
         else:   # a governor halt or a market pause withdraws resting entries too (#12)
             await entry_gates.guardian_sweep(self.entries, self.n)
         for ev in await self.entries.poll():   # pending rows and sends of unknown outcome (#60)
+            self._expect_on_stream(ev)
             if ev["event"] in ("cancelled", "expired"):
                 await self.n.send(f"entry_{ev['event']}", f"entry #{ev['entry_id']}: {ev.get('why', '')}",
                                   cooldown_s=0)
@@ -268,6 +276,14 @@ class PositionChecks:
                                 f"kill switch is {state}: protected and journalled as trade #{ev.get('trade_id')}. "
                                 "Manage it under its plan or close it; it is never auto-closed.", urgent=True,
                                 cooldown_s=0)
+
+    def _expect_on_stream(self, ev: dict) -> None:
+        """A fill the poll found: the user-data stream should have reported it (a miss counts against its health)."""
+        if not self.user_stream or ev["event"] not in ("filled", "tranche_joined", "sibling_joined"):
+            return
+        row = (self.entries._rows("id=?", (ev["entry_id"],)) or [{}])[0]
+        if row.get("client_id") and row.get("filled_at"):
+            self.user_stream.expect(row["client_id"], int(datetime.fromisoformat(row["filled_at"]).timestamp() * 1000))
 
     async def _kill_watch(self) -> str | None:
         """Each 5 s tick: lift a stale-heartbeat halt once protection works again (this guardian's own heartbeat),

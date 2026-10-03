@@ -20,7 +20,7 @@ Status: step 0 built (public `Trader`, §1.2); the rest is design. Surveyed on m
 
 Each process has its own ccxt client (`exchange.py:104-150`) and its own weight-guard state ("the state is per process", SCANNING.md).
 
-### 1.2 Exchange writes: 9 `Trader` primitives (step 0)
+### 1.2 Exchange writes: 9 `Trader` primitives (step 0), plus the listen key pair (#54)
 The survey found 20 raw write sites in 10 files. Step 0 put each behind a public `Trader` primitive. Every other module writes only through these, and inside `trading*.py` only they send (`tests/test_trader_public.py`). Each resting-order primitive sends one request and returns ccxt's answer or raises its error unchanged; journalling, classification and resolution by client id stay with the caller.
 
 | primitive (module) | sends | callers |
@@ -34,6 +34,7 @@ The survey found 20 raw write sites in 10 files. Step 0 put each behind a public
 | `close_market` (trading_orders) | reduce-only market BUY, settled by id | close, partial, the widen cut, forced close, close-past-stop, crossed-on-move, aborted entry, flatten |
 | `place_reduce_limit` (trading_orders) | reduce-only GTC limit BUY (target) | `targets_sync.py` |
 | `prepare` (trading) | `set_position_mode`, `set_margin_mode`, `set_leverage` | open, `entries_place.py`. The lock audit covers them since #74 (`set_position_mode` under the account lock) |
+| `listen_key`, `keep_listen_key` (trading_orders) | POST / PUT `/fapi/v1/listenKey` (never DELETE: one key per account, shared) | `user_stream.py` (#54). Side-free: they stay out of step 8's `Side` table |
 
 **Raw writes that remain: the probes only.** `probe_kit.py`, `probe_cases.py`, `probes.py` and `probe_stream.py` call ccxt directly: test orders, `countdownCancelAll` and the listen key. Two reasons keep them raw for now:
 - they exist to record Binance's raw answer to each case (#55), which the desk's primitives would classify or retry away;
@@ -274,8 +275,9 @@ Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe rece
   - NautilusTrader resolves a submit timeout to `REJECTED` after retries;
   - Hummingbot marks an order lost after `lost_order_count_limit` (3) failed lookups and keeps it fillable;
   - here, a limit not found 90 s (`GRACE_S`) after its send was never placed, and a market send is never guessed: the position decides.
-- **User data stream (step 9, optional):**
-  - `ORDER_TRADE_UPDATE` plus `ALGO_UPDATE` (conditional orders: NEW, CANCELED, TRIGGERING, TRIGGERED, FINISHED), consumed in the gateway, cut fill-to-stop from ≤ 5 s to sub-second, and the polls become the safety net;
+- **User data stream (#54 in the guardian; step 9 moves it into the gateway):**
+  - `ORDER_TRADE_UPDATE` plus `ALGO_UPDATE` (conditional orders: NEW, CANCELED, TRIGGERING, TRIGGERED, FINISHED) cut fill-to-stop from ≤ 5 s to sub-second, and the polls become the safety net;
+  - built in #54 (`user_stream.py`, `user_events.py`): an event about one of our orders runs the fill poll or the positions pass at once (`Lane.trigger`); the polls keep their schedule; health is judged by keepalive and by fills the poll finds that the stream missed, never by the connection;
   - Binance itself says a 503 means "execution status unknown": verify by WebSocket updates or by order query;
   - the listenKey needs a keepalive every 60 min.
 - **Crash-only by construction:**

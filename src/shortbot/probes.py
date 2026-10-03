@@ -67,7 +67,8 @@ CASES: dict[str, Case] = {
                                  "2026-10-02)"),
     "countdown-cancel-all": Case("6", False, pc.countdown_cancel_all, "countdownCancelAll cancels regular AND "
                                  "conditional orders (fake_engine.advance; demo 2026-10-02)", 60.0),
-    "user-stream": Case("7", False, ps.user_stream, "none: the fake has no user-data stream (this informs #72)", 60.0),
+    "user-stream": Case("7", False, ps.user_stream, "ORDER_TRADE_UPDATE and ALGO_UPDATE reach <host>/private/ws"
+                        "?listenKey=K in demo's shapes (tests/fake_stream.py; probe_result 387)", 60.0),
     "trigger-listing-cid": Case("8", False, pc.trigger_listing_cid, "the trigger listing carries our clientOrderId and "
                                 "a lookup by clientAlgoId finds it (fakes._algo_view; shape seen on demo 2026-09-27)", 60.0),
     "fetch-by-cid": Case("9", False, pc.fetch_by_cid, "fetch_order by clientOrderId finds a resting and a cancelled "

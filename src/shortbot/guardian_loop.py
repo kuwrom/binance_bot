@@ -4,7 +4,11 @@ job; on lanes that escalate (protective, watch) a streak sends one urgent alert 
 remember their last successful run in kv, so a restart doesn't re-run the daily studies (but retries failed ones).
 
 asyncio can't pre-empt synchronous work (CPU-heavy steps, a SQLite busy-wait): that still stalls every lane, which
-is why a lane logs when it wakes late."""
+is why a lane logs when it wakes late.
+
+An event can bring a job's next run forward (`Lane.trigger`: the user-data stream, user_stream.py, #54). A burst of
+triggers is one run, never sooner than `min_gap_s` after the job's last start; each triggered run logs how long after
+the event it started and how far ahead of its schedule (`trigger_stats`: the stream's measured gain)."""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,6 +38,14 @@ class Job:
     fn: Callable[[], Awaitable[Any]]
     every_s: float
     timeout_s: float
+
+
+@dataclass(frozen=True)
+class Trigger:
+    why: str
+    at: float      # time.monotonic() when the event arrived
+    sched: float   # wall time the job was next due on its schedule
+    events: int = 1
 
 
 async def send_safe(n, kind: str, message: str, symbol: str | None = None, **kw: Any) -> None:
@@ -81,6 +93,10 @@ class Lane:
         self.escalate_note = escalate_note or {}   # job -> what is and isn't happening while it keeps failing
         self.last = {job.name: self._seed(job) for job in jobs}
         self._wake = asyncio.Event()
+        self.started: dict[str, float] = {}         # job -> its last start (wall), the base of a trigger's gap
+        self.pending: dict[str, Trigger] = {}       # job -> the trigger its next run serves
+        self.running: tuple[str, bool] | None = None   # (job, triggered: running ahead of its schedule)
+        self.trigger_stats: dict[str, dict[str, float]] = {}
 
     def _seed(self, job: Job) -> float:
         if job.every_s < PERSIST_EVERY_S:
@@ -91,10 +107,23 @@ class Lane:
             log.exception("last run of %s unreadable", job.name)
             return 0.0
 
-    def trigger(self, name: str) -> None:
-        """Run a job at the next tick, now (hook for event-driven checks, e.g. a user-data stream fill)."""
-        self.last[name] = 0.0
+    def trigger(self, name: str, why: str = "", at: float | None = None, min_gap_s: float = 0.0) -> None:
+        """Run a job at the next tick, but never sooner than `min_gap_s` after its last start (an event-driven check:
+        a user-data stream event, user_stream.py). Triggers before that run merge into it. A job not in this lane:
+        ignored."""
+        job = next((j for j in self.jobs if j.name == name), None)
+        if job is None:
+            return
+        last, now = self.last[name], time.time()
+        t = self.pending.get(name)
+        self.pending[name] = (replace(t, events=t.events + 1) if t else
+                              Trigger(why, time.monotonic() if at is None else at, last + job.every_s))
+        self.last[name] = min(last, max(now, self.started.get(name, 0.0) + min_gap_s) - job.every_s)
         self._wake.set()
+
+    def triggered(self, name: str) -> bool:
+        """Is `name` running now ahead of its schedule, because of a trigger?"""
+        return self.running == (name, True)
 
     async def run(self, start_after_s: float = 0.0) -> None:
         await asyncio.sleep(start_after_s)
@@ -114,10 +143,30 @@ class Lane:
         for job in self.jobs:
             if time.time() - self.last[job.name] < job.every_s:
                 continue
-            self.last[job.name] = time.time()
+            self.last[job.name] = self.started[job.name] = time.time()
             ran = True
-            await self._run(job)
+            cause = self.pending.pop(job.name, None)
+            self.running = (job.name, bool(cause) and cause.sched > self.last[job.name])
+            try:
+                if cause:
+                    self._served(job.name, cause)
+                await self._run(job)
+            finally:
+                self.running = None
         return ran
+
+    def _served(self, name: str, t: Trigger) -> None:
+        delay, ahead = time.monotonic() - t.at, t.sched - time.time()
+        s = self.trigger_stats.setdefault(name, {"runs": 0, "events": 0, "delay_sum_s": 0.0, "delay_max_s": 0.0,
+                                                 "ahead_sum_s": 0.0, "ahead_max_s": 0.0})
+        s["runs"] += 1
+        s["events"] += t.events
+        s["delay_sum_s"] += delay
+        s["delay_max_s"] = max(s["delay_max_s"], delay)
+        s["ahead_sum_s"] += max(ahead, 0.0)
+        s["ahead_max_s"] = max(s["ahead_max_s"], ahead)
+        log.info("%s run triggered by %s (%d event(s)): started %.3fs after the event, %.1fs ahead of its schedule",
+                 name, t.why, t.events, delay, ahead)
 
     def failing(self, name: str) -> bool:
         """Is this job in a failure streak (its last run failed)?"""

@@ -163,3 +163,7 @@ def close_position_flat():
     # raises it
     return ccxt.ExchangeError(_body(-4509, "Time in Force (TIF) GTE can only be used with open positions. Please "
                                            "ensure that positions are available."))
+
+
+def listen_key_missing():   # -1125 (common map -> AuthenticationError, ccxt binance.py ~2703): no active listenKey
+    return ccxt.AuthenticationError(_body(-1125, "This listenKey does not exist."))

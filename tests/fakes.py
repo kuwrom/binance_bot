@@ -65,6 +65,7 @@ class FakeCcxt(Account, Engine):
         self.ack_lost_unsent = 0    # orders that answer -1007 and did NOT run: "unknown" cuts both ways
         self.refuse: list[Exception] = []   # next orders refused with these (fake_errors builders): nothing runs
         self.multi_assets, self.adl_answer, self.force_orders, self.countdowns = False, None, [], {}   # fake_account.py
+        self.listen_key, self.listen_key_calls = None, []   # fake_account.py: the user-data stream key
         self.prod = ProdView(self)
         self.add_symbol(SYM, price)
 

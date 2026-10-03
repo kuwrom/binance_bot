@@ -16,7 +16,7 @@ RAW_WRITE = re.compile(r"^(fapi|sapi|dapi)?[Pp]rivate(Post|Put|Delete)")   # imp
 RAW_OK = ("probe*.py",)   # demo-only probes observe Binance's raw answers by design (#55, GATEWAY.md §8 step 0)
 # inside the mixins, the primitives (close_market and open_market through their send loops) are all that send
 SENDERS = {"prepare", "place_close_stop", "_close_sends", "_sell_once", "cancel", "place_limit", "edit_limit",
-           "place_reduce_stop", "place_reduce_limit"}
+           "place_reduce_stop", "place_reduce_limit", "listen_key", "keep_listen_key"}
 
 
 def mixins() -> list[Path]:

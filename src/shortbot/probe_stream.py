@@ -1,5 +1,5 @@
 """Probe 7 (#55; runner: probes.py): do user-data events (ORDER_TRADE_UPDATE, ALGO_UPDATE) reach a DEMO account's
-stream, and on which URL? Informs the guardian's stream wiring (#72).
+stream, and on which URL? It informed the guardian's user-data stream (user_stream.py, #54).
 
 Where a demo account's user stream lives is unsettled:
 - ccxt 4.5.84 pro (installed) puts demo futures on wss://fstream.binancefuture.com/ws (the testnet host), and a user

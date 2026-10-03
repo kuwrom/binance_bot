@@ -109,3 +109,11 @@ def order_lock_audit(monkeypatch):
         audit(name, at)
     yield bad
     assert not bad, bad
+
+
+@pytest.fixture(autouse=True)
+def no_user_stream_network(monkeypatch):
+    """A guardian started in a test never reaches Binance's user-data stream: tests inject fake_stream.Hub.connect."""
+    async def offline(url):
+        raise ConnectionRefusedError("tests: no network")
+    monkeypatch.setattr("shortbot.user_stream.open_socket", offline)

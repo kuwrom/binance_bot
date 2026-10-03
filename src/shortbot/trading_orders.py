@@ -156,3 +156,21 @@ class OrderFlow:
         """A reduce-only GTC limit BUY: a plan target resting on the book (targets_sync.py)."""
         return await self.t.create_order(symbol, "limit", "buy", qty, price,
                                          {"reduceOnly": True, "timeInForce": "GTC", "clientOrderId": cid})
+
+    async def listen_key(self) -> str:
+        """POST /fapi/v1/listenKey (weight 1): the account's user-data stream key (user_stream.py, #54). "If the
+        account has an active listenKey, that listenKey will be returned and its validity will be extended for 60
+        minutes", else a new one (binance-connector-python user_data_streams_api.py). One key per account, shared by
+        every process on it: there is deliberately no primitive that DELETEs it (that would end the others' streams)."""
+        key = (await self.t.fapiPrivatePostListenKey() or {}).get("listenKey")
+        if not key:
+            raise RuntimeError("POST /fapi/v1/listenKey answered no listenKey")
+        return str(key)
+
+    async def keep_listen_key(self) -> str:
+        """PUT /fapi/v1/listenKey (weight 1, no key sent): extends the account's active key 60 min and returns it, so a
+        caller holding another key knows it was replaced. None active: -1125 (ccxt AuthenticationError)."""
+        key = (await self.t.fapiPrivatePutListenKey() or {}).get("listenKey")
+        if not key:
+            raise RuntimeError("PUT /fapi/v1/listenKey answered no listenKey")
+        return str(key)

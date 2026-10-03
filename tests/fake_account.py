@@ -24,8 +24,27 @@ class Account:
                 "time": self.now_ms()}
 
     async def fapiPrivatePostListenKey(self, req=None):
-        """POST /fapi/v1/listenKey (Start-User-Data-Stream doc): one key per account, extended when it exists."""
-        return {"listenKey": "fakeListenKeyDoNotLog0123456789abcdef"}
+        """POST /fapi/v1/listenKey (weight 1): "If the account has an active listenKey, that listenKey will be returned
+        and its validity will be extended for 60 minutes", else a new one (binance-connector-python,
+        derivatives_trading_usds_futures rest_api/api/user_data_streams_api.py). One key per account."""
+        self.listen_key_calls.append("POST")
+        if not self.listen_key:
+            n = sum(c == "new" for c in self.listen_key_calls) + 1
+            self.listen_key_calls.append("new")
+            self.listen_key = ("fakeListenKeyDoNotLog0123456789abcdef" if n == 1
+                               else f"fakeListenKey{n}DoNotLog0123456789")
+        return {"listenKey": self.listen_key}
+
+    async def fapiPrivatePutListenKey(self, req=None):
+        """PUT /fapi/v1/listenKey (weight 1; no key sent: the account's): extends the active key 60 min and answers
+        {"listenKey"} (the SDK's KeepaliveUserDataStreamResponse); none active: -1125 (fake_errors)."""
+        self.listen_key_calls.append("PUT")
+        if not self.listen_key:
+            raise err.listen_key_missing()
+        return {"listenKey": self.listen_key}
+
+    async def fapiPrivateDeleteListenKey(self, req=None):
+        raise AssertionError("the desk never DELETEs the listenKey: one per account, shared by every process (#54)")
 
     async def fapiPrivateGetIncome(self, req=None):
         """GET /fapi/v1/income (Get-Income-History doc): startTime and endTime inclusive, oldest first, `limit` 100 by

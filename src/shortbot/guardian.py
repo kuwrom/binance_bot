@@ -5,6 +5,8 @@
 - tracks MAE/MFE per trade, alerts on squeeze risk, funding flips, stop proximity, news
 - alerts on new listing/delisting announcements; records metrics and labels research candidates
 - streams the liquid universe (stream_task.py) and runs the tiered scan on it (scan_tiered.py, docs/SCANNING.md)
+- listens to the account's user-data stream (user_stream.py, #54): an event about one of our orders runs the fill poll
+  or the positions pass at once (TRIGGER_GAP_S apart at most); the polls stay the truth and keep their schedule
 
 Jobs run in lanes (guardian_loop.py) that run concurrently: protective (fills, stops, plans), watch (alerts on
 open shorts), monitor (account and market alerts), research, and scan (tiers 1-3 at each 15m close). Every position and every job is isolated and
@@ -36,6 +38,7 @@ from .redact import install_log_redaction
 from .scan_tiered import TieredScan
 from .stream_task import StreamTask
 from .symlock import GUARDIAN_WAIT_S
+from .user_stream import UserStream
 
 log = logging.getLogger("shortbot.guardian")
 # job: (every_s, timeout_s). Jobs of one lane run one after another; the lanes run side by side.
@@ -68,6 +71,9 @@ SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events bet
         "cadence_shadow": (60, 50),   # #40: logs two rules every minute on live bars; no deep scores, no alerts
         "mtf_views": (60, 50)}        # #41: every coin's 5m-1d state at each 15m close, logged; no exchange calls
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
+# a user-data event runs its job at once, but no sooner than this after the job's last start: a burst is one run, and
+# the positions pass (account and income reads) runs at most 4x a minute however many stop or target events come
+TRIGGER_GAP_S = {"entries": 1.0, "positions": 15.0}
 TICK_S = 1.0
 
 
@@ -103,6 +109,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self.lanes: dict[str, Lane] = {}
         self.streams_db = stream_read.path_for(self.app.settings.db_path)   # None for an in-memory journal (tests)
         self.tiered = TieredScan(self.ex, self.j, self.n, self.streams_db, self.app.settings.db_path)
+        self.user_stream = (UserStream(self.app.trader, self.n, self._on_stream_event, extra_stats=self._trigger_stats)
+                            if self.ex.trade else None)   # monitor-only: no account, no stream
 
     def _lanes(self) -> dict[str, Lane]:
         fns = {"entries": self.check_entries, "positions": self.check_positions,
@@ -123,6 +131,22 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                 "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
                 "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH),
                 "scan": lane("scan", SCAN)}
+
+    def _on_stream_event(self, hit, at: float) -> None:
+        """A user-data event about one of our orders (user_events.py): its job runs now, `at` = when it arrived."""
+        lane = self.lanes.get("protective")
+        if lane:
+            lane.trigger(hit.job, why=f"{hit.type} {hit.kind} {hit.status} {hit.symbol}", at=at,
+                         min_gap_s=TRIGGER_GAP_S.get(hit.job, 0.0))
+
+    def _trigger_stats(self) -> dict:
+        lane = self.lanes.get("protective")
+        return dict(lane.trigger_stats) if lane else {}
+
+    def _triggered(self, job: str) -> bool:
+        """Is `job` running ahead of its schedule, woken by a user-data event?"""
+        lane = self.lanes.get("protective")
+        return bool(lane and lane.triggered(job))
 
     def _heartbeat(self, at: float) -> None:
         """Called by a positions pass that verified every held position (or a flat account), `at` = its position read.
@@ -158,6 +182,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         runs["liquidations"] = LiquidationRecorder(self.liq_store).run
         if self.streams_db:   # tier 0: market streams into the local store, on its own thread (stream_task.py)
             runs["streams"] = StreamTask(self.ex, self.streams_db).run
+        if self.user_stream:   # fills and stop-outs pushed by Binance: latency only, the polls stay the truth
+            runs["user_stream"] = self.user_stream.run
         self._tasks = [asyncio.create_task(supervised(name, fn, self.n), name=f"guardian:{name}")
                        for name, fn in runs.items()]
         try:
