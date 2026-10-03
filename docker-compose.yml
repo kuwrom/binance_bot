@@ -12,3 +12,48 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
+
+  # The owner's browser console (docs/WEB.md): same image, on 127.0.0.1:8080 only. Caddy below terminates HTTPS on the
+  # public IP. Until `shortbot-web passwd` has run, it waits for a password instead of serving.
+  web:
+    build: .
+    command: shortbot-web serve
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file: .env
+    environment:
+      SHORTBOT_DB: /app/data/shortbot.db
+      SHORTBOT_WEB_HOST: 127.0.0.1
+      SHORTBOT_WEB_PORT: "8080"
+      SHORTBOT_WEB_DOCS: /app/repo
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+      - ./docs:/app/repo/docs:ro
+      - ./.claude/skills:/app/repo/.claude/skills:ro
+      - ./CLAUDE.md:/app/repo/CLAUDE.md:ro
+      - ./README.md:/app/repo/README.md:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # HTTPS on the bare IP: a Let's Encrypt IP certificate (shortlived profile, renewed automatically). The IP comes
+  # from data/web.env (SHORTBOT_PUBLIC_IP=...), which deploy/sync.sh never touches. Needs inbound 80 and 443.
+  caddy:
+    image: caddy:2.11.6@sha256:907efba736324e43f891ccb9d760fe5abe545e313419b3d18d63d4ec670dad8d
+    network_mode: host
+    env_file:
+      - path: data/web.env
+        required: false
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+volumes:
+  caddy_data:
+  caddy_config:

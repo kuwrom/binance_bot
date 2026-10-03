@@ -139,6 +139,8 @@ def fresh_symbols(stream: str, max_age_s: float, path: str | Path = DB_PATH, now
     try:
         return [s for (s,) in db.execute("SELECT symbol FROM fresh WHERE stream=? AND ts BETWEEN ? AND ? "
                                          "ORDER BY symbol", (stream, now - max_age_s * 1000, now))]
+    except sqlite3.Error:   # e.g. the collector created the file but not its tables yet: a miss, as in _window
+        return []
     finally:
         db.close()
 
@@ -153,5 +155,7 @@ def latest(kind: str, path: str | Path = DB_PATH, max_age_s: float = 120,
     try:
         return {s: json.loads(d) for s, d in db.execute("SELECT symbol, data FROM latest WHERE kind=? AND ts BETWEEN "
                                                         "? AND ?", (kind, now - max_age_s * 1000, now))}
+    except sqlite3.Error:   # a store without its tables yet (see fresh_symbols)
+        return {}
     finally:
         db.close()

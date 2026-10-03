@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup on a fresh Ubuntu LTS EC2 instance (ap-northeast-1). Run as the default 'ubuntu' user
+# One-time setup on a fresh Ubuntu LTS EC2 instance (a non-US region; deploy/DEPLOY.md). Run as the default 'ubuntu' user
 # from inside the project directory:  bash deploy/bootstrap.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."

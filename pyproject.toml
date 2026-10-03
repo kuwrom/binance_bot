@@ -15,6 +15,8 @@ dependencies = [
     "pandas>=2.2",
     "numpy>=2.0",           # imported directly (analogs, probability, backtest)
     "matplotlib>=3.8",      # imported directly (charts.py)
+    "starlette>=1.0",       # web console (shortbot.web); already locked through mcp
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +28,7 @@ shortbot = "shortbot.cli:main"
 shortbot-mcp = "shortbot.mcp_server:main"
 shortbot-guardian = "shortbot.guardian:main"
 shortbot-admin = "shortbot.admin:main"        # human-only kill-switch controls (killswitch.py)
+shortbot-web = "shortbot.web.server:main"     # the owner's browser console (docs/WEB.md)
 
 [build-system]
 requires = ["hatchling"]

@@ -1,13 +1,15 @@
-# Deploy to AWS Tokyo
+# Deploy to AWS
 
-Binance returns **HTTP 451 to US IPs**, which includes AWS us-east and us-west. Its matching engine is close to AWS Tokyo, so use **ap-northeast-1**.
+Binance returns **HTTP 451 to US IPs**, which includes AWS us-east and us-west. Since 2026-10-03 the desk runs in **eu-central-1 (Frankfurt)**: fapi, demo-fapi and the spot API all answered 200 from its Elastic IP. Tokyo (ap-northeast-1) is nearest Binance's matching engine, about 230 ms closer than Frankfurt, which doesn't matter at the desk's cadence. In any region, check from the box before moving anything: `curl -s -o /dev/null -w '%{http_code}' https://fapi.binance.com/fapi/v1/ping` must print 200 (and the same for `demo-fapi`).
+
+**One guardian per Binance account.** Two guardians race each other's auto exits. When the desk moves to a server, stop the laptop's guardian for good: never restart it after a merge. Set the laptop's journal copy to `kill-switch REDUCING`.
 
 ## 1. Launch the instance
-- **Region:** Asia Pacific (Tokyo), `ap-northeast-1`.
+- **Region:** any non-US region where the ping above returns 200. The desk uses `eu-central-1`.
 - **AMI:** Ubuntu Server LTS, arm64.
-- **Type:** `t4g.medium` (2 vCPU / 4 GB). Claude Code needs at least 4 GB RAM. If you only run the guardian and use Claude Code from your laptop, `t4g.small` is enough.
-- **Disk:** 20 GB gp3.
-- **Security group:** inbound **SSH (22) from your IP only**. No other inbound ports. The bot only makes outbound calls.
+- **Type:** `t4g.large` (2 vCPU / 8 GB): the guardian, the web console, Claude Code and research runs. Claude Code needs at least 4 GB RAM. If you only run the guardian, `t4g.small` is enough.
+- **Disk:** 40 GB gp3, encrypted (`data/` is about 0.8 GB and grows with the research DBs and backups).
+- **Security group:** inbound SSH (22), key-only; narrow it to your IP if yours is stable. For the web console (docs/WEB.md): 443 for the page and 80 for the Let's Encrypt challenge, both from anywhere. The bot itself only makes outbound calls.
 - **Elastic IP:** allocate one and associate it, so the IP never changes. That IP is what you whitelist on Binance.
 
 ## 2. Binance API key (live, when you're ready)
@@ -37,6 +39,7 @@ docker compose up -d --build
 docker compose logs -f guardian     # expect "Guardian online (demo)" and a Telegram ping
 ```
 It restarts automatically (`restart: unless-stopped`). After code changes, run `deploy/sync.sh`, then `docker compose up -d --build`.
+The same command starts the web console and Caddy (docs/WEB.md). Both need a one-time setup: `shortbot-web passwd` and `data/web.env`.
 
 **One user for every process.** The guardian, every Claude Code session (its MCP server), the CLI and the backup job must run as the same user, the one that owns `data/`, including `data/locks`. Never use `sudo`. docker compose already runs the guardian as your UID and GID. If a lock file was created by another user, the others lock it read-only. That still excludes them (flock(2) works whatever the open mode), but the holder info that a busy symbol reports is lost, and the log warns once per process. On NFS an exclusive flock needs write access, so keep `data/` on a local disk.
 
