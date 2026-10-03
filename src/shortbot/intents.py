@@ -17,7 +17,9 @@ anything runs, under an id its caller picks (a ULID). gateway.py runs them; this
 - What a run sent is also kept in memory (`Ledger`, one per run, set by the gateway: `recording`), so its status never
   waits for the journal.
 - A process that died mid-intent leaves it open: `sweep` (the guardian's reconcile job) ends it, expired if it never
-  started, interrupted if it did, and lists its client ids; the resolver settles them.
+  started, interrupted if it did, and lists its client ids; the resolver settles them. A row keeps the pid namespace of
+  the process that received it (`ns`, procs.NS): the sweep asks after a pid only in its own namespace, since a pid seen
+  from another one names another process or none (a guardian container and the host's MCP servers).
 - Journal-first, with one exception (#79): an intent whose handler is registered late_ok (restoring or capping a stop,
   closing a naked position, protecting a fill, withdrawing resting entries: gateway.LATE_OK) sends after CLAIM_WAIT_S
   without its row when another process holds the journal's write lock. Its rows are posted, stamped when it ran, and
@@ -40,6 +42,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterator
 
 from . import audit, clientid, errors
+from .procs import NS
 
 if TYPE_CHECKING:
     from .results import Result
@@ -55,7 +58,7 @@ CREATE TABLE IF NOT EXISTS intents (
     status TEXT NOT NULL, result TEXT, error TEXT, trade_id INTEGER,
     actor TEXT NOT NULL, claude_session TEXT, session_id INTEGER, code_version TEXT, mode TEXT NOT NULL,
     pid INTEGER NOT NULL, received_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, journal_late INTEGER,
-    sent INTEGER, resolved_at TEXT
+    sent INTEGER, resolved_at TEXT, ns TEXT
 );
 CREATE INDEX IF NOT EXISTS intents_open ON intents (status) WHERE status IN ('received', 'running');
 CREATE INDEX IF NOT EXISTS intents_unresolved ON intents (status) WHERE status IN ('unknown', 'interrupted');
@@ -86,9 +89,11 @@ CREATE TRIGGER IF NOT EXISTS intent_orders_settled BEFORE UPDATE ON intent_order
     WHEN OLD.outcome IS NOT NULL OR NEW.client_id IS NOT OLD.client_id OR NEW.intent_id IS NOT OLD.intent_id
       OR NEW.kind IS NOT OLD.kind OR NEW.symbol IS NOT OLD.symbol OR NEW.at IS NOT OLD.at
     BEGIN SELECT RAISE(ABORT, 'an intent''s order link never changes and its outcome is set once'); END;
+CREATE TRIGGER IF NOT EXISTS intents_ns_frozen BEFORE UPDATE OF ns ON intents
+    BEGIN SELECT RAISE(ABORT, 'an intent''s request never changes'); END;
 """
 # added since the tables were first created (Journal._migrate)
-COLUMNS = {"intents": {"journal_late": "INTEGER", "sent": "INTEGER", "resolved_at": "TEXT"},
+COLUMNS = {"intents": {"journal_late": "INTEGER", "sent": "INTEGER", "resolved_at": "TEXT", "ns": "TEXT"},
            "intent_orders": {"outcome": "TEXT"}}
 RETIRED = ("intents_final", "intent_orders_frozen")   # step 2's triggers: replaced by TRIGGERS
 
@@ -154,10 +159,10 @@ def receive(j, it: Intent, refused: Any = None, at: str | None = None, late: boo
     status = "refused" if done else "running" if late else "received"
     cur = j.db.execute(
         "INSERT INTO intents (id, kind, symbol, side, args, status, result, actor, claude_session, session_id,"
-        " code_version, mode, pid, received_at, started_at, finished_at, journal_late, sent)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
+        " code_version, mode, pid, ns, received_at, started_at, finished_at, journal_late, sent)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
         (it.id, it.kind, it.symbol, it.side, dumps(it.args), status, dumps(refused) if done else None, it.actor,
-         st["claude_session"], j.session_of(st["claude_session"]), st["code_version"], j.mode, os.getpid(), at,
+         st["claude_session"], j.session_of(st["claude_session"]), st["code_version"], j.mode, os.getpid(), NS, at,
          at if late else None, at if done else None, 1 if late else None, 0 if done else None))
     j.db.commit()
     return None if cur.rowcount == 1 else get(j, it.id)
@@ -312,16 +317,19 @@ def _alive(pid: int) -> bool:
 def sweep(j, now: float | None = None, alive: Callable[[int], bool] | None = None) -> list[dict[str, Any]]:
     """End this mode's open intents whose process is gone (one desk host, D2) or that have been open longer than
     MAX_OPEN_S: received -> expired (nothing ran), running -> interrupted (it may have sent: the resolver settles its
-    orders). Returns them, each with its client ids."""
+    orders). Returns them, each with its client ids. A pid is judged only in this process's pid namespace: a row
+    from another one (a container's, or the host's seen from a container), or from before `ns`, ends by age alone."""
     now, alive = time.time() if now is None else now, alive or _alive
     out = []
-    for r in j.db.execute("SELECT id, kind, symbol, actor, status, pid, received_at, started_at FROM intents"
+    for r in j.db.execute("SELECT id, kind, symbol, actor, status, pid, ns, received_at, started_at FROM intents"
                           " WHERE status IN ('received', 'running') AND mode=?", (j.mode,)).fetchall():
         since = datetime.fromisoformat(r["started_at"] or r["received_at"]).timestamp()
-        if alive(r["pid"]) and now - since < MAX_OPEN_S:
+        if (r["ns"] != NS or alive(r["pid"])) and now - since < MAX_OPEN_S:
             continue
         new = "expired" if r["status"] == "received" else "interrupted"
-        why = f"still {r['status']}: its process {r['pid']} is gone, or it ran past {MAX_OPEN_S:g} s"
+        why = (f"still {r['status']}: its process {r['pid']} is gone, or it ran past {MAX_OPEN_S:g} s"
+               if r["ns"] == NS else f"still {r['status']} after {MAX_OPEN_S:g} s (its process {r['pid']} is in "
+               "another pid namespace: not judged by its pid)")
         err = errors.OrderError(None, why) if new == "expired" else errors.OutcomeUnknown(None, why)
         cur = j.db.execute("UPDATE intents SET status=?, sent=?, finished_at=?, error=? WHERE id=? AND status=?",
                            (new, 0 if new == "expired" else None, now_ms(), dumps(err.to_dict()), r["id"],

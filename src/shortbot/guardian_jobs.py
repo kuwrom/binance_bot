@@ -119,7 +119,7 @@ class MarketJobs:
     async def check_processes(self) -> None:
         """Hourly (#58): live shortbot-mcp / shortbot-guardian processes that are unregistered or run code older than
         the code on disk ignore fixes such as the kill switch and the symbol lock. Alert each; never signal one."""
-        findings, dead, _ = await procs.check(self.j)
+        findings, dead, _, _ = await procs.check(self.j)
         procs.forget(self.j, dead)
         for f in findings:
             await self.n.send(f"stale_process:{f['pid']}", f["text"], urgent=True, cooldown_s=procs.ALERT_COOLDOWN_S)

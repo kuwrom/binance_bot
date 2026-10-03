@@ -10,7 +10,7 @@ import time
 import ccxt.async_support as ccxt
 import pytest
 
-from shortbot import audit, clientid, gateway, intents
+from shortbot import audit, clientid, gateway, intents, procs
 from shortbot.commands import CommandError
 from shortbot.gateway import LocalGateway
 from shortbot.intents import Intent
@@ -299,7 +299,8 @@ def test_an_old_journal_gets_the_new_columns_and_triggers(tmp_path):
     j = Journal(tmp_path / "old.db")
     names = {r[0] for r in j.db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"intents_settled", "intent_orders_settled"} <= names and not names & set(intents.RETIRED)
-    assert {"sent", "resolved_at", "journal_late"} <= {r[1] for r in j.db.execute("PRAGMA table_info(intents)")}
+    assert {"sent", "resolved_at", "journal_late", "ns"} <= {r[1] for r in j.db.execute("PRAGMA table_info(intents)")}
+    assert "intents_ns_frozen" in names
     assert "outcome" in {r[1] for r in j.db.execute("PRAGMA table_info(intent_orders)")}
     Journal(tmp_path / "old.db")   # a second open changes nothing
 
@@ -330,3 +331,30 @@ def test_the_sweep_ends_an_intent_open_for_too_long_whatever_its_pid(j):
     assert intents.sweep(j, now=time.time() + intents.MAX_OPEN_S - 60) == []
     (row,) = intents.sweep(j, now=time.time() + intents.MAX_OPEN_S + 60)
     assert row["id"] == it.id and row["status"] == "interrupted"
+
+
+def test_the_sweep_judges_a_pid_only_in_its_own_pid_namespace(j, monkeypatch):
+    """EC2 (2026-10-04): the guardian's container can't see the host's pids, so os.kill calls a live MCP server dead;
+    the web container runs as pid 1, which in the guardian's namespace is the guardian itself, so a dead web intent
+    looked alive forever. A row from another pid namespace (or from before the column) is never judged by its pid:
+    only MAX_OPEN_S ends it."""
+    mine = Intent("t_act", {}, SYM)
+    intents.receive(j, mine)
+    monkeypatch.setattr(intents, "NS", "pid:[4026532999]")   # received in the web container, as its pid 1
+    monkeypatch.setattr(intents.os, "getpid", lambda: 1)
+    web = Intent("t_act", {}, SYM)
+    intents.receive(j, web)
+    intents.start(j, web.id)
+    monkeypatch.setattr(intents, "NS", None)                  # a row from before the column: namespace unknown
+    legacy = Intent("t_act", {}, SYM)
+    intents.receive(j, legacy)
+    monkeypatch.undo()
+    assert [(intents.get(j, i.id)["ns"], intents.get(j, i.id)["pid"]) for i in (mine, web, legacy)] == [
+        (procs.NS, os.getpid()), ("pid:[4026532999]", 1), (None, 1)]
+    assert intents.sweep(j) == []                             # this process is alive; pid 1 is never asked
+    (swept,) = intents.sweep(j, alive=lambda pid: False)      # only the row whose pid this process can judge
+    assert swept["id"] == mine.id and swept["status"] == "expired"
+    late = {r["id"]: r["status"] for r in intents.sweep(j, now=time.time() + intents.MAX_OPEN_S + 60)}
+    assert late == {web.id: "interrupted", legacy.id: "expired"}   # pid 1 is alive here: the age rule ends them
+    with pytest.raises(sqlite3.DatabaseError, match="request"):
+        j.db.execute("UPDATE intents SET ns='x'")

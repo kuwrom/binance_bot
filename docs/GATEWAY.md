@@ -1,7 +1,7 @@
 # Order gateway (task #36, design, 2026-10-02)
 One process owns every exchange write. The MCP servers, the CLI and the guardian submit **intents** to it. It runs them one at a time per symbol, journals each one before acting, resolves unknown outcomes by client id, and answers with a typed result. It replaces the per-symbol flock (#21) as the serialiser, works when the desk runs on AWS Tokyo, gives `Trader` a public interface, and makes one command registry the source of both the MCP tools and the CLI.
 
-Status: steps 0 (public `Trader`, §1.2), 1 (command registry), 2a and 2b (in-process intents, every write of the sessions and the guardian) and 3 (typed results, the resolver) built (§8); the rest is design. Surveyed on master e45da38. Sources at the end, checked 2026-10-02.
+Status: steps 0 (public `Trader`, §1.2), 1 (command registry), 2a and 2b (in-process intents, every write of the sessions and the guardian), 3 (typed results, the resolver) and 4a (the intent sweep and the process check per pid and mount namespace, §5) built (§8); the rest is design. Surveyed on master e45da38. Sources at the end, checked 2026-10-02.
 
 ## Recommendation in one screen
 - **Where:** its own small process, `shortbot-gateway`, on the desk host (the host with the journal and the guardian). The guardian becomes its first client. Not inside the guardian, and not a library with a leader lock (§2).
@@ -261,7 +261,7 @@ Client-side only: `unavailable` (not received) and `receipt_unknown` (maybe rece
 
 ## 5. Crash recovery and reconciliation
 - **The intent journal:** an intent goes `received` → `running` → a final status. Every transition is compare-and-set, and no write transaction spans an exchange call (symlock's rule stays).
-- **In-process (steps 2a, 3):** there is no gateway start. The guardian's `entry_reconcile` job (its first tick as the guardian starts) ends the open intents of a process that is gone (pid check, one host per D2) or that have been open over an hour (pid reuse): received → expired, running → interrupted, alerted as `intent_interrupted` with their client ids. Then `resolver.py` settles every unknown or interrupted intent: each order without an outcome is looked up by its client id (`not_found` 90 s after its send), and the intent ends done, refused or partial, once, with an `intent_resolved` alert. It never re-sends; trade state stays with the existing reconcilers.
+- **In-process (steps 2a, 3):** there is no gateway start. The guardian's `entry_reconcile` job (its first tick as the guardian starts) ends the open intents of a process that is gone (pid check, one host per D2, only for rows of its own pid namespace: step 4a, DEPLOY §4) or that have been open over an hour (pid reuse, or a row from another pid namespace): received → expired, running → interrupted, alerted as `intent_interrupted` with their client ids. Then `resolver.py` settles every unknown or interrupted intent: each order without an outcome is looked up by its client id (`not_found` 90 s after its send), and the intent ends done, refused or partial, once, with an `intent_resolved` alert. It never re-sends; trade state stays with the existing reconcilers.
 - **At start, before listening:**
   1. `received` rows from a previous run become `expired`. An intent never runs late on an old decision; the guardian re-issues its intents on its next pass.
   2. `running` rows become `interrupted`, and their `intent_orders` client ids are collected.

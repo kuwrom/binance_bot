@@ -27,9 +27,9 @@ def pkg(tmp_path, name="pkg", body="x = 1\n"):
     return d
 
 
-def row(pid, role="mcp", code="c0", pkg_dir="/nowhere", started=NOW - DAY, ns=None):
+def row(pid, role="mcp", code="c0", pkg_dir="/nowhere", started=NOW - DAY, ns=None, **extra):
     return {"pid": pid, "role": role, "code": code, "pkg": str(pkg_dir), "mode": "demo",
-            "ns": procs.NS if ns is None else ns, "started": started}
+            "ns": procs.NS if ns is None else ns, "started": started, **extra}
 
 
 # ------------------------------------------------------------ parsing
@@ -94,6 +94,7 @@ def test_register_writes_the_record():
     procs.register(j, "mcp", "demo")
     r = json.loads(j.get(f"proc:{os.getpid()}"))
     assert r["pid"] == os.getpid() and r["role"] == "mcp" and r["mode"] == "demo" and r["ns"] == procs.NS
+    assert r["mnt"] == procs.MNT
     assert r["code"] == procs.code_version() and r["pkg"] == str(provenance.PKG)
     assert abs(r["started"] - procs.STARTED) < 1 and r["started"] <= time.time()
 
@@ -181,8 +182,28 @@ async def test_check_combines_the_journal_the_listing_and_the_disk(monkeypatch, 
     j.set("proc:6", json.dumps(row(6, started=time.time() - DAY)))
     monkeypatch.setattr(procs, "snapshot", lambda: {5: Proc(5, DAY, MAC_MCP, "mcp"),
                                                     9: Proc(9, 2 * DAY, MAC_MCP, "mcp")})
-    findings, dead, n = await procs.check(j)
-    assert [f["pid"] for f in findings] == [9] and dead == [6] and n == 2
+    findings, dead, n, elsewhere = await procs.check(j)
+    assert [f["pid"] for f in findings] == [9] and dead == [6] and n == 2 and elsewhere == []
+
+
+IMAGE_PKG = "/app/.venv/lib/python3.13/site-packages/shortbot"   # the guardian container's package dir
+
+
+def test_a_process_registered_from_another_mount_namespace_is_unknown_here_never_stale():
+    """Under compose `pid: host` the host's brief sees the guardian container (and the guardian sees the host's MCP
+    servers) in one pid table, but not their files: a package dir that doesn't exist here is unknown, never 'gone'
+    (a false STALE invites a needless restart). A row from before the field is judged as before."""
+    rows = {6: row(6, role="guardian", pkg_dir=IMAGE_PKG, mnt="mnt:[4026532888]"),
+            7: row(7, pkg_dir="/gone/worktree/src/shortbot")}
+    live = {6: Proc(6, DAY, "/app/.venv/bin/python /app/.venv/bin/shortbot-guardian", "guardian"),
+            7: Proc(7, DAY, MAC_MCP, "mcp")}
+    disk = procs.disk_codes({IMAGE_PKG, "/gone/worktree/src/shortbot"})
+    assert disk == {IMAGE_PKG: None, "/gone/worktree/src/shortbot": None}
+    findings, dead = procs.audit(rows, live, disk, NOW, mnt="mnt:[4026531841]")
+    assert not dead and [(f["pid"], f["why"]) for f in findings] == [(7, "stale")]
+    assert procs.unknown_here(rows, live, mnt="mnt:[4026531841]") == [6]
+    rows[6]["mnt"] = "mnt:[4026531841]"   # the same mount namespace: a missing dir is gone, as before
+    assert [f["pid"] for f in procs.audit(rows, live, disk, NOW, mnt="mnt:[4026531841]")[0]] == [6, 7]
 
 
 # ------------------------------------------------------------ the real process table (read-only)
@@ -264,6 +285,12 @@ async def test_the_brief_shows_one_line_with_the_stale_count(monkeypatch):
     assert a.journal.get("proc:6") is not None      # the brief only reads
     monkeypatch.setattr(procs, "snapshot", lambda: {})
     assert any("none stale" in ln for ln in (await brief(a)).splitlines())
+    a.journal.set("proc:6", json.dumps(row(6, role="guardian", pkg_dir=IMAGE_PKG, started=time.time() - DAY,
+                                           mnt="mnt:[4026532888]")))
+    monkeypatch.setattr(procs, "snapshot", lambda: {6: Proc(6, DAY, "python -m shortbot.guardian", "guardian")})
+    (line,) = [ln for ln in (await brief(a)).splitlines() if "shortbot process" in ln]
+    assert "none stale (0 mcp/guardian checked; 1 registered from another mount namespace" in line
+    assert "unknown here" in line and "stale code" not in line
 
     def broken():
         raise OSError("ps: not found")

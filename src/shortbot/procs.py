@@ -11,6 +11,9 @@ for days, so a merged safety fix (kill switch, per-symbol lock) never reaches th
 - The process table: /proc on Linux (the slim image has no `ps`), `ps -axww -o pid=,etime=,command=` elsewhere
   (macOS ps has no `etimes`). On Linux only our pid namespace counts: a host also sees a container's guardian under
   another pid, and a containerised guardian can't see the host's MCP servers (the host's brief covers those).
+- Code is judged only within our mount namespace (`mnt`): with compose `pid: host` the host and the containers share
+  one pid table but not their files, so a package dir that exists only in the other view is unknown here
+  (`unknown_here`), never "gone". A row registered before the field is judged as before.
 """
 
 from __future__ import annotations
@@ -45,14 +48,15 @@ _ROLE = re.compile(rf"^(?:{_PY}\s+{_OPTS})?(?:(?:\S*/)?shortbot-(mcp|guardian)|-
                    r"(?:\s|$)")
 
 
-def _namespace() -> str:
+def _namespace(kind: str) -> str:
     try:
-        return os.readlink("/proc/self/ns/pid")
+        return os.readlink(f"/proc/self/ns/{kind}")
     except OSError:
-        return ""   # no pid namespaces (macOS): one table per host
+        return ""   # no namespaces (macOS): one process table and one filesystem view per host
 
 
-NS = _namespace()
+NS = _namespace("pid")
+MNT = _namespace("mnt")
 
 
 def code_version() -> str:
@@ -65,7 +69,7 @@ def register(j, role: str, mode: str) -> None:
     """Best-effort and posted (#79): a process that can't register shows up as unregistered (alerted), it never fails
     or waits to start."""
     rec = {"pid": os.getpid(), "role": role, "code": CODE, "pkg": str(provenance.PKG), "mode": mode, "ns": NS,
-           "started": STARTED, "argv": " ".join(sys.argv[:2])}
+           "mnt": MNT, "started": STARTED, "argv": " ".join(sys.argv[:2])}
     j.post(lambda j: j.set(f"proc:{os.getpid()}", json.dumps(rec)))
 
 
@@ -196,11 +200,25 @@ def age(s: float) -> str:
     return f"{s // 3600}h {s % 3600 // 60:02d}m" if s >= 3600 else f"{s // 60}m"
 
 
+def _elsewhere(r: dict, mnt: str) -> bool:
+    """Registered from another mount namespace: its package dir isn't ours to read (a row without the field: ours)."""
+    return r.get("mnt", mnt) != mnt
+
+
+def unknown_here(rows: dict[int, dict], live: dict[int, Proc], ns: str | None = None,
+                 mnt: str | None = None) -> list[int]:
+    """Live shortbot processes of our pid namespace registered from another mount namespace: code unknown here."""
+    ns, mnt = NS if ns is None else ns, MNT if mnt is None else mnt
+    return sorted(pid for pid, p in live.items() if p.role and (r := rows.get(pid)) is not None
+                  and r.get("ns", "") == ns and _elsewhere(r, mnt))
+
+
 def audit(rows: dict[int, dict], live: dict[int, Proc], disk: dict[str, str | None], now: float,
-          ns: str | None = None) -> tuple[list[dict[str, Any]], list[int]]:
+          ns: str | None = None, mnt: str | None = None) -> tuple[list[dict[str, Any]], list[int]]:
     """(findings, pids whose rows are dead). Rows of another pid namespace, or registered after the listing, are
-    left alone; a live pid that started at another time than its row is a reused pid (dead row)."""
-    ns = NS if ns is None else ns
+    left alone; a live pid that started at another time than its row is a reused pid (dead row). A live process
+    registered from another mount namespace is unknown here, never stale (unknown_here)."""
+    ns, mnt = NS if ns is None else ns, MNT if mnt is None else mnt
     dead = []
     for pid, r in rows.items():
         started = float(r.get("started") or 0)
@@ -215,6 +233,8 @@ def audit(rows: dict[int, dict], live: dict[int, Proc], disk: dict[str, str | No
             continue
         r = rows.get(pid)
         if r and r.get("ns", "") == ns and pid not in dead:
+            if _elsewhere(r, mnt):
+                continue
             now_code = disk.get(r.get("pkg"))
             if now_code is not None and now_code == r.get("code"):
                 continue
@@ -232,21 +252,25 @@ def audit(rows: dict[int, dict], live: dict[int, Proc], disk: dict[str, str | No
     return findings, dead
 
 
-async def check(j) -> tuple[list[dict[str, Any]], list[int], int]:
-    """(findings, dead row pids, live mcp/guardian processes checked). The table and the hashing run in a thread."""
+async def check(j) -> tuple[list[dict[str, Any]], list[int], int, list[int]]:
+    """(findings, dead row pids, live mcp/guardian processes checked, pids whose code is unknown here). The table and
+    the hashing run in a thread."""
     rs = rows(j)
     live, disk, now = await asyncio.to_thread(_observe, {r["pkg"] for r in rs.values() if r.get("pkg")})
     findings, dead = audit(rs, live, disk, now)
-    return findings, dead, sum(1 for p in live.values() if p.role)
+    elsewhere = [pid for pid in unknown_here(rs, live) if pid not in dead]
+    return findings, dead, sum(1 for p in live.values() if p.role) - len(elsewhere), elsewhere
 
 
 async def brief_line(j) -> str:
-    findings, _, n = await check(j)
+    findings, _, n, elsewhere = await check(j)
+    other = (f"; {len(elsewhere)} registered from another mount namespace (pid {', '.join(map(str, elsewhere))}, "
+             "a container or the host): code unknown here, judged on its own side" if elsewhere else "")
     if not findings:
-        return f"- shortbot processes: none stale ({n} mcp/guardian checked)"
+        return f"- shortbot processes: none stale ({n} mcp/guardian checked{other})"
     each = "; ".join(f"pid {f['pid']} {f['role']} up {age(f['age_s'])} ({f['why']})" for f in findings)
     todo = " / ".join(HINT[r] for r in sorted({f["role"] for f in findings}, reverse=True))
-    return f"- ⚠️ {len(findings)} shortbot processes on stale code: {each}. Fix: {todo}"
+    return f"- ⚠️ {len(findings)} shortbot processes on stale code: {each}. Fix: {todo}{other}"
 
 
 # ------------------------------------------------------------ Docker VM
