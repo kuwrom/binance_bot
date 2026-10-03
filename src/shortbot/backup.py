@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
 from .backup_rotate import STAMP, SUFFIX, manifest_of, rotate, rotate_log
+from .commands import Arg, add_arguments
 from .config import Settings
 
 METHOD = "sqlite3 online backup API, one step inside the read transaction that took the row counts"
@@ -321,17 +322,18 @@ def default_dbs() -> list[Path]:
 
 
 # ------------------------------------------------------------ CLI (`shortbot backup` and `python -m shortbot.backup`)
-def add_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("action", nargs="?", choices=("run", "restore"), default="run")
-    p.add_argument("file", nargs="?", help="restore: the .db.gz (keep its .json manifest beside it)")
-    p.add_argument("--to", type=Path, help="restore: a NEW database path (an existing one is never overwritten)")
-    p.add_argument("--db", type=Path, action="append", help="database to back up, repeatable (default: SHORTBOT_DB)")
-    p.add_argument("--dir", type=Path, help="backup directory (default: SHORTBOT_BACKUP_DIR or data/backups)")
-    p.add_argument("--keep-daily", type=int, help="default: SHORTBOT_BACKUP_KEEP_DAILY or 7")
-    p.add_argument("--keep-weekly", type=int, help="default: SHORTBOT_BACKUP_KEEP_WEEKLY or 4")
-    p.add_argument("--no-offbox", action="store_true", help="skip SHORTBOT_BACKUP_OFFBOX for this run")
-    p.add_argument("--rotate-log", type=Path, action="append", default=[],
-                   help="copytruncate this *.log when it is over 10 MB (keeps 5 .gz); repeatable")
+ARGS = (
+    Arg("action", nargs="?", choices=("run", "restore"), default="run"),
+    Arg("file", nargs="?", help="restore: the .db.gz (keep its .json manifest beside it)"),
+    Arg("to", "--to", "restore: a NEW database path (an existing one is never overwritten)", type=Path),
+    Arg("db", "--db", "database to back up, repeatable (default: SHORTBOT_DB)", type=Path, action="append"),
+    Arg("dir", "--dir", "backup directory (default: SHORTBOT_BACKUP_DIR or data/backups)", type=Path),
+    Arg("keep_daily", "--keep-daily", "default: SHORTBOT_BACKUP_KEEP_DAILY or 7", type=int),
+    Arg("keep_weekly", "--keep-weekly", "default: SHORTBOT_BACKUP_KEEP_WEEKLY or 4", type=int),
+    Arg("no_offbox", "--no-offbox", "skip SHORTBOT_BACKUP_OFFBOX for this run", action="store_true"),
+    Arg("rotate_log", "--rotate-log", "copytruncate this *.log when it is over 10 MB (keeps 5 .gz); repeatable",
+        type=Path, action="append", default=[]),
+)
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -355,7 +357,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m shortbot.backup", description="verified journal backup / restore")
-    add_args(p)
+    add_arguments(p, ARGS)
     raise SystemExit(run_cli(p.parse_args()))
 
 

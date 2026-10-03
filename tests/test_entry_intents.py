@@ -298,7 +298,7 @@ async def test_a_possibly_live_order_counts_as_exposure_for_the_next_group():
 async def test_the_brief_lists_every_order_on_the_book_with_its_hint():
     from types import SimpleNamespace
 
-    from shortbot.cli import brief
+    from shortbot.cli_brief import brief
     d, t, fake = desk()
     fake.add_symbol("ZK/USDT:USDT", 1.035)
     await d.propose_group([prop(1.06, stop=1.12, symbol="ZK/USDT:USDT")])

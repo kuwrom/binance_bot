@@ -48,6 +48,14 @@ async def warmup_check() -> dict[str, Any]:
     return await WarmUp(app.ex, app.journal).check()
 
 
+@command(mcp=False, cli="warmup", write=True, help="cold-desk 15-min study: start = t0 snapshot, check = t+15 verdicts",
+         args=(Arg("action", choices=("start", "check")),
+               Arg("symbols", nargs="*", help="default: pending limit entries + top 5 gainers")))
+async def warmup(action: str, symbols: list[str] | None = None) -> dict[str, Any]:
+    """Both warm-up steps in one subcommand (logged as one write, as warmup_start is)."""
+    return await (warmup_start(symbols or None) if action == "start" else warmup_check())
+
+
 @command(cli="map", weight=RESEARCH, help="market map: regime, breadth, sectors vs BTC, rotation, vetoes", args=(
     Arg("fresh", "--fresh", "rebuild now instead of using the guardian's cached map"),))
 async def market_map(fresh: bool = False) -> str:
@@ -95,3 +103,17 @@ async def position_ladder(symbol: str) -> dict[str, Any]:
     app = get_app()
     pos = [p for p in await app.trader.positions() if p["symbol"] == to_symbol(symbol)]
     return await build_ladder(app.ex, app.journal, pos[0], log=False) if pos else {"error": "no open position"}
+
+
+@command(mcp=False, cli="ladder", write=True, help="3-level ladder: per-level odds, edge score, exposure the rule wants "
+         "(shadow); --enable opts a trade into ladder_live_v1, --apply executes its decision", args=(
+    Arg("symbol"), Arg("enable", "--enable", "opt this trade into the live ladder (pins 1R, full size)"),
+    Arg("apply", "--apply", "execute the decision: cut / add (<= 1R) / stop re-level"),
+    Arg("dry_run", "--dry-run", "show what --apply would do, without orders")))
+async def ladder(symbol: str, enable: bool = False, apply: bool = False, dry_run: bool = False) -> dict[str, Any]:
+    """position_ladder, plus the live-ladder actions (CLI only: the agent runs them at reviews, never the guardian)."""
+    if not (enable or apply or dry_run):
+        return await position_ladder(symbol)
+    from . import ladder_apply as la
+    tr = get_app().trader
+    return await (la.enable(tr, symbol) if enable else la.apply(tr, symbol, dry_run=dry_run))

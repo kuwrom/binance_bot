@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import killswitch, killswitch_ops
+from .killswitch import HALTED, REDUCING
 from .app import get_app
 from .commands import Arg, command
 from .weight import PROTECTIVE
@@ -21,6 +22,19 @@ async def trading_state() -> dict[str, Any]:
     app = get_app()
     await killswitch.watch_guardian(app.trader)
     return killswitch.status(app.journal)
+
+
+@command(mcp=False, cli="kill-switch", write=True, weight=PROTECTIVE, help="show the kill switch, or trip it to "
+         "REDUCING | HALTED (clearing is human-only: shortbot-admin)", args=(
+    Arg("state", nargs="?", choices=(REDUCING, HALTED)), Arg("reason", "--reason", "required to trip")))
+async def kill_switch(state: str | None = None, reason: str | None = None) -> dict[str, Any]:
+    """trading_state without a state; halt_trading with one (a reason required). Protective: a halt withdraws the
+    resting entries (#70)."""
+    if not state:
+        return await trading_state()
+    if not (reason or "").strip():
+        return {"ok": False, "error": "--reason is required to trip the kill switch"}
+    return await killswitch_ops.halt(get_app().trader, state, killswitch_ops.CLI_BY, reason)
 
 
 @command(write=True, weight=PROTECTIVE, stale_exempt=True)

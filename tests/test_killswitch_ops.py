@@ -189,15 +189,18 @@ async def test_brief_line_says_what_tripped_it_and_how_it_clears():
     assert "lifts itself" in ks.brief_line(j2, now)
 
 
-async def test_cli_shows_and_trips_but_cannot_clear():
+async def test_cli_shows_and_trips_but_cannot_clear(monkeypatch):
+    from shortbot import commands, mcp_kill
     t, fake = trader()
-    app = SimpleNamespace(trader=t, journal=t.j)
-    args = lambda **k: SimpleNamespace(**{"cmd": "kill-switch", "state": None, "reason": None, **k})  # noqa: E731
-    assert (await ops.run_cli(app, args()))["state"] == ACTIVE
-    assert "required" in (await ops.run_cli(app, args(state=HALTED)))["error"]
-    assert (await ops.run_cli(app, args(state=HALTED, reason="halt")))["by"] == ops.CLI_BY
-    p = argparse.ArgumentParser()
-    ops.add_cli(p.add_subparsers(dest="cmd"))
+    monkeypatch.setattr(mcp_kill, "get_app", lambda: SimpleNamespace(trader=t, journal=t.j))
+    p = commands.build_parser()
+
+    async def cli(*argv):
+        cmd = commands.by_cli("kill-switch")
+        return await cmd.body(**cmd.cli_kwargs(p.parse_args(["kill-switch", *argv])))
+    assert (await cli())["state"] == ACTIVE
+    assert "required" in (await cli(HALTED))["error"]
+    assert (await cli(HALTED, "--reason", "halt"))["by"] == ops.CLI_BY
     with pytest.raises(SystemExit):
         p.parse_args(["kill-switch", ACTIVE])
 

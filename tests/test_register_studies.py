@@ -18,7 +18,7 @@ RECORDERS = {"record", "record_backtest", "record_study"}
 ENTRY = {"backtest/run.py": "_run", "backtest/carry_regime.py": "main", "backtest/funding_events.py": "main",
          "backtest/hedge_report.py": "main", "backtest/rungs.py": "main", "backtest/trail5m.py": "main",
          "backtest/xs_factors.py": "main", "backtest/card_tests.py": "main", "backtest/long_studies.py": "main", "backtest/chain_study.py": "main", "lifecycle_report.py": "main",
-         "registry.py": "add_trial", "cli.py": "_study", "backtest/replay_study.py": "main"}
+         "registry.py": "add_trial", "cli_cmds.py": "study", "backtest/replay_study.py": "main"}
 EXEMPT = {"backtest/drawdown.py": "drawdown quantiles of books already tested: selects nothing",
           "sweeps.py": "fake-out size quantiles for stop placement: descriptive, no hypothesis",
           "backtest/trigger_rates.py": "scanner trigger base rates per 15m window: descriptive, selects nothing",

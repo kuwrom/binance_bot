@@ -9,7 +9,7 @@ from typing import Any
 
 from . import killswitch as ks
 from .entries import EntryDesk
-from .killswitch import HALTED, REDUCING
+from .killswitch import HALTED
 from .symlock import SymbolBusy
 
 CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who typed it; shortbot-admin can
@@ -78,21 +78,10 @@ async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:
 
 # ------------------------------------------------------------ CLI (cli.py registers these)
 def add_cli(sub) -> None:
-    k = sub.add_parser("kill-switch", help="show the kill switch, or trip it to REDUCING | HALTED (clearing is "
-                                           "human-only: shortbot-admin)")
-    k.add_argument("state", nargs="?", choices=(REDUCING, HALTED))
-    k.add_argument("--reason", help="required to trip")
     f = sub.add_parser("flatten", help="HALTED + market-close every short reduce-only; the state stays HALTED")
     f.add_argument("--reason", required=True)
     f.add_argument("--lesson", default="")
 
 
 async def run_cli(app, args) -> dict[str, Any]:
-    if args.cmd == "flatten":
-        return await flatten(app.trader, CLI_BY, args.reason, args.lesson)
-    if not args.state:
-        await ks.watch_guardian(app.trader)
-        return ks.status(app.journal)
-    if not (args.reason or "").strip():
-        return {"ok": False, "error": "--reason is required to trip the kill switch"}
-    return await halt(app.trader, args.state, CLI_BY, args.reason)
+    return await flatten(app.trader, CLI_BY, args.reason, args.lesson)

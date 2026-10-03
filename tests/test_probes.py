@@ -8,13 +8,14 @@ from types import SimpleNamespace
 import ccxt
 import pytest
 
-from shortbot import cli, probe_kit, probe_stream, probes
+from shortbot import cli, cli_cmds, commands, probe_kit, probe_stream, probes
 from shortbot import killswitch as ks
-from shortbot.cli_args import build_parser
+from shortbot.commands import build_parser
 from shortbot.config import RiskLimits, Settings
 from shortbot.entries import EntryDesk
 from shortbot.journal import Journal, now_iso
 from shortbot.trading import Trader
+from shortbot.weight import PROTECTIVE
 from tests.fakes import FakeCcxt, FakeEx, neutral_budget, ok_prechecks
 
 XRP = "XRP/USDT:USDT"
@@ -263,7 +264,8 @@ def test_cli_probe_command_is_protective_and_takes_a_name_or_all():
     assert (a.cmd, a.name, a.symbol, a.all) == ("probe", "fetch-by-cid", "ETHUSDT", False)
     a = p.parse_args(["probe", "--all"])
     assert a.all and a.name is None and a.symbol == probes.DEFAULT_SYMBOL
-    assert "probe" in cli.PROTECTIVE_CMDS and "probe" not in cli.READS
+    cmd = commands.by_cli("probe")
+    assert cmd.weight == PROTECTIVE and cmd.write and not cmd.name   # CLI only: the agent's MCP has no probe
     with pytest.raises(SystemExit):
         p.parse_args(["probe", "no-such-probe"])
 
@@ -273,6 +275,7 @@ async def test_cli_runs_the_probe_through_the_desk(clock, monkeypatch):
     clock["fake"] = fake
     app = SimpleNamespace(trader=tr, journal=tr.j, ex=tr.ex, settings=tr.ex.settings)
     monkeypatch.setattr(cli, "get_app", lambda *a, **k: app)
+    monkeypatch.setattr(cli_cmds, "get_app", lambda *a, **k: app)
 
     async def no_close():
         return None

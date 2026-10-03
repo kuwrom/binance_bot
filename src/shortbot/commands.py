@@ -115,26 +115,28 @@ class Command:
         return " ".join(parts)
 
     def _spec(self, a: Arg) -> dict[str, Any]:
-        """argparse keyword arguments for `a`: what it declares, the rest from the body's parameter."""
-        p = None if a.cli_only or self.raw else self.sig.parameters[a.name]
-        kw: dict[str, Any] = {k: v for k, v in (("help", a.help), ("metavar", a.metavar), ("choices", a.choices),
-                                                ("nargs", a.nargs), ("action", a.action), ("type", a.type)) if v}
-        default = a.default if a.default is not _UNSET else p.default if p is not None else _EMPTY
-        if p is not None and "action" not in kw and _core(p.annotation) is bool and default is False:
-            kw["action"] = "store_true"
-        if p is not None and "type" not in kw and kw.get("action") not in ("store_true", "store_false"):
-            t = _core(p.annotation)
-            if t in (int, float):
-                kw["type"] = t
-        if default is not _EMPTY:
-            kw["default"] = default
-        if a.flag:
-            if a.dest:
-                kw["dest"] = a.dest
-            required = a.required if a.required is not None else p is not None and p.default is _EMPTY
-            if required:
-                kw["required"] = True
-        return kw
+        return spec(a, None if a.cli_only or self.raw else self.sig.parameters[a.name])
+
+
+def spec(a: Arg, p: inspect.Parameter | None) -> dict[str, Any]:
+    """argparse keyword arguments for `a`: what it declares, the rest from the body's parameter `p` (None: CLI only)."""
+    kw: dict[str, Any] = {k: v for k, v in (("help", a.help), ("metavar", a.metavar), ("choices", a.choices),
+                                            ("nargs", a.nargs), ("action", a.action), ("type", a.type)) if v}
+    default = a.default if a.default is not _UNSET else p.default if p is not None else _EMPTY
+    if p is not None and "action" not in kw and _core(p.annotation) is bool and default is False:
+        kw["action"] = "store_true"
+    if p is not None and "type" not in kw and kw.get("action") not in ("store_true", "store_false"):
+        t = _core(p.annotation)
+        if t in (int, float):
+            kw["type"] = t
+    if default is not _EMPTY:
+        kw["default"] = default
+    if a.flag:
+        if a.dest:
+            kw["dest"] = a.dest
+        if a.required if a.required is not None else p is not None and p.default is _EMPTY:
+            kw["required"] = True
+    return kw
 
 
 def _core(ann: Any) -> Any:
@@ -204,9 +206,11 @@ def by_name(name: str) -> Command:
     return _BY_NAME[name]
 
 
-def add_arguments(p: argparse.ArgumentParser, cmd: Command) -> None:
-    for a in cmd.args:
-        p.add_argument(*([a.flag] if a.flag else [a.cli_dest]), **cmd._spec(a))
+def add_arguments(p: argparse.ArgumentParser, cmd: Command | tuple[Arg, ...]) -> None:
+    """A command's arguments on its parser (a bare tuple: arguments that declare everything, as backup.ARGS)."""
+    for a in cmd.args if isinstance(cmd, Command) else cmd:
+        p.add_argument(*([a.flag] if a.flag else [a.cli_dest]), **(cmd._spec(a) if isinstance(cmd, Command)
+                                                                    else spec(a, None)))
 
 
 def build_parser() -> argparse.ArgumentParser:

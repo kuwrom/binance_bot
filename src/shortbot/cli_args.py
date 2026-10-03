@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import backup, commands, killswitch_ops, probes
+from . import commands, killswitch_ops
 from .journal_research import LEARNING_KINDS
 from .tilts import TIERS
 
@@ -32,8 +32,6 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--fraction", type=float, default=1.0, help="of the CURRENT size (see --of-original)")
     c.add_argument("--expect-contracts", type=float, help="the size you saw: refused if it changed since")
     c.add_argument("--of-original", action="store_true", help="fraction = share of the ORIGINAL size gone by the end")
-    killswitch_ops.add_cli(sub)
-    probes.add_cli(sub)
     w = sub.add_parser("widen-stop", help="widen once, with automatic size cut to keep <= 1R")
     w.add_argument("symbol")
     w.add_argument("price", type=float)
@@ -50,9 +48,6 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--ttl-hours", type=float, default=6.0, help="at most 24")
     pr.add_argument("--no-prearm", action="store_true")
     pr.add_argument("--warmup-override", help="reason to skip the cold-desk warm-up")
-    wu = sub.add_parser("warmup", help="cold-desk 15-min study: start = t0 snapshot, check = t+15 verdicts")
-    wu.add_argument("action", choices=("start", "check"))
-    wu.add_argument("symbols", nargs="*", help="default: pending limit entries + top 5 gainers")
     le = sub.add_parser("learn", help="record a research finding (same as the add_learning MCP tool)")
     le.add_argument("statement")
     le.add_argument("--evidence", required=True, help="trade ids, data, sources")
@@ -68,33 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
     le.add_argument("--sample", help="where the sample lives: research_report:2026-10-02, registry:lib.x, data/...")
     le.add_argument("--review-by", help="YYYY-MM-DD the brief resurfaces it (default: 14 days for a hypothesis, 30 "
                     "for a supported statistical learning)")
-    sw = sub.add_parser("sweeps", help="level-sweep study: how far price pokes past round numbers / 24h highs")
-    sw.add_argument("action", choices=("run", "report"))
-    sw.add_argument("--days", type=float, default=3)
-    sw.add_argument("--top", type=int, default=60, help="most liquid N perps")
-    st = sub.add_parser("study", help="shadow study results: ladder variants vs hold | laggard catch-up | sweeps | "
-                                      "patterns (week event study: pumps, sweeps, squeezes, funding x liquidity)")
-    st.add_argument("name", choices=("ladder", "laggard", "sweeps", "patterns"))
-    st.add_argument("--fetch", action="store_true", help="patterns: refresh 10 days of hourly data for every perp")
-    rg = sub.add_parser("registry", help="pattern registry: tree | card ID | search TEXT | seed | status ID --status S"
-                                         " | forward [ID] (the pre-registered forward test of every non-draft node)")
-    rg.add_argument("action", choices=("tree", "card", "search", "seed", "status", "forward"))
-    rg.add_argument("arg", nargs="?")
-    rg.add_argument("--status", choices=("draft", "shadow", "live", "probation", "retired"))
-    rg.add_argument("--reason")
-    rg.add_argument("--bt-dir", help="seed: backtest output dir (results.json + trades.json)")
-    ld = sub.add_parser("ladder", help="3-level ladder: per-level odds, edge score, exposure the rule wants (shadow); "
-                                       "--enable opts a trade into ladder_live_v1, --apply executes its decision")
-    ld.add_argument("symbol")
-    ld.add_argument("--enable", action="store_true", help="opt this trade into the live ladder (pins 1R, full size)")
-    ld.add_argument("--apply", action="store_true", help="execute the decision: cut / add (<= 1R) / stop re-level")
-    ld.add_argument("--dry-run", action="store_true", help="show what --apply would do, without orders")
-    ma = sub.add_parser("macro-add", help="record a scheduled macro event (source required)")
-    ma.add_argument("name")
-    ma.add_argument("--when", required=True, help="ISO time WITH offset, e.g. 2026-09-30T08:30:00-04:00")
-    ma.add_argument("--kind", required=True, choices=("tier1", "tier2", "fomc", "maintenance"))
-    ma.add_argument("--source", required=True)
-    sub.add_parser("macro-refresh", help="pull BLS + ForexFactory + FOMC dates into the macro calendar")
     cg = sub.add_parser("cancel-group")
     cg.add_argument("group_id")
     cg.add_argument("--reason", required=True)
@@ -114,14 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("price", type=float)
     m.add_argument("--reason", required=True)
     _tool_forms(sub)
-    backup.add_args(sub.add_parser("backup", help="verified journal backup (no exchange) | restore FILE --to NEW_PATH"))
-    au = sub.add_parser("audit", help="who did what: decisions and tool/CLI calls with actor, Claude session, code")
-    au.add_argument("--since", help="24h, 7d, 30m or an ISO time (UTC)")
-    au.add_argument("--actor", help="prefix: mcp, cli, guardian, admin, hook, or e.g. mcp:open_short")
-    au.add_argument("--action", help="one action, e.g. call, rejected, open")
-    au.add_argument("--limit", type=int, default=50)
-    sub.add_parser("hook-session", help="SessionStart hook: record the Claude session's model (reads hook JSON on stdin)")
-    sub.add_parser("brief")
+    killswitch_ops.add_cli(sub)
     for cmd in commands.load():
         if cmd.cli:
             commands.add_arguments(sub.add_parser(cmd.cli, **({"help": cmd.help} if cmd.help else {})), cmd)
