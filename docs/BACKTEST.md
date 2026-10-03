@@ -210,6 +210,34 @@ Hourly versions of the two daily long edges (docs/REGIME_STUDIES.md §5): 6 pre-
 - Buying hourly volume breakouts is *worse* than buying a random coin in the same hour, which fits the short book's pump fades.
 - The daily edges don't survive translation to hourly triggers. Longs act on daily closes only (docs/LONG_PLAYBOOK.md).
 
+## Chained multi-timeframe rules (task #41, `chain_study.py`, `mtf.py`)
+**Question:** do rules that chain timeframes beat their single-timeframe parts?
+- Method: 9 pre-registered chains from the playbooks (module docstring), 27 trials.
+- Data: 93 days of 1m replay bars for 180 coins, aggregated exactly to 5m / 15m / 1h / 4h; states from `mtf.series`.
+- Events fire at the first 15m close where a chain holds, then wait 24 h per coin.
+- Excess = the side-signed return minus the universe's over the same window, less 10 bp. t is two-way clustered by day and coin.
+
+| chain (side) | n | +1h | +4h | +24h (t) | median +24h |
+|---|---|---|---|---|---|
+| S0 pumped, 24h ≥ 10% (short) | 2,423 | −0.14% | −0.08% | −0.78% (−1.66) | +2.3% |
+| S1 + 15m lower high | 2,095 | −0.19% | −0.31% | −0.66% (−1.42) | +2.1% |
+| S2 + 1h lower high | 1,417 | −0.07% | −0.11% | −0.37% (−0.63) | +1.9% |
+| S3 + 1h and 15m lower highs | 1,240 | +0.07% | −0.20% | −0.23% (−0.33) | +1.9% |
+| S4 S3 + 5m taker selling | 1,151 | +0.03% | −0.21% | +0.09% (0.14) | +2.0% |
+| S5 4h RSI ≥ 70, lost 1h EMA20, 15m lower high | 148 | +0.18% | +1.23% (1.25) | +1.21% (0.68) | +1.2% |
+| S6 pumped, ≥ 3% off the 15m high, 1h lower high | 1,220 | −0.07% | −0.16% | −0.25% (−0.37) | +2.0% |
+| L1 dumped, 1h and 15m higher lows (long) | 963 | −0.24% (−2.69) | −0.35% | −0.54% (−0.90) | −1.7% |
+| L2 4h uptrend, 1h higher low, 15m move z ≥ 2 (long) | 2,930 | −0.05% | +0.15% | **+0.63% (2.17)** | −1.2% |
+
+**Read:**
+- **Pre-registered decision: nothing is wired as a trigger.** The bar was +24h excess > 0 with t ≥ 2, and beating the chain's single-timeframe parent where it has one.
+- **Chaining helps the short side, steadily but not significantly.** Each added confirmation lifts the mean: S0 −0.78% → S1 −0.66% → S3 −0.23% → S4 +0.09%. The 1h + 15m + 5m chain avoids most of what a raw pump short loses. In this alt-up window, none is an edge on its own.
+- **Shorts have the long side's problem, mirrored.** The median pumped-coin short beats the market by ~2% over 24 h, with ~60% winners. Squeezes in the tail make the mean ≤ 0. The short book's lever is the tail: stops and squeeze management, not entry selection.
+- **S5** (4h overbought, then the 1h EMA20 lost, then a 15m lower high) is the best short chain: +1.2% at 4h and 24h. But n is 148 and t ≈ 1: a forward candidate.
+- **L2** (4h uptrend, 1h higher low, 15m momentum) is positive with t 2.17, tail-driven (median −1.2%), like the daily long edges. It is not deflation-proof against 27 trials here and the register's ~290. Longs aren't tradable yet anyway.
+- **L1** (buying a dump after higher lows) loses at +1h (t −2.7): the knife-catching result again.
+- **Forward record:** `mtf_live` logs every streamed coin's 5m-1d state at each 15m close to `data/research/mtf.db`. S4, S5 and L2 are judged on it before any wiring.
+
 ## Positioning cards (research, 2026-10-02, task #16)
 `run --days60 --flow` runs five pre-registered strategies from the library (`strategies_flow.py`: 10 param sets, effective N 7). They use the hourly OI, long/short ratios and taker ratio from data.binance.vision metrics.
 

@@ -281,3 +281,9 @@ The depth signal (`signals/depth.py`) sums the book within ±1% of mid. A 500-le
   - **Logging:** tier-2 rows are research candidates with `features.scan = {"tier": 2, "wake", "rules", "strength", "carried"}`; the replay (#29) skips them. Every close is a `scan_windows` row (counts per rule, selected, scored, queued, skipped, tier-2 weight), the data for evaluating the triggers.
   - **Alerts:** tier 3 alerts are `scan_job.pick_alerts`, deduplicated in kv (`scan_alert_seen:`), so a restart doesn't re-alert within 2 h.
   - **Stale streams:** tier 1 pauses and a `streams_stale` alert goes out after 10 min. There is no REST fallback scan.
+
+## Multi-timeframe views (task #41, 2026-10-03)
+- Every streamed coin's 5m / 15m / 1h / 4h / 1d state (`mtf.py`) is computed from the store at each 15m close and logged (`mtf_live.py`, `data/research/mtf.db`), with zero exchange calls.
+- `python -m shortbot.mtf_live COIN` prints one coin's view.
+- The same `mtf.series` code backs `backtest/chain_study.py`, so a chained rule means the same thing in research and live.
+- The first 9 chains: none is wired yet (BACKTEST.md "Chained multi-timeframe rules").
