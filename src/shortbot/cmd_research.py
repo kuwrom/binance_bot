@@ -12,7 +12,7 @@ from .app import get_app
 from .commands import Arg, CommandError, command
 from .entries import EntryDesk
 from .exchange import to_symbol
-from .journal_research import CONFIDENCE, LEARNING_KINDS, LEARNING_STATUS
+from .journal_learnings import CONFIDENCE, LEARNING_KINDS, LEARNING_STATUS
 from .weight import PROTECTIVE
 
 
@@ -137,16 +137,54 @@ async def log_decision(action: str, reasoning: str, symbol: str | None = None) -
     return {"ok": True, "decision_id": get_app().journal.log_decision(action, reasoning, sym)}
 
 
+INDEX_MAX = 60    # learnings in the journal tool's index
+LIMIT_MAX = 50    # full learnings per `learnings` call
+
+
 @command(cli="journal", args=(Arg("limit", "--limit"),))
 async def journal(limit: int = 20) -> dict[str, Any]:
-    """Stats (by setup/experiment: win rate, avg R, MAE/MFE), open trades, recent trades/decisions/alerts,
-    and active learnings (each with an `audit`: kind, n, days, review date, flags; '?' fields are inferred).
+    """Stats (by setup/experiment: win rate, avg R, MAE/MFE), open trades, recent trades/decisions/alerts, and the
+    current learnings as a compact index, best first: id, status, tag (kind and sample; '?' = inferred), setup, text
+    (the rule, else the statement cut short), helpful/harmful (closed trades whose plan cited it, by R) and flags.
+    learnings_more = current learnings beyond the index. Full rows, evidence and search: the `learnings` tool.
     Review before trading."""
     j = get_app().journal
+    rows = learnings_view.annotate(j, j.learnings(current=True))
     return {"stats": j.stats(), "open_trades": j.open_trades(include_opening=True), "recent_trades": j.trades(limit),
             "recent_decisions": j.decisions(limit=limit),
             "recent_alerts": [alerts_view.for_agent(a) for a in j.alerts(limit)],
-            "learnings": learnings_view.annotate(j, j.learnings())}
+            "learnings": learnings_view.index(rows, INDEX_MAX), "learnings_more": max(0, len(rows) - INDEX_MAX)}
+
+
+@command(cli="learnings", help="learnings in full: search (QUERY), --setup, --id (any state), --status", args=(
+    Arg("query", nargs="?", help="words to search for (stemmed, best match first)"), Arg("setup", "--setup"),
+    Arg("ids", "--id", "a learning id, returned in any state (repeatable)", action="append", type=int),
+    Arg("status", "--status", choices=LEARNING_STATUS),
+    Arg("include_inactive", "--include-inactive", "rejected, superseded and expired ones too"),
+    Arg("limit", "--limit", f"at most {LIMIT_MAX}")))
+async def learnings(query: str | None = None, setup: str | None = None, ids: list[int] | None = None,
+                    status: str | None = None, include_inactive: bool = False, limit: int = 10) -> dict[str, Any]:
+    """Learnings in full (statement, evidence, provenance, rule, valid_until, superseded_by), each with its `audit`:
+    kind, n, days, flags and the outcome score (helpful / harmful / cited_by: closed trades whose plan.uses_learnings
+    cited it, by R). query: full-text search over rule, statement, evidence and setup (stemmed, best match first).
+    setup: that setup's learnings plus the general ones. ids: exactly these, in any state. status: one status. Without
+    a query or ids: the current learnings ranked like the brief's rulebook. include_inactive adds rejected,
+    superseded and expired ones. limit: at most 50."""
+    j, limit = get_app().journal, max(1, min(int(limit), LIMIT_MAX))
+    out: dict[str, Any] = {}
+    if ids:
+        want = list(dict.fromkeys(ids))[:LIMIT_MAX]
+        rows = sorted(j.learnings(active_only=False, ids=want), key=lambda r: want.index(r["id"]))
+        if missing := j.unknown_learnings(want):
+            out["missing"] = missing
+    elif query:
+        rows = j.search_learnings(query, setup, status, limit, current=not include_inactive)
+    else:
+        rows = learnings_view.rank(learnings_view.annotate(j, j.learnings(
+            active_only=not include_inactive, setup=setup, current=not include_inactive, status=status)))
+        out["more"] = max(0, len(rows) - limit)
+        return {"learnings": rows[:limit], **out}
+    return {"learnings": learnings_view.annotate(j, rows), **out}
 
 
 @command(cli="learn", write=True, help="record a research finding (same as the add_learning MCP tool)", args=(
@@ -160,11 +198,13 @@ async def journal(limit: int = 20) -> dict[str, Any]:
     Arg("days", "--days", "distinct days the observations span"),
     Arg("sample", "--sample", "where the sample lives: research_report:2026-10-02, registry:lib.x, data/..."),
     Arg("review_by", "--review-by", "YYYY-MM-DD the brief resurfaces it (default: 14 days for a hypothesis, 30 for a "
-        "supported statistical learning)")))
+        "supported statistical learning)"),
+    Arg("rule", "--rule", "the one-line rule the brief's rulebook shows (<= 160 chars)"),
+    Arg("valid_until", "--valid-until", "YYYY-MM-DD: a regime- or coin-bound claim stops being current after it")))
 async def add_learning(statement: str, evidence: str, provenance: list[str], kind: str, setup: str | None = None,
                        status: str = "hypothesis", confidence: str = "low", n: float | None = None,
-                       days: int | None = None, sample: str | None = None,
-                       review_by: str | None = None) -> dict[str, Any]:
+                       days: int | None = None, sample: str | None = None, review_by: str | None = None,
+                       rule: str | None = None, valid_until: str | None = None) -> dict[str, Any]:
     """Record a research finding so future sessions start from it. status: hypothesis|supported|rejected|adopted;
     confidence: low|medium|high. Evidence should cite trade ids, research_report numbers or sources.
     provenance (required): where the evidence came from, e.g. ["trade:12", "research_report", "coin_news:QNT",
@@ -173,12 +213,19 @@ async def add_learning(statement: str, evidence: str, provenance: list[str], kin
     desk works). For statistical claims give n = independent observations (research_report n = symbol-episodes,
     trades or events, never scan rows), days = distinct days, sample = where it lives ("research_report:2026-10-02",
     "registry:lib.x", "data/research/<dir>"). review_by (YYYY-MM-DD; default: 14 days for a hypothesis, 30 for a
-    supported statistical learning): the brief resurfaces it after that date. n < 30 is flagged as an anecdote."""
+    supported statistical learning): the brief resurfaces it after that date. n < 30 is flagged as an anecdote.
+    rule: the claim as one actionable line (<= 160 chars) for the brief's rulebook, which holds only adopted
+    learnings and supported ones on a real sample. valid_until (YYYY-MM-DD): set it on a regime- or coin-bound claim.
+    Returns `similar`: the current learnings that match best. If one already says this, update or supersede it
+    (update_learning superseded_by) rather than keeping two."""
     if not provenance:
         raise CommandError("provenance is required: name where the evidence came from, e.g. ['trade:12']")
-    return {"ok": True, "learning_id": get_app().journal.add_learning(
+    j = get_app().journal
+    similar = [{"id": r["id"], "status": r["status"], "text": learnings_view.text(r)}
+               for r in j.search_learnings(f"{statement} {rule or ''}", limit=3)]   # before the insert: not itself
+    return {"ok": True, "learning_id": j.add_learning(
         statement, evidence, setup, status, confidence, provenance, kind=kind, n=n, days=days, sample=sample,
-        review_by=review_by)}
+        review_by=review_by, rule=rule, valid_until=valid_until), "similar": similar}
 
 
 @command(cli="update-learning", write=True, help="update a learning: evidence and provenance are appended, the rest "
@@ -187,16 +234,22 @@ async def add_learning(statement: str, evidence: str, provenance: list[str], kin
     Arg("confidence", "--confidence", choices=CONFIDENCE),
     Arg("provenance", "--provenance", "repeatable", action="append"),
     Arg("kind", "--kind", choices=LEARNING_KINDS), Arg("n", "--n"), Arg("days", "--days"), Arg("sample", "--sample"),
-    Arg("review_by", "--review-by")))
+    Arg("review_by", "--review-by"), Arg("rule", "--rule", "'' clears it"), Arg("setup", "--setup", "'' clears it"),
+    Arg("superseded_by", "--superseded-by", "the learning that replaces this one (0 clears it)"),
+    Arg("valid_until", "--valid-until", "YYYY-MM-DD; '' clears it")))
 async def update_learning(learning_id: int, status: str | None = None, evidence: str | None = None,
                           confidence: str | None = None, provenance: list[str] | None = None, kind: str | None = None,
                           n: float | None = None, days: int | None = None, sample: str | None = None,
-                          review_by: str | None = None) -> dict[str, Any]:
+                          review_by: str | None = None, rule: str | None = None, setup: str | None = None,
+                          superseded_by: int | None = None, valid_until: str | None = None) -> dict[str, Any]:
     """Update a learning as evidence accumulates (evidence and provenance are appended, never overwritten; kind, n,
-    days, sample and review_by replace the old value). Setting n on a learning recorded before 2026-10-01 marks its
-    sample as re-checked on the episode basis."""
+    days, sample, review_by, rule, setup and valid_until replace the old value, '' clears rule, setup and
+    valid_until). Setting n on a learning recorded before 2026-10-01 marks its sample as re-checked on the episode
+    basis. The statement never changes: when the claim changes, add_learning the new one and set superseded_by on the
+    old one (0 clears it); a superseded learning leaves the brief and searches, and keeps its history."""
     get_app().journal.update_learning(learning_id, status, evidence, confidence, provenance, kind=kind, n=n,
-                                      days=days, sample=sample, review_by=review_by)
+                                      days=days, sample=sample, review_by=review_by, rule=rule, setup=setup,
+                                      superseded_by=superseded_by, valid_until=valid_until)
     return {"ok": True}
 
 

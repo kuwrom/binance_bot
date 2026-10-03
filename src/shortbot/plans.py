@@ -34,12 +34,26 @@ class TradePlan:
     kill_conditions: list[str] = field(default_factory=list)   # qualitative, for the analyst
     auto: dict[str, bool] = field(default_factory=lambda: {
         "breakeven": True, "trail": True, "targets": False, "time_stop": False})
+    uses_learnings: list[int] = field(default_factory=list)   # learning ids this entry relies on (learnings_view.scores)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 PLAN_FIELDS = {f.name for f in fields(TradePlan)}
+MAX_CITED = 10
+
+
+def _cited(ids: Any) -> list[int]:
+    """uses_learnings: positive learning ids, each once, at most MAX_CITED. Strings and bools are refused, not cast."""
+    if ids is None:
+        return []
+    if not isinstance(ids, (list, tuple)) or any(isinstance(i, bool) or not isinstance(i, int) or i <= 0 for i in ids):
+        raise ValueError(f"uses_learnings must be a list of learning ids, e.g. [11, 81]; got {ids!r}")
+    out = list(dict.fromkeys(ids))
+    if len(out) > MAX_CITED:
+        raise ValueError(f"uses_learnings: at most {MAX_CITED} learnings (the ones this entry actually relies on)")
+    return out
 
 
 def build_plan(defaults: dict[str, Any], overrides: dict[str, Any] | None) -> TradePlan:
@@ -51,19 +65,23 @@ def build_plan(defaults: dict[str, Any], overrides: dict[str, Any] | None) -> Tr
     auto = {**TradePlan().auto, **merged.pop("auto", {})}
     targets = [t if isinstance(t, Target) else Target(float(t["price"]), float(t["fraction"]))
                for t in merged.pop("targets", [])]
-    return TradePlan(**merged, targets=targets, auto=auto)
+    cited = _cited(merged.pop("uses_learnings", None))
+    return TradePlan(**merged, targets=targets, auto=auto, uses_learnings=cited)
 
 
 PINNED = ("r1_usdt", "full_size", "ladder_live")   # written by the desk (adds, the live ladder, split entries), never
                                                    # by a plan edit: 1R and the ladder's exposure base stay fixed
+ENTRY_ONLY = ("uses_learnings",)   # set with the entry: a citation added once the outcome shows would score itself
 
 
 def revise_plan(current: dict[str, Any], changes: dict[str, Any] | None) -> tuple[TradePlan, dict[str, Any]]:
     """An open trade's plan with the analyst's changes: (the edited plan, its pinned keys exactly as they were).
-    Store `{**plan.to_dict(), **pins}`. Changing a pinned key is refused; any other unknown key still is too."""
-    locked = sorted(set(changes or {}) & set(PINNED))
+    Store `{**plan.to_dict(), **pins}`. Changing a pinned or entry-only key is refused; any other unknown key still is
+    too."""
+    locked = sorted(set(changes or {}) & {*PINNED, *ENTRY_ONLY})
     if locked:
-        raise ValueError(f"{locked} are pinned by the desk (1R, the ladder's full size): not editable in a plan")
+        raise ValueError(f"{locked} are pinned (1R and the ladder's full size by the desk, uses_learnings at entry): "
+                         "not editable in a plan")
     pins = {k: current[k] for k in PINNED if k in current}
     return build_plan({k: v for k, v in current.items() if k not in PINNED}, changes), pins
 

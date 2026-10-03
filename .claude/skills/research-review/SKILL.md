@@ -20,6 +20,13 @@ The desk learns from three data streams:
    - `forward`: each registry node's pre-registered forward test. It is the only evidence that promotes a node (docs/REGISTRY.md); everything else above is exploration.
 2. `journal`: stats by setup and by experiment. Treat n < 30 as anecdote. `stats.fill_quality` compares demo fills with the mainnet price at each fill (bps) and with the backtest's slippage model: check it before trusting demo R.
 3. Update learnings (`add_learning` / `update_learning`), citing the numbers and where they came from (`provenance`). Give each a `kind`, and give statistical ones `n`, `days` and `sample`. Work through `research_report.learnings` (the brief's "learnings to re-check" section): `review_due`, `anecdote` (supported/adopted on n < 30), `pre_episodes` (statistics from before 2026-10-01: re-state n on the episode basis) and `?` (inferred) fields. Changing an adopted rule's status is a decision for you or the owner, not for the flag.
+4. Curate the rulebook (docs/RESEARCH.md "The rulebook and search"). The brief loads only settled learnings; the rest is searched with `learnings`.
+   - `missing_rule`: write the one-line `rule` (≤ 160 chars: the condition and the action).
+   - `harmful`: the trades that cited it lost (outcome scores, never votes). Re-check the claim with data, then supersede or reject it.
+   - `expired`: extend `valid_until`, supersede or reject it.
+   - `similar` (returned by `add_learning`): when two learnings say the same thing, keep one and supersede the other.
+   - Supersede instead of rewriting: a changed claim is a new learning plus `superseded_by` on the old one. The statement never changes.
+   - Set `valid_until` on regime- or one-coin claims (a day's tell, a coin's current behaviour).
 
 ## Ad-hoc questions: code mode
 Use `shortbot.lab` through Bash and print only the conclusion:

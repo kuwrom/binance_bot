@@ -137,7 +137,8 @@ class OpenFlow:
                 self.j.log_decision("rejected", "; ".join(e.reasons), symbol, snapshot=req.__dict__)
                 return {"ok": False, "rejected_by_risk": e.reasons, "request": req.__dict__}
             tp = build_plan(st.default_plan, plan)
-            errs = validate_plan(tp, price, stop_price)
+            errs = validate_plan(tp, price, stop_price) + [f"uses_learnings: no learning #{i}"
+                                                           for i in self.j.unknown_learnings(tp.uses_learnings)]
             if errs:
                 return {"ok": False, "plan_errors": errs}
             amount = floor_amount(self.t, symbol, notional / price if price else 0)

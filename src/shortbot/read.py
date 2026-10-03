@@ -98,7 +98,7 @@ async def read_coin(ex, journal, symbol: str) -> dict[str, Any]:
                                                  for k, v in ses.items()}},
         "stops": snap.get("suggested_stops"),
         "evidence": layered_evidence(rows, snap["symbol"], arch),
-        "registry": (reg := registry_view(journal, stage, game, labels, snap.get("setups") or [])),
+        "registry": (reg := registry_view(journal, stage, game, labels, snap.get("setups") or [], snap["symbol"])),
     } | {"verdict": gate_by_registry(playbook(stage, game, labels, snap.get("vetoes") or []), stage, game,
                                      snap.get("setups") or [], reg)}
 
@@ -151,17 +151,23 @@ SETUP_STRATEGY = {"pump_fade": "strategy.pump_fade", "breakdown": "strategy.boun
 TAPE_STRATEGY = {"post_pump_decay": "strategy.post_pump_decay", "failed_sweep": "strategy.level_fade"}
 
 
-def registry_view(journal, stage: str, game: str, labels: list[str], setups: list[str]) -> dict[str, Any]:
-    """Coarse cut: the hierarchy nodes this coin sits in, each with its evidence card; plus matching lessons."""
+def registry_view(journal, stage: str, game: str, labels: list[str], setups: list[str],
+                  symbol: str = "") -> dict[str, Any]:
+    """Coarse cut: the hierarchy nodes this coin sits in, each with its evidence card; plus matching lessons: the
+    best pattern definitions and current learnings (the learnings index is live: a learning added since the last
+    registry seed is found too; the coin's base symbol joins their query)."""
+    from . import learnings_view
     from . import registry as R
     ids = [f"lifecycle.{stage}", f"tape.{game}", *(f"controller.{c}" for c in labels),
            *(f"setup.{s}" for s in setups), *(SETUP_STRATEGY[s] for s in setups if s in SETUP_STRATEGY)]
     if game in TAPE_STRATEGY:
         ids.append(TAPE_STRATEGY[game])
     ids.append("strategy.pump_fade")   # the gate may judge a pumped coin's failed sweep by pump_fade's card
+    q = " ".join([stage, game, *setups]).replace("_", " ")
     try:
-        return {"nodes": R.node_cards(journal.db, ids),
-                "lessons": R.search(journal.db, " ".join([stage, game, *setups]).replace("_", " "), 5),
+        learned = [{"kind": "learning", "ref": f"#{r['id']}", "status": r["status"], "snippet": learnings_view.text(r)}
+                   for r in journal.search_learnings(f"{symbol.split('/')[0]} {q}", limit=3)]
+        return {"nodes": R.node_cards(journal.db, ids), "lessons": R.search(journal.db, q, 3) + learned,
                 "how_to_read": "status live = evidence-backed; shadow/draft = hypothesis. mean is per the metric "
                                "(trade_r in R, else short return %), raw. 'forensics' sources are hindsight-picked. "
                                "forward = the pre-registered test since the node's plan (vs the same scan's "

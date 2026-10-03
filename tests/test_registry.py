@@ -100,10 +100,12 @@ def test_duplicates_and_lesson_search():
     assert R.duplicates(d, "script.copy")[0]["id"] == "script.discount_squeeze"
     d.execute("INSERT INTO learnings VALUES (1,'','','pump_fade','Invalidations need acceptance, two closes','ZRO',"
               "'adopted','medium')")
-    assert R.reindex_lessons(d) == 3
-    hits = R.search(d, "acceptance closes")
-    assert hits and hits[0]["ref"] == "#1"
-    assert R.search(d, '"(((') == []
+    assert R.reindex_lessons(d) == 2                   # patterns only: learnings have their own live index
+    d.execute("INSERT INTO lessons_fts VALUES ('learning', '#1', 'acceptance closes')")   # a row an old seed left
+    assert R.search(d, "acceptance closes") == []
+    hits = R.search(d, "crowded shorts")
+    assert hits and {h["kind"] for h in hits} == {"pattern"}
+    assert R.search(d, '"(((') == [] and R.search(d, "trade:12 a-b AND") == []
     assert "script" in R.tree(d)
 
 

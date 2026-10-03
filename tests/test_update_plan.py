@@ -40,6 +40,33 @@ async def test_the_pins_are_not_editable(monkeypatch):
     assert t.j.get_trade(tr["id"])["plan"]["r1_usdt"] == tr["plan"]["r1_usdt"]
 
 
+async def test_citations_are_set_at_entry_only_and_survive_plan_edits(monkeypatch):
+    """A limit fill carries the entry's uses_learnings onto its trade; update_plan keeps it and can't change it (a
+    citation added once the outcome shows would score itself)."""
+    d, t, fake, _ = desk()
+    lid = t.j.add_learning("failed sweeps of a pump high fade", "e", kind="statistical")
+    await one(d, prop(1.03, plan={"uses_learnings": [lid]}))
+    fake.fill_limit(next(iter(fake.limits)))
+    (ev,) = await d.poll()
+    tr = t.j.get_trade(ev["trade_id"])
+    assert tr["plan"]["uses_learnings"] == [lid]
+    monkeypatch.setattr(cmd_trade, "get_app", lambda: SimpleNamespace(journal=t.j))
+    r = await cmd_trade.update_plan(tr["symbol"], {"uses_learnings": [lid, 99]}, "cite one more")
+    assert not r["ok"] and "pinned" in r["plan_errors"][0] and "uses_learnings" in r["plan_errors"][0]
+    assert (await cmd_trade.update_plan(tr["symbol"], {"time_stop_hours": 30}, "longer hold"))["ok"]
+    assert t.j.get_trade(tr["id"])["plan"]["uses_learnings"] == [lid]
+
+
+async def test_unknown_citations_are_refused_and_nothing_is_sent():
+    from tests.test_trading import open_default, trader
+    t, fake = trader()
+    r = await open_default(t, plan={"uses_learnings": [42]})
+    assert not r["ok"] and "uses_learnings: no learning #42" in r["plan_errors"] and fake.orders == []
+    d, t2, fake2, _ = desk()
+    r = await d.propose_group([prop(1.03, plan={"uses_learnings": [42]})])
+    assert not r["ok"] and "no learning #42" in r["rejected"][0]["error"] and not fake2.limits
+
+
 def test_revise_plan_still_rejects_typos():
     with pytest.raises(ValueError, match="unknown plan fields"):
         revise_plan({"r1_usdt": 5.0}, {"time_stop_hourz": 3})

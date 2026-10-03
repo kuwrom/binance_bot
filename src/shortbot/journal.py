@@ -1,5 +1,5 @@
 """SQLite journal: trades (with plan, entry features, fees/funding, excursions), decisions, alerts, kv,
-metrics. Research tables (scan candidates + outcomes, learnings) live in journal_research.py.
+metrics. Research tables (scan candidates + outcomes) live in journal_research.py, learnings in journal_learnings.py.
 
 Trade lifecycle: opening -> open -> closed, or opening -> aborted. Rows are addressed by id.
 Schema grows by adding columns to TRADE_COLUMNS; existing DBs are migrated automatically.
@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from . import audit, fill_report, intents
-from .journal_research import RESEARCH_SCHEMA, ResearchStore
+from .journal_learnings import LEARNINGS_SCHEMA, LearningStore
+from .journal_research import RESEARCH_SCHEMA, ResearchStore, add_columns
 from .journal_writer import Writer, connect
 from .redact import redact
 from .sessions import session_bucket
@@ -113,7 +114,7 @@ def exit_quality(trades: list[dict[str, Any]]) -> dict[str, Any]:
             "how_to_read": "consistently large further drops (n >= 20) = hold runners longer / looser trail"}
 
 
-class Journal(ResearchStore):
+class Journal(ResearchStore, LearningStore):
     def __init__(self, path: Path | str, mode: str = "demo"):
         """mode: the account this process trades (settings.mode). Stamped on new trades; filters what it reads."""
         if mode not in MODES:
@@ -125,7 +126,7 @@ class Journal(ResearchStore):
             path.parent.mkdir(parents=True, exist_ok=True)
         self.db = connect(path)   # WAL: the guardian, MCP servers and CLI share this file
         self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + intents.SCHEMA)
+        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + LEARNINGS_SCHEMA + intents.SCHEMA)
         self._migrate()
         self.w = Writer(self.db)
 
@@ -147,16 +148,10 @@ class Journal(ResearchStore):
 
     def _migrate(self) -> None:
         for table, cols in {"trades": TRADE_COLUMNS, "intents": intents.COLUMNS, **AUDIT_COLUMNS}.items():
-            have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
-            for col, ddl in cols.items():
-                if col not in have:
-                    try:
-                        self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
-                    except sqlite3.OperationalError as e:   # the guardian and the MCP server may migrate at once
-                        if "duplicate column" not in str(e):
-                            raise
+            add_columns(self.db, table, cols)
         self._migrate_research()
         self.db.commit()
+        self._migrate_learnings()   # its index is built in a transaction of its own
 
     def _insert(self, sql: str, args: tuple) -> int:
         cur = self.db.execute(sql, args)
@@ -282,7 +277,8 @@ class Journal(ResearchStore):
 
     def closed_results(self, all_modes: bool = False) -> list[dict[str, Any]]:
         """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input; the
-        registry's forward feed), and the limits each was sized under (entry_features.limits, JSON text)."""
+        registry's forward feed), the limits each was sized under (entry_features.limits, JSON text) and the
+        learnings its plan cited (uses_learnings: learnings_view.scores)."""
         m, args = self._in_mode(all_modes)
         rows = self._rows(
             "SELECT id, symbol, setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct,"
@@ -291,7 +287,9 @@ class Journal(ResearchStore):
             f" FROM trades WHERE status='closed' AND pnl IS NOT NULL AND {m}"
             " ORDER BY closed_at", args)
         for r in rows:
-            pinned = (json.loads(r.pop("plan") or "{}") or {}).get("r1_usdt")   # adds/split entries pin 1R
+            plan = json.loads(r.pop("plan") or "{}") or {}
+            pinned = plan.get("r1_usdt")   # adds/split entries pin 1R
+            r["uses_learnings"] = [i for i in plan.get("uses_learnings") or [] if type(i) is int]
             risk = pinned or ((r["initial_stop"] - r["entry_price"]) * r["amount"] if r["initial_stop"]
                               and r["entry_price"] and r["amount"] else None)
             r["r_multiple"], r["risk_usdt"] = (r["pnl"] / risk if risk else None), risk

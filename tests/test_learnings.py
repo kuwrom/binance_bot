@@ -81,7 +81,7 @@ async def test_add_learning_tool_requires_a_kind_and_stores_the_sample(monkeypat
     row = j.learnings()[0]
     assert (row["n"], row["days"], row["sample"]) == (55, 12, "registry:lib.asia_fade")
     seen = (await cmd_research.journal())["learnings"][0]
-    assert seen["audit"]["kind"] == "statistical" and seen["audit"]["inferred"] == []
+    assert seen["tag"] == "stat n=55 12d" and "?" not in seen["tag"]   # set by hand: nothing inferred
 
 
 async def test_cli_learn_takes_the_same_fields(monkeypatch):
@@ -193,17 +193,22 @@ async def test_many_due_learnings_fold_into_one_line():
 
 
 async def test_brief_tags_learnings_and_lists_what_to_recheck():
+    """The rulebook shows settled learnings with their tag: an adopted one (even on n=1), a supported one on a real
+    sample; an engineering fix and a hypothesis stay out (searched on demand)."""
     a = app()
     j = a.journal
     _trade(j, 8, "ZRO/USDT:USDT", "2026-09-29T12:40:00+00:00")
     old = _legacy(j, "acceptance, not one close", ZRO_EVIDENCE, "adopted", "medium")
-    new = j.add_learning("drawdown ladder", "bootstrap", kind="statistical", n=120, days=40,
+    new = j.add_learning("drawdown ladder", "bootstrap", status="supported", kind="statistical", n=120, days=40,
                          sample="data/research/2026-10-01-abc1234/drawdown")
-    eng = j.add_learning("stops re-place", "tests/test_stops.py", kind="engineering")
+    eng = j.add_learning("stops re-place", "tests/test_stops.py", status="adopted", kind="engineering")
+    idea = j.add_learning("a fresh idea", "1 trade", kind="statistical", n=1)
     text = await brief(a)
-    by_id = {ln.split()[1]: ln for ln in text.splitlines() if ln.startswith("- #")}
-    assert "stat? n=1? 1d?" in by_id[f"#{old}"] and "stat n=120 40d" in by_id[f"#{new}"]
-    assert "eng]" in by_id[f"#{eng}"]
+    book = _section(text, "### rulebook")
+    by_id = {ln.split()[1]: ln for ln in book if ln.startswith("- #")}
+    assert "[adopted stat? n=1? 1d?]" in by_id[f"#{old}"] and "[supported stat n=120 40d]" in by_id[f"#{new}"]
+    assert set(by_id) == {f"#{old}", f"#{new}"} and not any(f"#{i} " in text for i in (eng, idea))
+    assert any(ln.startswith("- 2 more current learnings") for ln in book)
     sec = _section(text)
     assert not any(ln.startswith("- #") for ln in sec)
     assert f"#{old} (n=1?)" in next(ln for ln in sec if "n < 30" in ln)
