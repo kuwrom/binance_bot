@@ -1,7 +1,59 @@
+import importlib
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests import data_guard
+
+_GUARD = data_guard.SESSION
+_BEFORE = pytest.StashKey[dict]()
+
+
+def pytest_sessionstart(session):
+    session.config.stash[_BEFORE] = data_guard.snapshot(data_guard.REPO_DATA)
+    sys.addaudithook(_GUARD)
+
+
+def pytest_runtest_logstart(nodeid, location):
+    _GUARD.test = nodeid
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if it wrote under data/ (tests/data_guard.py)."""
+    changed = data_guard.changes(session.config.stash[_BEFORE], data_guard.snapshot(data_guard.REPO_DATA))
+    lines = [f"blocked: {s}" for s in _GUARD.seen]
+    if changed and (os.getenv("CI") or _GUARD.seen):
+        lines += [f"changed: {c}" for c in changed]
+    elif changed:
+        lines.append(f"note: data/ changed during the run, by no write of this process ({len(changed)} paths: the desk "
+                     "running from this checkout?)")
+    if lines:
+        tr = session.config.pluginmanager.get_plugin("terminalreporter")
+        if tr:
+            tr.write_sep("=", "data guard (#43)", red=bool(_GUARD.seen or os.getenv("CI")))
+            for line in lines:
+                tr.write_line(line)
+    if _GUARD.seen or (changed and os.getenv("CI")):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.fixture(autouse=True)
+def isolated_data(tmp_path_factory, monkeypatch):
+    """No test touches the live desk (#43). The journal (SHORTBOT_DB, hence provenance.data_dir() and every store beside
+    it: research/*.db incl. long_shadow and trials, locks, backups) lives in a fresh temp dir, which is also the working
+    directory, so a relative "data/..." default (streams.db, hist.db, daily.db, logs, charts) lands there too. .env is
+    loaded first (config import), so a path it sets can't come back mid-test; the ones derived from the journal are
+    dropped. A test that needs a path sets it itself."""
+    importlib.import_module("shortbot.config")
+    root = tmp_path_factory.mktemp("desk")
+    (root / "data").mkdir()
+    monkeypatch.setenv("SHORTBOT_DB", str(root / "data" / "shortbot.db"))
+    for k in ("SHORTBOT_TRIALS_DB", "SHORTBOT_BACKUP_DIR", "SHORTBOT_BACKUP_OFFBOX"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.chdir(root)
+    return root
 
 
 @pytest.fixture(autouse=True)
