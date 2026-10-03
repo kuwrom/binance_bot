@@ -15,7 +15,8 @@ Each tick (guardian.SCAN):
 - Every close, and every fast window that fired, writes a scan_windows row to the journal DB: counts per rule,
   selected, scored, queued, skipped and the tier-2 weight spent. The triggers are evaluated from these rows.
 
-Tier-1 data comes from the stream store and the recorded liquidations, read in a worker thread: no exchange calls.
+Tier-1 data comes from the stream store, the recorded liquidations and the unlock calendar, read in worker threads:
+no exchange calls, no SQLite on the event loop (#78).
 When the streams are stale (collector down), tier 1 pauses and one alert goes out; there is no REST fallback scan.
 """
 
@@ -221,7 +222,7 @@ class TieredScan:
             if int(info.get("deliveryDate") or NO_DELIVERY) != NO_DELIVERY:
                 events[raw] = "delisting scheduled"
         by_base = {raw[:-4].removeprefix("1000"): raw for raw in universe}
-        for u in self._unlocks():
+        for u in await asyncio.to_thread(self._unlocks):   # a journal read: off the loop like the rest of tier 1
             raw = by_base.get(u["base"])
             if raw:
                 events.setdefault(raw, f"unlock in {u['days_to_unlock']:.1f}d ({u.get('pct_supply')}% of supply)")

@@ -4,11 +4,13 @@ record metrics and label research data, so a slow or hung one never touches posi
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from . import killswitch as ks
 from . import entry_gates, news, procs, research, scan_job, setup_ladder, stream_task
@@ -254,20 +256,18 @@ class MarketJobs:
     async def cadence_shadow(self) -> None:
         """Forward check of a per-rule tier-1 cadence (cadence_shadow.py, docs/SCANNING.md "Cadence"): logs the minutes
         two rules hold on live 1m bars. No deep scores, no alerts, no orders."""
-        from . import cadence_shadow
         from .market import stream_read
         store = stream_read.path_for(self.app.settings.db_path)
         if store is not None and store.exists():
-            r = await asyncio.to_thread(cadence_shadow.run, store, int(time.time() * 1000))
+            r = await asyncio.to_thread(_off_loop, "cadence_shadow", store, int(time.time() * 1000))
             log.debug("cadence shadow: %s", r)
 
     async def mtf_views(self) -> None:
         """Every streamed coin's 5m/15m/1h/4h/1d state, logged once per 15m close (mtf_live.py). Local reads only."""
-        from . import mtf_live
         from .market import stream_read
         store = stream_read.path_for(self.app.settings.db_path)
         if store is not None and store.exists():
-            r = await asyncio.to_thread(mtf_live.run, store, int(time.time() * 1000))
+            r = await asyncio.to_thread(_off_loop, "mtf_live", store, int(time.time() * 1000))
             if r.get("logged"):
                 log.info("mtf views: %d coins at %s", r["logged"], r["close"])
 
@@ -277,6 +277,12 @@ class MarketJobs:
         n = await detect(self.ex, self.j)
         if n:
             log.info("laggard study: %d new events", n)
+
+
+def _off_loop(module: str, *args: Any) -> Any:
+    """A scan-lane shadow job, imported AND run in the worker thread: the first import of mtf_live pulls in pandas,
+    ~0.2 s that would stall every lane on the loop (#78)."""
+    return importlib.import_module(f"{__package__}.{module}").run(*args)
 
 
 def _evidence(row: dict) -> str:

@@ -15,10 +15,10 @@ from shortbot.notify import Notifier
 from tests.fakes import SYM, FakeCcxt, FakeEx
 from tests.test_guardian import SETTINGS, guardian_with, kinds, open_trade
 
-# the scan lane's first pass blocks the loop ~0.2 s on its own (synchronous work asyncio can't pre-empt): hung here too
+# the scan lane's jobs run for real: they must never block the loop (#78; test_scan_lane_lag.py on real-sized data)
 SLOW_JOBS = ("watch_positions", "check_governor", "check_announcements", "record_social", "research_refresh",
              "housekeeping", "record_metrics", "label_research", "refresh_calendar", "market_map", "sweep_study",
-             "refresh_supply", "ladder_shadow", "laggard_study", "tiered_scan", "cadence_shadow", "mtf_views")
+             "refresh_supply", "ladder_shadow", "laggard_study")
 
 
 def lane_with(*jobs, journal=None, **kw):
@@ -76,7 +76,11 @@ async def test_hung_slow_jobs_never_delay_the_protective_lane(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert len(passes) >= 10 and g.j.get("guardian_heartbeat")
+    # nothing blocked the loop either: a 0.2 s stall still leaves ~12 passes, so the count alone can't see it (#78);
+    # passes come every ~13 ms, at worst ~45 ms with every core busy
+    assert max(b - a for a, b in zip(passes, passes[1:])) < 0.1
     assert {"watch_positions", "check_governor", "record_metrics"} <= set(hung)   # one hung job per slow lane
+    assert set(g.lanes["scan"].started) == {"scan", "cadence_shadow", "mtf_views"}   # ran for real, not hung
     assert sorted(cancelled) == sorted(hung) and all(t.done() for t in g._tasks)   # nothing left running
 
 
