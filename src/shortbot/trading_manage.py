@@ -124,7 +124,7 @@ class ManageFlow:
         else:
             closed = round(_f(order["filled"]), 8)
             left = round(size - closed, 8)
-        self.j.log_decision("partial_close", reason, symbol, snapshot={
+        await self.j.write(Journal.log_decision, "partial_close", reason, symbol, snapshot={   # landed in the lock (#82)
             "trade_id": trade and trade["id"], "exit": exit_px, "amount": closed, "asked": amount, "lesson": lesson})
         out = {"ok": bool(closed), "symbol": symbol, "closed_amount": closed, "exit": exit_px,
                **({"remaining": left} if left is not None else {})}
@@ -167,7 +167,7 @@ class ManageFlow:
                else "trade closed, the fill poll adopts the rest")
         msg = f"{head} ({why}): {cover}; no stop cancelled; {nxt}"
         await self.alert("close_incomplete", msg, symbol, True)
-        self.j.log_decision("close_incomplete", reason, symbol, snapshot={
+        await self.j.write(Journal.log_decision, "close_incomplete", reason, symbol, snapshot={   # in the lock (#82)
             "trade_id": trade and trade["id"], "amount": amount, "filled": filled, "remaining": qty,
             "exit": exit_px, "stop": cover, "lesson": lesson})
         out = {"symbol": symbol, "closed_amount": filled if short else amount, "exit": exit_px, "remaining": qty}

@@ -5,7 +5,8 @@ Our stops go past the measured overshoot percentile, not past a textbook distanc
 
 Event: first 1m bar whose high exceeds level L after >= 60 min entirely below it (cooldown 240 min per level).
 Levels at time t use only past data: grid step from the previous close, prior-24h high, and non-round control
-levels (L + 0.37 step) as the baseline. Pure detection + summary are unit-tested; `run_study` fetches klines."""
+levels (L + 0.37 step) as the baseline. Pure detection + summary are unit-tested; `run_study` fetches klines. The
+`level_sweeps` table is created when the journal opens (journal_tables.py, #82); readers run no DDL."""
 
 from __future__ import annotations
 
@@ -18,8 +19,6 @@ from typing import Any
 from .tape_math import clear_above_round, round_step
 
 QUIET_BARS, COOLDOWN, WINDOW = 60, 240, 240
-SCHEMA = """CREATE TABLE IF NOT EXISTS level_sweeps (symbol TEXT, ts INTEGER, kind TEXT, tier INTEGER, level REAL,
-    data TEXT, PRIMARY KEY (symbol, ts, kind, level))"""
 
 
 def tier_of(level: float, step: float) -> int:
@@ -173,7 +172,6 @@ async def run_study(ex, journal, days: float = 3, top: int = 60, now_ms: int | N
     tickers = await ex.public.fetch_tickers()
     syms = sorted((s for s in perps if s in tickers), key=lambda s: tickers[s].get("quoteVolume") or 0,
                   reverse=True)[:top]
-    journal.db.execute(SCHEMA)
     sem, n_events = asyncio.Semaphore(4), 0
 
     async def one(sym: str) -> int:
@@ -195,7 +193,6 @@ async def run_study(ex, journal, days: float = 3, top: int = 60, now_ms: int | N
 
 
 def report(journal) -> dict[str, Any]:
-    journal.db.execute(SCHEMA)
     return summarize([json.loads(r[0]) for r in journal.db.execute("SELECT data FROM level_sweeps")])
 
 
@@ -209,7 +206,6 @@ def guide(db_path, session: str | None = None) -> dict[str, dict[str, float]]:
     import sqlite3
     db = sqlite3.connect(str(db_path), timeout=15)
     try:
-        db.execute(SCHEMA)
         s = summarize([json.loads(r[0]) for r in db.execute("SELECT data FROM level_sweeps")])
     finally:
         db.close()

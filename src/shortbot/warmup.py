@@ -1,7 +1,8 @@
 """Cold-start warm-up (docs/SESSIONS.md): when the desk has been idle (no trade activity for 6h, or none yet
 today), entries wait for a 15-minute study: snapshot the candidates at t0 and t+15 and drop the ones whose
 picture changed. Every warm-up is stored, so the delay's value is MEASURED (persisted vs dropped) rather than
-assumed. Thresholds are starting assumptions, to be tuned by that study. A warm desk trades without it."""
+assumed. Thresholds are starting assumptions, to be tuned by that study. A warm desk trades without it. The `warmups`
+table is created when the journal opens (journal_tables.py, #82)."""
 
 from __future__ import annotations
 
@@ -17,12 +18,6 @@ from .exchange import to_symbol
 
 COLD_AFTER_H = 6.0
 WARMUP_MIN = 15.0
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS warmups (
-    id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, t0_ms INTEGER NOT NULL, symbols TEXT NOT NULL,
-    snap0 TEXT NOT NULL, snap1 TEXT, verdicts TEXT, checked_at TEXT, status TEXT NOT NULL
-);
-"""
 
 
 def _ts(iso: str | None) -> datetime | None:
@@ -34,7 +29,6 @@ def _ts(iso: str | None) -> datetime | None:
 
 def last_activity(j) -> datetime | None:
     """Latest trade open/close or completed warm-up."""
-    j.db.executescript(SCHEMA)
     row = j.db.execute("SELECT MAX(COALESCE(closed_at, opened_at)) FROM trades").fetchone()
     wu = j.db.execute("SELECT MAX(checked_at) FROM warmups WHERE status='done'").fetchone()
     stamps = [t for t in (_ts(row[0]), _ts(wu[0])) if t]
@@ -130,7 +124,6 @@ async def btc_15m_return(ex) -> float | None:
 class WarmUp:
     def __init__(self, ex, journal):
         self.ex, self.j = ex, journal
-        self.j.db.executescript(SCHEMA)
 
     async def default_symbols(self) -> list[str]:
         pending = [r[0] for r in self.j.db.execute("SELECT DISTINCT symbol FROM entries WHERE status='pending'")] \
@@ -191,7 +184,6 @@ def desk_clock(settings, j) -> dict[str, Any]:
     """Clock + macro calendar (next 7 days) + cold/warm state: what time it is for the desk."""
     from .market.calendar import MacroCalendar, blocking
     from .sessions import clock
-    j.db.executescript(SCHEMA)
     events = MacroCalendar(settings.db_path).around(hours=24 * 7)
     running = j.db.execute("SELECT id, started_at FROM warmups WHERE status='running' ORDER BY id DESC").fetchone()
     return {"clock": clock(), "desk": desk_state(j), "macro_blocking_now": blocking(events),

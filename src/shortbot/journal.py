@@ -15,7 +15,8 @@ alerts). Decisions are append-only; so are intents (intents.py, the record of ev
 Writes on an event loop never wait for the write lock (#79, journal_writer.py): `await write(fn, *a)` and `post(fn, *a)`
 run fn(journal, *a) as one unit. Decisions and alerts are always posted: stamped at the call, written in order. A kv
 marker that guards a repeat (a cooldown stamp, a dedupe marker) is `mark`ed: this process reads it back at once, also
-while its write is queued behind another process's lock (#81)."""
+while its write is queued behind another process's lock (#81). A value merged with what is stored when it lands (a risk
+peak, a period's first mark) is `merge`d: its reader merges `pending` the same way (#82)."""
 
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-from . import audit, fill_report, intents, registry
+from . import audit, fill_report, intents, journal_tables, registry
 from .journal_learnings import LEARNINGS_SCHEMA, LearningStore
 from .journal_research import RESEARCH_SCHEMA, ResearchStore, add_columns
 from .journal_writer import Writer, connect
@@ -124,13 +125,15 @@ class Journal(ResearchStore, LearningStore):
         self.mode = mode
         self.session_id: int | None = None   # the trading session this process started (start_session)
         self._marks: dict[str, str] = {}      # kv this process marked whose write may not have landed yet (mark)
+        self._merges: dict[str, str] = {}     # this process's view of kv it merges, until its write lands (merge)
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
         self.db = connect(path)   # WAL: the guardian, MCP servers and CLI share this file
         self.db.row_factory = sqlite3.Row
-        # every table at open: a reader never runs DDL, which waits for the write lock (registry, #81)
-        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + LEARNINGS_SCHEMA + intents.SCHEMA + registry.SCHEMA)
+        # every table at open: a reader never runs DDL, which waits for the write lock (registry #81, journal_tables #82)
+        self.db.executescript(SCHEMA + RESEARCH_SCHEMA + LEARNINGS_SCHEMA + intents.SCHEMA + registry.SCHEMA
+                              + journal_tables.SCHEMA)
         self._migrate()
         self.w = Writer(self.db)
 
@@ -151,7 +154,8 @@ class Journal(ResearchStore, LearningStore):
         await self.w.flush()
 
     def _migrate(self) -> None:
-        for table, cols in {"trades": TRADE_COLUMNS, **intents.COLUMNS, **AUDIT_COLUMNS}.items():
+        for table, cols in {"trades": TRADE_COLUMNS, **intents.COLUMNS, **AUDIT_COLUMNS,
+                            **journal_tables.COLUMNS}.items():
             add_columns(self.db, table, cols)
         intents.migrate(self.db)
         self._migrate_research()
@@ -330,12 +334,24 @@ class Journal(ResearchStore, LearningStore):
         journal repeated what the marker guards on every pass (#81); get() answers from here until it lands.
         Process-local: the journal stays the cross-process record."""
         self._marks[k] = v
-        self.post(Journal._land_mark, k, v)
+        self.post(Journal._land, self._marks, k, v, Journal.set, (k, v))
 
-    def _land_mark(self, k: str, v: str) -> None:
-        self.set(k, v)
-        if self._marks.get(k) == v:   # else a later mark of k is still on its way
-            del self._marks[k]
+    def merge(self, k: str, v: str, fn: Callable[..., None], *a: Any) -> None:
+        """Post fn(self, *a): a unit that merges this process's view `v` of kv `k` into what is stored when it lands
+        (a max, a first-wins insert), atomically across processes. Until it lands pending(k) returns v, and the caller's
+        reader merges it with get(k) the same way: a risk peak this process saw is never read lower while another
+        process holds the write lock (#82). Process-local, like mark."""
+        self._merges[k] = v
+        self.post(Journal._land, self._merges, k, v, fn, a)
+
+    def pending(self, k: str) -> str | None:
+        """This process's view of kv k (merge) while its write waits in the queue; None once landed."""
+        return self._merges.get(k)
+
+    def _land(self, held: dict[str, str], k: str, v: str, fn: Callable[..., None], a: tuple) -> None:
+        fn(self, *a)
+        if held.get(k) == v:   # else a later mark or merge of k is still on its way
+            del held[k]
 
     def set(self, k: str, v: str) -> None:
         self.db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (k, v))

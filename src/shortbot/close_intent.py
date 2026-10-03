@@ -8,6 +8,8 @@ session halved the runner seconds after the guardian took target 1, because `fra
 - a partial close of the CURRENT size with no stated view is refused while a size change on this trade is younger
   than RECENT_CHANGE_S (the guardian's target, another session's partial, a fill that joined, an add, a widen cut).
 A full close needs no view: flat is flat, whoever got there first.
+Every writer of a SIZE_EVENTS decision awaits its unit inside the symbol lock (#82): the next holder of the lock, maybe
+another process, reads it (posted, it could still wait in the writer's queue). tests/conftest.py checks every writer.
 """
 
 from __future__ import annotations

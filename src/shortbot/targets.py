@@ -1,6 +1,7 @@
 """Resting plan targets (#65, docs/PROPOSALS.md P1a): a trade's automatic targets rest on Binance as reduce-only GTC BUY
 LIMIT orders at the target prices, the execution the backtests credit (backtest/rungs.py, learning #42). This module:
-the book a trade should have (pure), the `target_orders` journal (write-ahead, #13) and the journalling of each fill.
+the book a trade should have (pure), the `target_orders` journal (write-ahead, #13; its table: journal_tables.py) and
+the journalling of each fill.
 The exchange side (place, cancel, settle, sweep) is targets_sync.py.
 
 Sizing: fractions are of the ORIGINAL (peak) size and cumulative, as manager.plan_actions counts them. By target i
@@ -29,15 +30,6 @@ from .journal import now_iso
 PREFIX = "sb-t"                                  # clientid.new("target", trade_id): sb-t<trade id>-<nonce>
 LIVE = ("placing", "resting", "unknown")         # may be on the book
 MAX_RESTING = 10                                 # nearest targets that rest at once (a plan rarely has more than 3)
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS target_orders (
-    id INTEGER PRIMARY KEY, trade_id INTEGER NOT NULL, symbol TEXT NOT NULL, target REAL NOT NULL, price REAL NOT NULL,
-    qty REAL NOT NULL, client_id TEXT NOT NULL UNIQUE, order_id TEXT, status TEXT NOT NULL,
-    filled REAL NOT NULL DEFAULT 0, avg REAL, fill_ms INTEGER, created_at TEXT NOT NULL, updated_at TEXT, why TEXT,
-    history TEXT NOT NULL DEFAULT '[]', mode TEXT NOT NULL DEFAULT 'demo'
-);
-"""
-# history: every status change [{at, status, why, ex}] (ex: the exchange's own status when it decided)
 
 
 def is_target(cid: Any) -> bool:
@@ -69,14 +61,7 @@ def desired(trade: dict[str, Any], pos: dict[str, Any], floor: Callable[[float],
 
 
 # ------------------------------------------------------------ the journal
-def ensure(j) -> None:
-    if not getattr(j, "_targets_ready", False):   # once per Journal (connection)
-        j.db.executescript(SCHEMA)
-        j._targets_ready = True
-
-
 def rows(j, where: str = "1", args: tuple = ()) -> list[dict[str, Any]]:
-    ensure(j)
     return j._rows(f"SELECT * FROM target_orders WHERE ({where}) AND mode=? ORDER BY id", (*args, j.mode))
 
 
@@ -87,7 +72,6 @@ def live(j, symbol: str | None = None) -> list[dict[str, Any]]:
 
 async def add(j, trade_id: int, symbol: str, target: float, price: float, qty: float, cid: str) -> int:
     """The write-ahead row: journalled BEFORE the order is sent (a unit its caller awaits: the loop never waits)."""
-    ensure(j)
     return await j.write(_add, trade_id, symbol, target, price, qty, cid)
 
 

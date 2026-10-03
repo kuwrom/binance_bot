@@ -10,7 +10,7 @@ actions below execute the non-trivial ones safely:
   caps and the pyramiding rules (risk.check_add: ≥ min_add_r, ≤ max_add_frac of the initial size, ≤ max_adds)
 (Tightening and partial exits already exist: Trader.move_stop / Trader.close(fraction).)
 Both add risk: each holds the account lock (symlock.py, #74), then the symbol's, from its checks through the send. The
-guardian never widens or adds.
+guardian never widens or adds. Each journals its size change in a unit it awaits inside those locks (`_resized`, #82).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from . import clientid, errors, exposure, killswitch, stops, targets_sync
 from . import indicators as ind
 from .audit import refusals
 from .exchange import to_symbol
+from .journal import Journal
 from .risk import AddRequest, RiskViolation, check_add
 from .steps import floor_amount
 from .symlock import busy_refusal
@@ -47,6 +48,14 @@ def adds_done(j, trade: dict) -> int:
     rows = j._rows("SELECT snapshot FROM decisions WHERE symbol=? AND action='add' AND ts >= ?",
                    (trade["symbol"], trade.get("opened_at") or ""))
     return sum((json.loads(r["snapshot"] or "{}") or {}).get("trade_id") == trade["id"] for r in rows)
+
+
+def _resized(j, trade_id: int, fields: dict[str, Any], action: str, reason: str, symbol: str, snap: dict) -> None:
+    """A size change's journal as one unit, awaited inside the symbol lock (#82): the trade row and the decision that
+    adds_done and close_intent read. Posted, it could still wait in this process's queue when the next holder of the
+    lock (maybe another process) reads them."""
+    j.update_trade(trade_id, **fields)
+    j.log_decision(action, reason, symbol, snapshot=snap)
 
 
 def chandelier_stop(c1h: list[list[float]], n: int = 22, k: float = 3.0) -> float | None:
@@ -247,9 +256,8 @@ class PositionOps:
                 tr.j.log_decision("widen_stop_failed", reason, symbol, snapshot={**snap, "cut": 0, "error": msg})
                 await tr.alert("widen_undone", msg, symbol, not back.get("ok"))
                 return {"ok": False, "error": msg, "size_cut": 0}
-        tr.j.update_trade(trade["id"], stop_price=new_stop,
-                          notes=f"{trade.get('notes') or ''} widened {cur}->{new_stop}".strip())
-        tr.j.log_decision("widen_stop", reason, symbol, snapshot={**snap, "remaining": left})
+        await tr.j.write(_resized, trade["id"], {"stop_price": new_stop, "notes": f"{trade.get('notes') or ''} widened "
+                         f"{cur}->{new_stop}".strip()}, "widen_stop", reason, symbol, {**snap, "remaining": left})
         await targets_sync.after(tr, symbol, "widen")
         await tr.alert("action_widen", f"stop {cur} -> {new_stop}, size cut {cut}: {reason}", symbol, False)
         return {"ok": True, "old_stop": cur, "new_stop": new_stop, "size_cut": cut, "remaining": round(left, 8),
@@ -310,7 +318,7 @@ class PositionOps:
             o = await tr.open_market(symbol, add_qty, cid)
         except clientid.Unknown as e:   # it may have run: never re-sent (#9); logged as a size change
             msg = f"add of {add_qty}: {e}. Not re-sent: re-read the position before adding again"
-            tr.j.log_decision("add", f"UNKNOWN: {reason}", symbol, snapshot={   # counts as an add (adds_done)
+            await tr.j.write(Journal.log_decision, "add", f"UNKNOWN: {reason}", symbol, snapshot={   # an add (adds_done)
                 "trade_id": trade["id"], "add_qty": add_qty, "client_id": cid, "unknown": True, "new_stop": new_stop})
             await tr.alert("add_unknown", msg, symbol, True)
             return {"ok": False, "unknown": True, "client_id": cid, "error": msg}
@@ -323,13 +331,11 @@ class PositionOps:
         plan = dict(trade.get("plan") or {})
         plan.setdefault("r1_usdt", r1)                               # pin 1R before the amount grows
         plan.setdefault("full_size", trade.get("amount") or qty)     # ladder exposure base (x = contracts/full_size)
-        tr.j.update_trade(trade["id"], plan=plan,   # amount = peak size: targets are its shares
-                          amount=max(float(trade.get("amount") or 0), qty + add_qty),
-                          notes=f"{trade.get('notes') or ''} added {add_qty}@{mark}".strip())
-        tr.j.log_decision("add", reason, symbol, snapshot={"trade_id": trade["id"], "client_id": cid,
-                                                           "add_qty": add_qty, "price": mark, "new_stop": new_stop,
-                                                           "worst_case": worst, "r_initial": r1,
-                                                           "worst_case_R": round(worst / r1, 2) if r1 else None})
+        await tr.j.write(_resized, trade["id"], {   # amount = peak size: targets are its shares
+            "plan": plan, "amount": max(float(trade.get("amount") or 0), qty + add_qty),
+            "notes": f"{trade.get('notes') or ''} added {add_qty}@{mark}".strip()}, "add", reason, symbol, {
+            "trade_id": trade["id"], "client_id": cid, "add_qty": add_qty, "price": mark, "new_stop": new_stop,
+            "worst_case": worst, "r_initial": r1, "worst_case_R": round(worst / r1, 2) if r1 else None})
         await tr.alert("action_add", f"added {add_qty} @ {mark}; stop {new_stop}; worst case {worst:.2f}", symbol, False)
         await targets_sync.after(tr, symbol, "add")   # #65: the plan's shares of the grown size
         return {"ok": True, "added": add_qty, "price": mark, "new_stop": new_stop, "worst_case_usdt": round(worst, 2)}

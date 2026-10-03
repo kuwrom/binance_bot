@@ -1,7 +1,8 @@
 """Laggard catch-up study (docs/LADDER.md A): when a sector leader shows ACCEPTANCE below its recent 4h low, do its
 lagging siblings catch down over 1-12h (short the laggard), or keep lagging? Shadow only. Every event logs the
 laggard AND a random non-laggard control from the same sector; the verdict needs +40 bp net over the control
-across >= 100 events on >= 30 days (effective N = days, events cluster)."""
+across >= 100 events on >= 30 days (effective N = days, events cluster). The `laggard_events` table is created when
+the journal opens (journal_tables.py, #82)."""
 
 from __future__ import annotations
 
@@ -12,10 +13,6 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-
-SCHEMA = """CREATE TABLE IF NOT EXISTS laggard_events (id INTEGER PRIMARY KEY, ts TEXT, ts_ms INTEGER, sector TEXT,
-    leader TEXT, leader_ret4h REAL, laggard TEXT, laggard_ret4h REAL, laggard_px REAL, control TEXT,
-    control_ret4h REAL, control_px REAL, breadth REAL, outcome TEXT, labelled_at TEXT)"""
 MIN_MEMBERS, MIN_QVOL, COOLDOWN_MS = 4, 20e6, 4 * 3_600_000
 HORIZONS_H = (1, 2, 4, 8, 12)
 
@@ -41,7 +38,6 @@ async def detect(ex, journal) -> int:
     m = cached(journal, 1800)
     if not m:
         return 0
-    journal.db.execute(SCHEMA)
     tk = await ex.public.fetch_tickers()
     sectors: dict[str, list[dict]] = {}
     for sym, c in m["coins"].items():
@@ -92,7 +88,6 @@ def outcome(p0: float, c15: list[list[float]], gap_pct: float | None = None) -> 
 
 
 async def label(ex, journal, limit: int = 20) -> int:
-    journal.db.execute(SCHEMA)
     cutoff = int(time.time() * 1000) - 12 * 3_600_000 - 900_000
     rows = journal.db.execute("SELECT id, ts_ms, leader_ret4h, laggard, laggard_ret4h, laggard_px, control, control_px"
                               " FROM laggard_events WHERE labelled_at IS NULL AND ts_ms < ? LIMIT ?",
@@ -115,7 +110,6 @@ async def label(ex, journal, limit: int = 20) -> int:
 
 
 def report(journal) -> dict[str, Any]:
-    journal.db.execute(SCHEMA)
     rows = journal.db.execute("SELECT ts, outcome FROM laggard_events WHERE outcome IS NOT NULL").fetchall()
     pending = journal.db.execute("SELECT COUNT(*) FROM laggard_events WHERE outcome IS NULL").fetchone()[0]
     res: dict[str, Any] = {"labelled_events": len(rows), "pending": pending}

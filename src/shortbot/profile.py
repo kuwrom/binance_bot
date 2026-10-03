@@ -80,9 +80,7 @@ def session_behaviour(c1h: list[list[float]]) -> dict[str, Any]:
 async def build_profile(ex, journal, symbol: str) -> dict[str, Any]:
     from .exchange import to_symbol
     from .market.market_map import cached
-    from .sweeps import SCHEMA
     symbol = to_symbol(symbol)
-    journal.db.execute(SCHEMA)
     events = []
     for sym, data in journal.db.execute("SELECT symbol, data FROM level_sweeps"):
         e = json.loads(data)

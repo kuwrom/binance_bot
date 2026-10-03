@@ -6,7 +6,7 @@ refresh=True runs the same pass."""
 import json
 from datetime import datetime, timezone
 
-from shortbot import alerts_view, clock, cmd_desk, coin_pass, guardian, sweeps, weight
+from shortbot import alerts_view, clock, cmd_desk, coin_pass, guardian, weight
 from shortbot import coin_memory as cm
 from shortbot.guardian_loop import Job, Lane
 from shortbot.journal import Journal
@@ -186,7 +186,6 @@ async def test_the_tool_refresh_runs_the_same_pass(tmp_path, monkeypatch):
 def test_the_fakeout_p90_comes_from_the_sweep_study_shrunk_toward_all_coins(tmp_path):
     path = tmp_path / "j.db"
     j = Journal(path)
-    j.db.execute(sweeps.SCHEMA)
     rows = []
     for i in range(40):
         for sym, fake in ((SYM, 2.0), (QNT, 0.5)):

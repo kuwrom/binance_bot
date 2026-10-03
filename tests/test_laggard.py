@@ -3,7 +3,7 @@ import time
 from types import SimpleNamespace
 
 from shortbot.journal import Journal
-from shortbot.laggard import SCHEMA, accepted_breakdown, detect, label, outcome, pick_laggards
+from shortbot.laggard import accepted_breakdown, detect, label, outcome, pick_laggards
 from shortbot.market.market_map import KV_LAST
 
 
@@ -43,7 +43,6 @@ class Public:
 
 async def test_label_holds_no_write_transaction_across_an_exchange_call():
     j = Journal(":memory:")
-    j.db.execute(SCHEMA)
     for lag in ("A", "B", "C"):
         j.db.execute("INSERT INTO laggard_events (ts, ts_ms, leader, leader_ret4h, laggard, laggard_ret4h, laggard_px,"
                      " control, control_px) VALUES ('2026-10-01', 1, 'L', -6, ?, -1, 100, 'X', 100)", (lag,))

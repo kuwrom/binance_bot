@@ -202,7 +202,7 @@ async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str,
     prev = json.loads(journal.get(KV_PREV_RANKS) or "[]")
     rotation_flags(table, prev)
     ranks = json.dumps((prev + [{s["sector"]: s["rank4h"] for s in table}])[-3:])
-    journal.post(lambda j: j.set(KV_PREV_RANKS, ranks))   # posted, like the map (#79)
+    journal.mark(KV_PREV_RANKS, ranks)   # the next build reads it back, also while it waits for the lock (#82)
     b15, e15 = await asyncio.gather(*(ex.public.fetch_ohlcv(m, "1m", limit=16) for m in majors),
                                     return_exceptions=True)
     m15 = [(c[-1][4] / c[0][1] - 1) * 100 if isinstance(c, list) and c else None for c in (b15, e15)]
@@ -212,7 +212,7 @@ async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str,
     out = {"ts": int(clock.now_s()), "built_s": round(time.time() - t0, 1), "header": header,  # wall-clock: built_s
            "btc_15m": _r(m15[0]), "eth_15m": _r(m15[1]), "sectors": table, "vetoes": vetoes, "coins": coins}
     cache = json.dumps(out)
-    journal.post(lambda j: j.set(KV_LAST, cache))
+    journal.mark(KV_LAST, cache)   # the protective lane's sweep reads its pause at once (entry_gates, #82)
     return out
 
 

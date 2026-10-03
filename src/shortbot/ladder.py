@@ -19,24 +19,16 @@ COST = 0.002            # round-trip fees + slippage
 STEP, CONFIRM, MIN_GAP_MIN, MAX_CHANGES = 0.25, 2, 30, 2
 POS_TAPE = {"failed_sweep", "post_pump_decay", "hype_fade"}
 NEG_TAPE = {"accepted_breakout", "pump_in_progress", "attention_rising", "spot_led_rally"}
-SCHEMA = """CREATE TABLE IF NOT EXISTS ladder_shadow (id INTEGER PRIMARY KEY, ts TEXT, trade_id INTEGER, symbol TEXT,
-    price REAL, score REAL, parts TEXT, levels TEXT, x_star REAL, x_actual REAL, x_virtual REAL, action TEXT);
-CREATE TABLE IF NOT EXISTS trial_ledger (variant TEXT PRIMARY KEY, family TEXT, params TEXT, created TEXT)"""
 
 
-def ensure_schema(journal) -> None:
-    """Once per journal: the tables (DDL, never inside a unit) and the variants' trial-ledger rows (posted, #79)."""
-    if getattr(journal, "_ladder_ready", False):
+def seed_trials(journal) -> None:
+    """Once per Journal: the variants' trial-ledger rows (posted, #79). Its tables, ladder_shadow and trial_ledger, are
+    created when the journal opens (journal_tables.py, #82)."""
+    if getattr(journal, "_trials_seeded", False):
         return
-    db = journal.db
-    db.executescript(SCHEMA)
-    have = {r[1] for r in db.execute("PRAGMA table_info(ladder_shadow)")}
-    for col, ddl in (("variant", "TEXT DEFAULT 'base'"), ("stop_v", "REAL"), ("entry", "REAL"), ("init_r", "REAL")):
-        if col not in have:
-            db.execute(f"ALTER TABLE ladder_shadow ADD COLUMN {col} {ddl}")
     rows = [(name, "ladder", json.dumps(prm)) for name, prm in VARIANTS.items()]
     journal.post(lambda j: j.db.executemany("INSERT OR IGNORE INTO trial_ledger VALUES (?,?,?,datetime('now'))", rows))
-    journal._ladder_ready = True
+    journal._trials_seeded = True
 
 
 def race_with_edge(a: float, b: float, k: float) -> float:
@@ -206,7 +198,7 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
                                                         sig * math.sqrt(hours_left)), sig, hours_left, score)
     orig = plan.get("full_size") or trade.get("amount") or pos["contracts"]
     x_actual = round(pos["contracts"] / orig, 3) if orig else 1.0
-    ensure_schema(journal)
+    seed_trials(journal)
     atr = (await ctx.candles("1h", 20))
     atr_v = sum(c[2] - c[3] for c in atr[-14:]) / max(len(atr[-14:]), 1) if atr else 0.0
     c1h4 = await ctx.candles("1h", 5)

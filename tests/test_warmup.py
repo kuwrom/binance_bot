@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from shortbot.journal import Journal
 from shortbot.market.calendar import WINDOWS, blocking, parse_bls_ics, parse_ff
 from shortbot.sessions import clock, execution_guard, minutes_to_funding, session_label, us_open_utc
-from shortbot.warmup import SCHEMA, desk_state, drop_reasons, gate
+from shortbot.warmup import desk_state, drop_reasons, gate
 
 NOW = datetime(2026, 9, 30, 10, 5, tzinfo=timezone.utc)
 
@@ -27,7 +27,6 @@ def test_cold_when_idle_or_new_day_warm_otherwise():
 
 def test_completed_warmup_warms_the_desk():
     j = j_with_trade(20)
-    j.db.executescript(SCHEMA)
     j.db.execute("INSERT INTO warmups (started_at, t0_ms, symbols, snap0, checked_at, status) VALUES (?,?,?,?,?,?)",
                  ("x", 0, "[]", "{}", (NOW - timedelta(minutes=3)).isoformat(), "done"))
     assert gate(j, NOW) is None

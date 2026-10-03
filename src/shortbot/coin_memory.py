@@ -1,5 +1,5 @@
 """Coin memory (docs/COIN_MEMORY.md): a rolling state per focus coin, the session's current read of it and a watchlist,
-in shortbot.db (the tables are declared here, the warmup.py / laggard.py pattern, so backups carry them).
+in shortbot.db (the tables are declared here and created inside its own units, so backups carry them).
 
 - focus_symbols: open trades, resting entries, the watchlist and the top tradable candidates of the last hour, at most
   FOCUS_CAP coins. The one shared definition of the coins the desk is watching.

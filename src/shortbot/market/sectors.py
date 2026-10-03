@@ -55,7 +55,7 @@ async def sector_map(journal) -> dict[str, str]:
         try:
             cached = {"ts": time.time(), "tags": await fetch_tags()}  # wall-clock: cache TTL
             v = json.dumps(cached)
-            journal.post(lambda j: j.set(KV_KEY, v))   # a cache: posted (#79)
+            journal.mark(KV_KEY, v)   # a cache: read back at once, or each build refetches it during a hold (#82)
         except Exception:  # noqa: BLE001 - taxonomy is context; keep the old one
             pass
     return {b: primary_sector(t) for b, t in (cached.get("tags") or {}).items()}

@@ -12,7 +12,9 @@ withdrawal looks like a 12% drawdown). Here:
 Every key here belongs to one account: read and written through `journal.mode_key` (demo keeps the bare key, live
 gets '@live'), so a switch to live never starts from demo's peak or marks (#32).
 Values are computed from what is stored and returned at once; what they store is posted (#79, journal_writer.py), so
-the guardian's pass never waits for another process's write lock.
+the guardian's pass never waits for another process's write lock. Merged (Journal.merge, #82): each landing unit merges
+with what is stored then (the first mark wins; the peak is recomputed), and until it lands this process's reads merge
+its own pending value the same way, so a hold never makes drawdown or the period's loss read smaller.
 """
 
 from __future__ import annotations
@@ -39,11 +41,11 @@ def period_starts(now: datetime) -> dict[str, tuple[str, int]]:
 
 def _mark(journal, kind: str, key: str, equity: float, now_ms: int, unrealized: float | None = None) -> dict[str, Any]:
     k = journal.mode_key(f"eq_mark:{kind}:{key}")
-    raw = journal.get(k)
+    raw = journal.get(k) or journal.pending(k)   # the first stored mark, else this process's own, still queued
     if raw:
         return json.loads(raw)
     m = {"equity": equity, "ts": now_ms, **({"unrealized": unrealized} if unrealized is not None else {})}
-    journal.post(_first_mark, k, json.dumps(m))
+    journal.merge(k, json.dumps(m), _first_mark, k, json.dumps(m))
     return m
 
 
@@ -120,24 +122,29 @@ def adjusted_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], n
     """equity_peak shifted by transfers, never below current equity. Several processes call this (guardian lanes,
     MCP, CLI), so the stored peak and cursor move in one unit that recomputes from what it reads, and the cursor only
     moves forward: each transfer in [cursor, now - lag) is counted exactly once by whichever caller advances the
-    cursor over it. Posted: the peak returned is computed from what is stored now (the unit's own result, unless
-    another process moved them meanwhile)."""
+    cursor over it. Merged: the peak returned is computed from what is stored now and from this process's own
+    (peak, cursor) still queued, each moved by the transfers since its cursor (a withdrawal lowers both); the unit
+    recomputes from what is stored when it lands."""
     now_ms = now_ms or int(time.time() * 1000)
-    peak = _peak(journal, equity, transfer_rows, now_ms)[0]
-    journal.post(_advance_peak, equity, transfer_rows, now_ms)
+    k = journal.mode_key(KV_PEAK)
+    peak, cursor = _peak(journal, equity, transfer_rows, now_ms, journal.pending(k))
+    journal.merge(k, json.dumps([peak, cursor]), _advance_peak, equity, transfer_rows, now_ms)
     return peak
 
 
-def _peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int) -> tuple[float, int]:
+def _peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int,
+          pending: str | None = None) -> tuple[float, int]:
+    """(peak, cursor) from what is stored, and from `pending` ([peak, cursor] json) when given."""
     upto = now_ms - CURSOR_LAG_MS
     raw = journal.get(journal.mode_key(KV_CURSOR))
-    cursor = int(raw) if raw else upto
-    peak = float(journal.get(journal.mode_key(KV_PEAK)) or 0.0)
-    if upto > cursor:
-        peak += transfers(transfer_rows, cursor, upto)
+    views = [(float(journal.get(journal.mode_key(KV_PEAK)) or 0.0), int(raw) if raw else upto)]
+    if pending:
+        views.append(tuple(json.loads(pending)))
+    peak = max(p + (transfers(transfer_rows, c, upto) if upto > c else 0.0) for p, c in views)
+    cursor = max(max(int(c), upto) for _, c in views)
     # transfers inside the lag window are already in equity but not yet in the peak: leave them out of the
     # high-water mark, or the next pass adds them a second time (phantom drawdown, #16 review)
-    return max(peak, equity - transfers(transfer_rows, max(cursor, upto))), max(cursor, upto)
+    return max(peak, equity - transfers(transfer_rows, cursor)), cursor
 
 
 def _advance_peak(journal, equity: float, transfer_rows: list[dict[str, Any]], now_ms: int) -> None:

@@ -228,8 +228,31 @@ def order_lock_audit(monkeypatch):
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name in [n for n in dir(FakeCcxt) if _RAW_WRITE.match(n)]:
         raw(name)
+    _size_events(monkeypatch, tables, bad)
     yield bad
     assert not bad, bad
+
+
+def _size_events(monkeypatch, tables: list, bad: list[str]) -> None:
+    """#82: a size change (close_intent.SIZE_EVENTS) is journalled in a unit its caller awaits (or a sync run), inside
+    the symbol's lock, so the next reader under that lock, in any process, sees it (max_adds, close_intent). A queued
+    unit runs in the journal's drain task, so the lock is checked as held by this process, not by the current task.
+    A test seeding rows itself is exempt."""
+    from shortbot.close_intent import SIZE_EVENTS
+    from shortbot.journal import Journal
+    from shortbot.symlock import _key
+    real = Journal.log_decision
+
+    def log_decision(self, action, reasoning, symbol=None, *a, **k):
+        caller = sys._getframe(1).f_code
+        if action in SIZE_EVENTS and not caller.co_filename.startswith(_TESTS):
+            what = f"{action} decision from {Path(caller.co_filename).stem}.{caller.co_name}"
+            if self.db.unit not in ("write", "run"):
+                bad.append(f"{what} not in an awaited unit ({self.db.unit or 'posted'})")
+            if not any(_key(symbol) in t._held for t in tables):
+                bad.append(f"{what} outside its symbol lock")
+        return real(self, action, reasoning, symbol, *a, **k)
+    monkeypatch.setattr(Journal, "log_decision", log_decision)
 
 
 @pytest.fixture
