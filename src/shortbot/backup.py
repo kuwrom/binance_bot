@@ -12,6 +12,7 @@ failed is still listed. No journal table is ever pruned.
 
     .venv/bin/shortbot backup                       # SHORTBOT_DB -> SHORTBOT_BACKUP_DIR (default data/backups)
     .venv/bin/shortbot backup restore data/backups/shortbot-<UTC>.db.gz --to /tmp/drill.db
+    .venv/bin/shortbot backup drill                 # the newest copy restored to a temp dir and checked (#46)
 """
 
 from __future__ import annotations
@@ -324,11 +325,11 @@ def default_dbs() -> list[Path]:
 
 # ------------------------------------------------------------ CLI (`shortbot backup` and `python -m shortbot.backup`)
 ARGS = (
-    Arg("action", nargs="?", choices=("run", "restore"), default="run"),
+    Arg("action", nargs="?", choices=("run", "restore", "drill"), default="run"),
     Arg("file", nargs="?", help="restore: the .db.gz (keep its .json manifest beside it)"),
     Arg("to", "--to", "restore: a NEW database path (an existing one is never overwritten)", type=Path),
     Arg("db", "--db", "database to back up, repeatable (default: SHORTBOT_DB)", type=Path, action="append"),
-    Arg("dir", "--dir", "backup directory (default: SHORTBOT_BACKUP_DIR or data/backups)", type=Path),
+    Arg("dir", "--dir", "backup directory, also drill's (default: SHORTBOT_BACKUP_DIR or data/backups)", type=Path),
     Arg("keep_daily", "--keep-daily", "default: SHORTBOT_BACKUP_KEEP_DAILY or 7", type=int),
     Arg("keep_weekly", "--keep-weekly", "default: SHORTBOT_BACKUP_KEEP_WEEKLY or 4", type=int),
     Arg("no_offbox", "--no-offbox", "skip SHORTBOT_BACKUP_OFFBOX for this run", action="store_true"),
@@ -339,7 +340,10 @@ ARGS = (
 
 def run_cli(args: argparse.Namespace) -> int:
     """Prints the JSON result; returns the exit code (1 on any failure, for cron/launchd)."""
-    if args.action == "restore":
+    if args.action == "drill":   # restore the newest copy to a temp dir and check it (backup_drill.py, #46)
+        from .backup_drill import run as drill
+        out = drill(d=args.dir)
+    elif args.action == "restore":
         try:
             if not (args.file and args.to):
                 raise BackupError("usage: shortbot backup restore FILE --to NEW_PATH")
