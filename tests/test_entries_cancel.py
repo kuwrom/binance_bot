@@ -191,3 +191,40 @@ async def test_a_leg_that_fills_while_its_trade_closes_is_kept_and_adopted_as_an
     assert new != old and t.j.get_trade(old)["status"] == "closed" and t.j.get_trade(new)["status"] == "open"
     ((kind, msg, symbol, urgent),) = sent
     assert kind == "action_fill" and urgent and msg.startswith(f"leg filled after its trade closed: new trade #{new}.")
+
+
+# ------------------------------------------------------------ #86: a dead order's label, by who cancelled it
+def lose_cancel_answer(fake, oid):
+    """The order's cancel runs, then its answer is lost (-1007): the row stays pending until the poll looks."""
+    from tests import fake_errors as err
+    real = fake.cancel_order
+
+    async def cancel(i, s, params=None):
+        out = await real(i, s, params=params)
+        if i == oid:
+            fake.cancel_order = real
+            raise err.status_unknown()
+        return out
+    fake.cancel_order = cancel
+
+
+async def test_an_order_cancelled_outside_the_desk_is_labelled_cancelled_not_expired():
+    d, t, fake = desk()
+    (p,) = (await d.propose_group([prop(1.04)]))["placed"]
+    oid = d._rows("id=?", (p["entry_id"],))[0]["order_id"]
+    await fake.cancel_order(oid, SYM)                 # by hand, in the Binance app
+    assert [e["event"] for e in await d.poll()] == ["cancelled"]
+    e = d._rows("id=?", (p["entry_id"],))[0]
+    assert e["status"] == "cancelled" and "not by the desk" in e["reason"] and fake.prearms == {}
+
+
+async def test_a_ttl_cancel_whose_answer_was_lost_keeps_the_status_it_was_sent_for():
+    d, t, fake = desk()
+    (p,) = (await d.propose_group([prop(1.04)]))["placed"]
+    oid = d._rows("id=?", (p["entry_id"],))[0]["order_id"]
+    t.j.db.execute("UPDATE entries SET expires_ms=1 WHERE id=?", (p["entry_id"],))   # its TTL passed on our clock
+    lose_cancel_answer(fake, oid)
+    assert await d.poll() == [] and d._rows("id=?", (p["entry_id"],))[0]["status"] == "pending"
+    assert [e["event"] for e in await d.poll()] == ["expired"]        # Binance shows it canceled: by that cancel
+    e = d._rows("id=?", (p["entry_id"],))[0]
+    assert e["status"] == "expired" and "its cancel's answer was lost" in e["reason"] and fake.prearms == {}

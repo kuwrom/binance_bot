@@ -47,7 +47,7 @@ from . import (
 )
 from . import entries_fills as fills
 from .entries_amend import EntryAmend
-from .entries_cancel import EntryCancel
+from .entries_cancel import EntryCancel, amended_on_the_book, dead_label
 from .entries_place import EntryPlacement
 from .entry_gates import STAMPED, Retry
 from .entry_intents import HINTS, ON_BOOK, resolve
@@ -190,6 +190,10 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             if now_ms <= e["expires_ms"]:
                 raise
             return await self.act("forget_entry", e)
+        if (moved := amended_on_the_book(self.j, e, o)) and await self._settle(e["id"], "pending", **moved):
+            self.j.log_decision("amend_entry", moved["reason"], e["symbol"], snapshot={
+                "entry_id": e["id"], "old_limit": e["limit_price"], "new_limit": moved["limit_price"]})
+            e = {**e, **moved}
         if float(o.get("filled") or 0) > 0:
             return await self.act("protect_fill", e, order=o)
         if e.get("tranche"):
@@ -200,9 +204,9 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                     return {"entry_id": e["id"], "event": "cancelled", "why": "tranche trade closed"}
                 return None
         if o.get("status") in clientid.DEAD or now_ms > e["expires_ms"]:
-            if await self.act("cancel_entry", e, status="expired",
-                              reason=f"exchange status {o.get('status')}") == "unfilled":
-                return {"entry_id": e["id"], "event": "expired"}
+            status, reason = dead_label(self.j, e, o)   # by the cancel of ours that took it, if one did
+            if await self.act("cancel_entry", e, status=status, reason=reason) == "unfilled":
+                return {"entry_id": e["id"], "event": status}
             return None
         why = await self._should_cancel(e, now_ms)
         if why and await self._cancel_by_rule(e, why) == "unfilled":

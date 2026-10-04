@@ -4,6 +4,8 @@ placed beside an unresolved market entry."""
 
 import json
 
+import pytest
+
 from shortbot.config import RiskLimits
 from shortbot.entries import EntryDesk
 from shortbot.journal import Journal
@@ -107,3 +109,25 @@ async def test_no_limit_entry_beside_an_unresolved_market_entry():
     t.j.create_trade(SYM, "pump_fade", "market send unknown", 1.12, 2)   # an 'opening' row: it may still fill
     r = await d.propose_group([prop(1.04)])
     assert not r["ok"] and "unresolved" in r["rejected"][0]["error"] and fake.limits == {}
+
+
+@pytest.mark.parametrize("fault", ["1007_ran", "1007_unsent"])
+async def test_an_amend_whose_answer_was_lost_is_journalled_from_the_book(fault, monkeypatch):
+    """#86: the edit is recorded against its order; the fill poll, which reads that order every pass, journals the price
+    the book shows when it is the one our edit asked for, and the amend-once rule then holds. Nothing is sent again."""
+    from tests.test_fault_matrix_entries import desk as faulty_desk
+    from tests.test_fault_matrix_entries import row
+    from tests.test_intent_status import submit
+    d, t, fake = faulty_desk()
+    (p,) = (await d.propose_group([prop(1.04)]))["placed"]
+    fake.arm("edit_order", fault, "entry")
+    _, it = await submit(t, monkeypatch, lambda: d.amend(p["entry_id"], 1.05, "closer to the level"))
+    assert it["status"] == "unknown" and row(d, p["entry_id"])["limit_price"] == 1.04
+    await d.poll()
+    e, ran = row(d, p["entry_id"]), fault == "1007_ran"
+    assert (e["limit_price"], e["replaced"]) == ((1.05, 1) if ran else (1.04, 0))
+    if ran:
+        assert "closer to the level" in e["reason"] and "answer was lost" in e["reason"]
+        again = await d.amend(p["entry_id"], 1.06, "chase")
+        assert not again["ok"] and "replaced once" in again["error"]
+    assert fake.fired == [("edit_order", "entry", fault)]

@@ -86,7 +86,9 @@ async def test_cancel_entry(fault, monkeypatch):
         res2, it2 = await submit(t, monkeypatch, lambda: d.cancel_group(r["group_id"], "level gone"))
         assert res2["ok"] and res2["cancelled"] == 1 and it2["status"] == "done"
     now = row(d, e["id"])
-    assert now["status"] == ("expired" if ran else "cancelled") and "canceled" in fake.limits[e["order_id"]]["status"]
+    # labelled by the cancel that was sent for it, not "expired" (#86): the poll reads our recorded cancel's note
+    assert now["status"] == "cancelled" and "level gone" in now["reason"] and fake.limits[e["order_id"]]["status"] == \
+        "canceled"
     assert open_limits(fake) == [] and fake.prearms == {} and fake.position == 0 and fake.stops == {}
     await settle(t, monkeypatch)   # its cancel ran (off the book) or a later one of ours took it (missed)
     assert intents.get(t.j, it["id"])["status"] == ("done" if ran else "refused")

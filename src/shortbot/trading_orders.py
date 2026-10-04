@@ -192,11 +192,13 @@ class OrderFlow:
             symbol, "limit", "sell", amount, price,
             {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid}))
 
-    async def edit_limit(self, symbol: str, order_id: str, amount: float, price: float) -> Order:
-        """Move a resting entry limit SELL to `price` (Modify Order: same order id), recorded against the order."""
+    async def edit_limit(self, symbol: str, order_id: str, amount: float, price: float,
+                         note: dict[str, Any] | None = None) -> Order:
+        """Move a resting entry limit SELL to `price` (Modify Order: same order id), recorded against the order with
+        `note` (what it is sent for)."""
         return await intent_changes.change(self.j, "edit", symbol, order_id,
                                            self.t.edit_order(order_id, symbol, "limit", "sell", amount, price),
-                                           want=price)
+                                           want=price, note=note)
 
     async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> Order:
         """A reduce-only STOP_MARKET BUY of `amount` (mark price): the bridge that covers a stop swap (stops.py) or an

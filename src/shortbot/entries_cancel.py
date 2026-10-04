@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, errors
+from . import clientid, errors, intent_changes
 from .entry_gates import RESTING
 from .entry_intents import GRACE_S, located
 from .symlock import SymbolBusy
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from .entries import EntryDesk
+    from .journal import Journal
     from .trading import Alert, Trader
 
 log = logging.getLogger("shortbot.entries")
@@ -81,6 +82,35 @@ async def withdraw(tr: Trader, e: dict[str, Any], alert: Alert | None = None,
     if e.get("prearm_id"):
         await drop_prearm(tr, e["symbol"], e["prearm_id"], alert, f"entry #{e.get('id')} withdrawn unfilled")
     return "unfilled"
+
+
+def dead_label(j: Journal, e: dict[str, Any], o: dict[str, Any]) -> tuple[str, str]:
+    """(status, reason) for a pending row whose order Binance shows dead, or past its TTL (#86). Canceled: by the cancel
+    of ours recorded against the order (intent_changes: an answer lost, so the row stayed pending), labelled with the
+    status and reason it was sent for; else by a hand on the exchange. Expired, or still open past its TTL: expired."""
+    st = o.get("status")
+    if st != "canceled":
+        return "expired", f"exchange status {st}"
+    mine = intent_changes.latest(j, e["symbol"], e["order_id"])
+    if mine is None:
+        return "cancelled", "exchange status canceled: cancelled on the exchange, not by the desk"
+    note = mine["note"] or {"status": "cancelled", "reason": "cancelled"}
+    return note["status"], (f"{note['reason']} (its cancel's answer was lost: intent {mine['intent_id']}; Binance "
+                            "shows it canceled)")
+
+
+def amended_on_the_book(j: Journal, e: dict[str, Any], o: dict[str, Any]) -> dict[str, Any] | None:
+    """The row's update when the book shows its order at the price an edit of ours asked for, though the row doesn't
+    (the amend's answer was lost, #86): that price, replaced (the amend-once rule holds), and why. None otherwise."""
+    px = o.get("price")
+    if px is None or abs(float(px) - float(e["limit_price"])) < 1e-12:
+        return None
+    mine = intent_changes.latest(j, e["symbol"], e["order_id"], "edit")
+    if mine is None or mine["want"] is None or abs(float(px) - mine["want"]) >= 1e-12:
+        return None
+    why = (mine["note"] or {}).get("reason") or "amend"
+    return {"limit_price": float(px), "replaced": 1,
+            "reason": f"amended: {why} (its answer was lost: intent {mine['intent_id']}; the book shows {float(px):g})"}
 
 
 async def cancel_resting(desk: EntryDesk, reason: str,
