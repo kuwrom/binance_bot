@@ -60,11 +60,12 @@ def series(m: Market, coin: Coin, key: str) -> list[float | None]:
 
 def zscore(xs: list[float | None], i: int, n: int = Z_WINDOW) -> float | None:
     """z of xs[i] against the previous n values (strictly earlier)."""
+    cur = xs[i]
     hist = [x for x in xs[max(0, i - n):i] if x is not None]
-    if xs[i] is None or len(hist) < n // 2:
+    if cur is None or len(hist) < n // 2:
         return None
     sd = statistics.pstdev(hist)
-    return (xs[i] - statistics.fmean(hist)) / sd if sd else None
+    return (cur - statistics.fmean(hist)) / sd if sd else None
 
 
 def oi_chg(coin: Coin, i: int, back: int) -> float | None:
@@ -114,7 +115,8 @@ def crowded_unwind_short(m: Market, coin: Coin, p: dict) -> Iterable[tuple[int, 
 
 def _ls_state(m: Market, coin: Coin, i: int) -> tuple[float | None, float | None, list[float | None]]:
     g, top, tk = series(m, coin, "ls_global"), series(m, coin, "ls_top"), series(m, coin, "taker_ratio")
-    top_chg = top[i] - top[i - 24] if i >= 24 and top[i] is not None and top[i - 24] is not None else None
+    now, before = (top[i], top[i - 24]) if i >= 24 else (None, None)
+    top_chg = now - before if now is not None and before is not None else None
     return zscore(g, i), top_chg, tk[max(0, i - 2):i + 1]
 
 

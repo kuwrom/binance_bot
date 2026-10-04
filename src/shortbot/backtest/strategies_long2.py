@@ -49,11 +49,12 @@ def leaders(m: Market, top: int) -> dict[int, set[str]]:
         return m.cache[key]
     out: dict[int, set[str]] = {}
     btc = m.btc
-    for k, row in enumerate(btc.rows if btc else []):
+    btc_rows = btc.rows if btc else []
+    for k, row in enumerate(btc_rows):
         ts = row["ts"]
         if ts % (24 * H) or k < 168:
             continue
-        b_ret = row["c"] / btc.rows[k - 168]["c"] - 1
+        b_ret = row["c"] / btc_rows[k - 168]["c"] - 1
         resid = {}
         for c in m.coins.values():
             i = c.pos.get(ts)

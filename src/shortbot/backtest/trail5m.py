@@ -53,7 +53,8 @@ def exit_plan(coin: Coin, i: int, pl: Plan, key: str, mode: str) -> Plan:
 
 def signal_set(m: Market, key: str) -> list[tuple[Coin, int, Plan]]:
     """The fixed-exit book as run.Runner takes it: one open trade per coin, censored windows dropped."""
-    out, busy = [], {}
+    out = []
+    busy: dict[str, int] = {}   # symbol -> the last bar its open trade holds
     for (sym, i), (c, pl) in sorted(base_plans(m, key).items()):
         fx = exit_plan(c, i, pl, key, "fixed")
         if i <= busy.get(sym, -1) or i + fx.time_stop >= len(c.rows):
@@ -89,7 +90,8 @@ class Five:
 
 def replay(m: Market, key: str, db_path: str | Path = hist5m.DB_PATH) -> list[dict[str, Any]]:
     """Per covered signal: {mode: (R at 1h, R at 5m, exit reason 1h, exit reason 5m)} + day / entry ts."""
-    out, five = [], {}
+    out = []
+    five: dict[str, Five] = {}   # symbol -> its 5-minute bars
     for c, i, pl in signal_set(m, key):
         f = five.setdefault(c.symbol, Five(c, db_path))
         k = f.start(c, i, pl.time_stop)
@@ -101,6 +103,8 @@ def replay(m: Market, key: str, db_path: str | Path = hist5m.DB_PATH) -> list[di
             p1 = exit_plan(c, i, pl, key, mode)
             a = simulate(c.rows, i, p1, fidx=c.fidx)
             b = simulate(f.rows, k, replace(p1, time_stop=p1.time_stop * PER_H), fidx=f.fidx, vol24_usd=v24)
+            if a is None or b is None:   # signal_set filled it on 1h, so its variants run (was a TypeError)
+                raise ValueError(f"{c.symbol} bar {i}: the {mode} exits did not simulate")
             row[mode] = (a["r"], b["r"], a["reason"], b["reason"])
         out.append(row)
     return out
@@ -132,9 +136,9 @@ def study(m: Market, db_path: str | Path = hist5m.DB_PATH) -> dict[str, Any]:
     out = {}
     for key in FAMILIES:
         rows = replay(m, key, db_path)
-        fam = {"covered": len(rows), "signals": len(signal_set(m, key)), "modes": {}}
+        fam: dict[str, Any] = {"covered": len(rows), "signals": len(signal_set(m, key)), "modes": {}}
         for mode in FAMILIES[key]:
-            one = {}
+            one: dict[str, dict[str, Any]] = {}   # resolution -> its stats
             for res, lab in ((0, "1h"), (1, "5m")):
                 rs = [x[mode][res] for x in rows]
                 reasons: dict[str, int] = {}

@@ -104,6 +104,7 @@ async def fetch_kind(f: V.Fetcher, store: Store, kind: str, raws: list[str], day
         if store.have(key):
             return
         text = await f.csv(key)
+        rows: list[dict[str, Any]] | list[tuple[Any, ...]]   # metrics rows, else kline bars
         if kind == "metrics":
             rows = V.parse_metrics(text) if text else []
             store.put_metrics(raw, rows)

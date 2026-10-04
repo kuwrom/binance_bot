@@ -212,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     results = asyncio.run(replay(scans, rex, Journal(world), live_maps(snap), W.Oracle() if a.oracle else None))
     since_code = _ms(a.code_since) if a.code_since else first_current(scans)
     current = [r for r in results if since_code is not None and r["ts_ms"] >= since_code]
+    summary: dict[str, Any]
     summary = {"all": RC.summarize(results), "current_code": RC.summarize(current) if current else None,
                "code_since": W.iso(since_code) if since_code else None, "universe": attribution(results, rex.meta)}
     cfg = {"since": a.since, "until": a.until, "universe": a.universe, "oracle": a.oracle, "lead_days": a.lead_days}

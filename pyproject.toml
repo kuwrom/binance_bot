@@ -116,19 +116,13 @@ extra_checks = true
 
 # Every other module is the lenient tier (mypy's defaults), except this debt list: the modules with errors, 106 on
 # 0f0f45d (724 errors), 90 after #83 (276; a mixin declares its host's attributes, as trading_orders.OrderFlow does),
-# 29 after #85 (116).
+# 12 after #85 (60).
 # Remove a module once `mypy` passes without it; never add one.
 [[tool.mypy.overrides]]
 module = [
     "shortbot.backtest.cadence_study", "shortbot.backtest.card_tests", "shortbot.backtest.chain_study",
-    "shortbot.backtest.features", "shortbot.backtest.funding_events", "shortbot.backtest.hedge",
-    "shortbot.backtest.hedge_report", "shortbot.backtest.long_studies", "shortbot.backtest.replay_compare",
-    "shortbot.backtest.replay_delays", "shortbot.backtest.replay_fetch", "shortbot.backtest.replay_study",
-    "shortbot.backtest.replay_verify", "shortbot.backtest.report_v3", "shortbot.backtest.run",
-    "shortbot.backtest.rungs", "shortbot.backtest.sim", "shortbot.backtest.strategies",
-    "shortbot.backtest.strategies_flow", "shortbot.backtest.strategies_long2", "shortbot.backtest.strategies_more",
-    "shortbot.backtest.strategies_v2", "shortbot.backtest.strategies_v3", "shortbot.backtest.strategies_v4",
-    "shortbot.backtest.trail5m", "shortbot.backtest.trials_eff", "shortbot.backtest.trigger_rates",
-    "shortbot.backtest.xs_factors", "shortbot.backtest.xs_features"
+    "shortbot.backtest.funding_events", "shortbot.backtest.hedge", "shortbot.backtest.hedge_report",
+    "shortbot.backtest.long_studies", "shortbot.backtest.report_v3", "shortbot.backtest.trials_eff",
+    "shortbot.backtest.trigger_rates", "shortbot.backtest.xs_factors", "shortbot.backtest.xs_features"
 ]
 ignore_errors = true

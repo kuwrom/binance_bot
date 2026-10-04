@@ -19,6 +19,7 @@ from typing import Any
 from . import research_stats as rs
 from .exchange import Exchanges
 from .journal_research import LABEL_MAX_TRIES, LABEL_VERSION
+from .market.source import MarketSource
 
 HOUR_MS = 3_600_000
 RETRY_H = 2             # a failed label fetch is retried after 2h, 4h, 8h, 16h (~30h in all), then given up
@@ -46,7 +47,7 @@ def outcome_from_candles(p0: float, candles: list[list[float]], bars_per_hour: i
     }
 
 
-async def _outcome(ex: Exchanges, r: dict[str, Any], held: bool) -> dict[str, float | None]:
+async def _outcome(ex: MarketSource, r: dict[str, Any], held: bool) -> dict[str, float | None]:
     """The row's outcome by the current method. Raises when there is nothing to write: no bars, no scan price, or
     (for a row holding an older label) no 24h close, so a label is never traded for NULLs."""
     start = -(-r["ts_ms"] // BAR_MS) * BAR_MS                  # first 5m bar opening at/after the scan
@@ -59,7 +60,7 @@ async def _outcome(ex: Exchanges, r: dict[str, Any], held: bool) -> dict[str, fl
     return outcome
 
 
-async def label_outcomes(ex: Exchanges, journal, now_ms: int, limit: int = 120) -> int:
+async def label_outcomes(ex: MarketSource, journal, now_ms: int, limit: int = 120) -> int:
     """Label candidates at least 72h old (all horizons at once), and relabel ones labelled by an older method.
     A failed fetch (delisted symbol, 429, timeout, no bars) writes nothing: retried after RETRY_H, doubling. After
     LABEL_MAX_TRIES failures an older label is kept as it is (label_v unchanged) and a never-labelled row is labelled

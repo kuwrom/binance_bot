@@ -142,9 +142,10 @@ def placebo_signals(m: Market, donors: list[dict[str, Any]], per: int = 3, seed:
                     i = rng.randrange(WARMUP, hi)
                 else:
                     c = rng.choice(pool)
-                    i = c.pos.get(coin.rows[d["signal_i"]]["ts"])
-                    if c is coin or i is None or i + d["time_stop"] + 2 >= len(c.rows):
+                    same_hour = c.pos.get(coin.rows[d["signal_i"]]["ts"])
+                    if c is coin or same_hour is None or same_hour + d["time_stop"] + 2 >= len(c.rows):
                         continue
+                    i = same_hour
                 if tradable(c, i):
                     pick = (c, i)
                     break

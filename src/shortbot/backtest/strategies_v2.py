@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 from .features import Coin, Market
 from .sim import H, Plan
@@ -28,10 +29,11 @@ from .strategies import Trial, atr_abs, bounce_fade, level_fade, post_pump_decay
 
 Check = Callable[[Market, Coin, int], bool]          # True = the entry may go ahead
 
-BASE = {"pump_fade": (pump_fade, {"buf_atr": 1.0, "time": 12}),
-        "post_pump_decay": (post_pump_decay, {"stop_atr": 2.0, "time": 12}),
-        "level_fade": (level_fade, {"level": "round", "entry": "market", "time": 24}),
-        "bounce_fade": (bounce_fade, {"drop": -15, "time": 24})}
+BASE: dict[str, tuple[Callable[..., Iterable], dict[str, Any]]] = {   # strategy -> (its fn, round 0's params)
+    "pump_fade": (pump_fade, {"buf_atr": 1.0, "time": 12}),
+    "post_pump_decay": (post_pump_decay, {"stop_atr": 2.0, "time": 12}),
+    "level_fade": (level_fade, {"level": "round", "entry": "market", "time": 24}),
+    "bounce_fade": (bounce_fade, {"drop": -15, "time": 24})}
 
 TIDE_BTC24, TIDE_BTC4, TIDE_SEC4 = 2.0, 1.0, 1.0
 TAKER_RATIO, TAKER_IMB = 1.1, 0.05

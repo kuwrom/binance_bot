@@ -98,7 +98,8 @@ class Market:
         self._sec_cache: dict[tuple[str, int, int], float | None] = {}
         self.cache: dict[Any, Any] = {}   # per-strategy precomputations (pump bars, ...)
         ts = [r["ts"] for c in self.coins.values() for r in (c.rows[0], c.rows[-1])]
-        self.t0, self.t1 = (min(ts), max(ts)) if ts else (0, 0)
+        self.t0: int = min(ts) if ts else 0   # the data's first and last bar (ms)
+        self.t1: int = max(ts) if ts else 0
 
     def sector_ret(self, sector: str, ts: int, back: int, exclude: str | None = None) -> float | None:
         """Median `back`-hour % return of the sector's members at bar `ts` (the coin itself excluded)."""

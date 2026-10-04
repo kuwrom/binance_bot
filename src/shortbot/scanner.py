@@ -11,6 +11,7 @@ from . import indicators as ind
 from .exchange import Exchanges, to_symbol
 from .market import DataHub
 from .market.regime import market_regime
+from .market.source import MarketSource
 from .risk import FALLBACK_MAINT_MARGIN_PCT, max_leverage_for_stop
 from .setups import detect_all
 from .signals import Evaluation, evaluate
@@ -31,7 +32,7 @@ def _row(ev: Evaluation) -> dict[str, Any]:
     }
 
 
-async def evaluate_tickers(ex: Exchanges, tickers: list[dict], groups: tuple[str, ...] | None = None
+async def evaluate_tickers(ex: MarketSource, tickers: list[dict], groups: tuple[str, ...] | None = None
                            ) -> tuple[list[Evaluation], list[dict[str, Any]]]:
     """Evaluate these coins (ccxt-shaped tickers) with the signal plug-ins: (evaluations, rows). Shared by the desk's
     scan and the guardian's tier-2 deep score (scan_job.score_and_alert)."""
@@ -58,7 +59,7 @@ def log_scan(journal, evals: list[Evaluation], rows: list[dict[str, Any]], regim
     return len(evals)
 
 
-async def scan_shorts(ex: Exchanges, min_change: float = 10.0, top_n: int = 10, depth: int = 25,
+async def scan_shorts(ex: MarketSource, min_change: float = 10.0, top_n: int = 10, depth: int = 25,
                       journal=None, regime: str | None = None, direction: str = "gainers",
                       groups: tuple[str, ...] | None = None) -> dict:
     """Rank Binance futures by 24h change (gainers / losers / both), evaluate the top `depth` with the signal

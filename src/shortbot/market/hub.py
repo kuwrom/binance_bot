@@ -19,8 +19,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .. import clock, weight
-from ..exchange import Exchanges, to_raw, to_symbol
+from ..exchange import to_raw, to_symbol
 from . import stream_read, streams
+from .source import MarketSource
 
 _FUNDING_TTL = 60
 # How long a symbol's kline stream may have been quiet for its store candles to count, by the caller's weight class:
@@ -30,7 +31,7 @@ STREAM_MAX_AGE_S = {weight.PROTECTIVE: 15.0, weight.DESK: 15.0, weight.RESEARCH:
 
 
 class DataHub:
-    def __init__(self, ex: Exchanges, concurrency: int = 6):
+    def __init__(self, ex: MarketSource, concurrency: int = 6):
         self.ex = ex
         self.sem = asyncio.Semaphore(concurrency)
         self._funding: tuple[float, dict, dict] | None = None

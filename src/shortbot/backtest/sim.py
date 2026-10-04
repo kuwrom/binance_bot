@@ -116,26 +116,28 @@ def simulate(rows: list[dict], i: int, plan: Plan, funding: list | None = None, 
         trig = plan.limit_px
         if not trig or s * (rows[i]["c"] - trig) <= 0:
             return None
-        armed, fill_i = plan.arm_px is None, None
+        armed, hit = plan.arm_px is None, None
         for j in range(i + 1, min(n, i + 1 + plan.limit_ttl)):
             if armed and s * (trig - fav(rows[j])) > 0:
-                fill_i = j
+                hit = j
                 break
             if s * (adv(rows[j]) - plan.stop) >= 0:    # invalidated before the trigger: order cancelled
                 break
             armed = armed or s * (adv(rows[j]) - plan.arm_px) >= 0
-        if fill_i is None:
+        if hit is None:
             return {"filled": False, "signal_i": i}
+        fill_i = hit
         entry = better(trig, rows[fill_i]["o"]) * (1 - s * costs.stop_slip_mult * slip)   # stop-market, gap-aware
         fee_in, first, slip_cost = costs.taker_bps / 1e4, fill_i, costs.stop_slip_mult * slip
     else:
         lim = plan.limit_px
         if not lim or s * (lim - rows[i]["c"]) <= 0:
             return None
-        fill_i = next((j for j in range(i + 1, min(n, i + 1 + plan.limit_ttl)) if s * (adv(rows[j]) - lim) > 0),
-                      None)
-        if fill_i is None:
+        touched = next((j for j in range(i + 1, min(n, i + 1 + plan.limit_ttl)) if s * (adv(rows[j]) - lim) > 0),
+                       None)
+        if touched is None:
             return {"filled": False, "signal_i": i}
+        fill_i = touched
         entry, fee_in, first, slip_cost = lim, costs.maker_bps / 1e4, fill_i, 0.0
     stop0 = plan.stop
     if not entry or s * (stop0 - entry) <= 0:

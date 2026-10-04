@@ -183,7 +183,8 @@ def bounce_fade(m: Market, coin: Coin, p: dict) -> Iterable[tuple[int, Plan]]:
 
 # ---------------------------------------------------------------- post-pump decay: short the bounce into the pump VWAP
 def post_pump_decay(m: Market, coin: Coin, p: dict) -> Iterable[tuple[int, Plan]]:
-    r, used = coin.rows, set()
+    r = coin.rows
+    used: set[int] = set()   # pump bars already traded
     for pi in pumps(m, coin):
         if any(abs(pi - u) < 24 for u in used):
             continue
@@ -243,7 +244,7 @@ def squeeze_exhaustion(m: Market, coin: Coin, p: dict) -> Iterable[tuple[int, Pl
         ret1 = (r[i]["c"] / r[i - 1]["c"] - 1) * 100
         if not (o0 and o1 and ret1 > 3 * coin.atr[i - 1] and (o1 / o0 - 1) * 100 <= -3):
             continue
-        j = i
+        j: int | None = i   # the entry bar; None: no red bar came
         if p["entry"] == "red":
             j = next((k for k in range(i + 1, min(len(r), i + 7)) if r[k]["c"] < r[k]["o"]), None)
         if j is None or not tradable(coin, j):

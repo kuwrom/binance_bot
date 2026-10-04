@@ -83,16 +83,17 @@ def table(results: dict[str, list[tuple[dict[str, Any], dict[int, dict | None]]]
     out = []
     for setup, items in sorted(results.items()):
         for d in delays:
-            done = [(c, r[d]) for c, r in items if r.get(d) and r[d].get("filled")]
+            done = [(c, res) for c, r in items if (res := r.get(d)) and res.get("filled")]
             vals = [x["r"] for _, x in done]
             days = [rs.day_of(c["ts_ms"]) for c, _ in done]
             coins = [c["symbol"] for c, _ in done]
             inf = CS.mean_inference(vals, days, coins)
-            daily: dict[str, float] = {}
+            daily: dict[str | None, float] = {}
             for v, dd in zip(vals, days, strict=True):
                 daily[dd] = daily.get(dd, 0.0) + v
-            pairs = [(c, r[d]["r"] - r[delays[0]]["r"]) for c, r in items
-                     if r.get(d) and r[d].get("filled") and r.get(delays[0]) and r[delays[0]].get("filled")]
+            pairs = [(c, late["r"] - first["r"]) for c, r in items
+                     if (late := r.get(d)) and late.get("filled")
+                     and (first := r.get(delays[0])) and first.get("filled")]
             dinf = CS.mean_inference([x for _, x in pairs], [rs.day_of(c["ts_ms"]) for c, _ in pairs],
                                      [c["symbol"] for c, _ in pairs])
             out.append({"setup": setup, "delay_min": d, "episodes": len(items), "n": inf["n"], "mean_r": inf["mean"],

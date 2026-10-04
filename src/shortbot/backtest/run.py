@@ -124,7 +124,8 @@ class Runner:
         """Simulate signals; one open trade per coin at a time (exclusive=False: every signal on its own, for the
         matched placebos, which are per-donor controls, not a book); drop entries whose exit window runs past the
         data."""
-        trades, busy, unfilled, censored = [], {}, 0, 0
+        trades, unfilled, censored = [], 0, 0
+        busy: dict[str, int] = {}   # symbol -> the last bar its open trade holds
         for coin, i, pl in sig:
             if exclusive and i <= busy.get(coin.symbol, -1):
                 continue
@@ -220,8 +221,8 @@ def _run(a: argparse.Namespace, given: list[str]) -> None:
     m = Market(raw)
     led = None
     if a.round1:
-        from .strategies_v2 import ledger
-        led = ledger()
+        from .strategies_v2 import ledger as ledger2
+        led = ledger2()
     if a.round2:
         from .strategies_v3 import ledger as ledger3
         led = ledger3()

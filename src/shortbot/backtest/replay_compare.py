@@ -79,8 +79,10 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     """results: [{"ts_ms", "args", "cmp": compare_scan(...)}]. Rates with day-clustered 95% intervals."""
     hits, days, present = [], [], []
     crit: dict[str, list[bool]] = {"tradable": [], "setups": [], "tape": [], "vetoes": []}
-    crit_days: dict[str, list[str]] = {k: [] for k in crit}
-    only_l, only_r, tape_pairs = Counter(), Counter(), Counter()
+    crit_days: dict[str, list[str | None]] = {k: [] for k in crit}
+    only_l: Counter[str] = Counter()   # vetoes only the logged scan had
+    only_r: Counter[str] = Counter()   # ... only the replay had
+    tape_pairs: Counter[str] = Counter()   # "logged -> replayed" tape states that differ
     for res in results:
         d = day_of(res["ts_ms"])
         for r in res["cmp"]["rows"]:

@@ -108,7 +108,7 @@ def run_hourly() -> dict[str, Any]:
     from .strategies import trials
     from .strategies_more import RANDOM
     m = Market(load_coins(True))
-    seen: set[tuple[str, int]] = set()
+    seen: set[tuple[str, str, int]] = set()   # (group, symbol, bar)
     results = []
     for t in [*trials(), RANDOM]:
         sig = list(t.fn(m, t.params)) if t.cross else [(c, i, pl) for c in m.coins.values()
