@@ -12,19 +12,24 @@ The page has two views, switched in the header (or the menu on a phone) and reme
   - Equity with day/week/open P&L and the realized-P&L curve.
   - One card per open short: P&L in $, % and R, a price ladder from targets to stop, what it loses if stopped, its
     setup and conviction, and the **odds to the next levels** (the guardian's last ladder pass: model probability
-    against the no-edge baseline, reward and EV in R, the state score and what the ladder rule would hold). Thesis and
-    plan are one tap away, with *Move stop* and *Close*.
+    against the no-edge baseline, reward and EV in R, the state score and what the ladder rule would hold; *Refresh*
+    recomputes it now with `position_ladder`, read-only). Thesis and plan are one tap away, with *Move stop* and *Close*.
   - Resting entries with their fill and target odds at placement, and *Cancel*.
-  - The risk room (daily loss cap, risk at the stops, exposure, drawdown), the urgent unacknowledged alerts, the last
-    closed trades.
+  - The risk room (daily loss cap, risk at the stops, exposure, drawdown, the base risk the next trade starts from),
+    the urgent unacknowledged alerts, the last closed trades.
+  - A read that fails is loud, never blank: the header says *State unknown*, a banner names each failed command with
+    its error, and a block with no value says it could not be read (an unread book is not shown as a flat one).
   - It refreshes every 60 s. `trading_state` runs the guardian watchdog on each refresh, so a dead guardian trips
     HALTED here as it does in the SessionStart hook.
 - **Radar**: what the system is looking at. The guardian's latest scan as stored in the journal (no exchange call):
   tradable candidates best score first with the setup, tape state and what scored; the vetoed ones with the reason;
-  the watchlist. A search box (also in the header) opens **a coin's page**: where it stands (open short, resting
-  entry, tradable candidate, vetoed, watchlist, not in the current scan, never scored) and why, its last scan and
-  score history, the session's read, our past trades on it. Buttons run the live reads on demand: *Read it now*
-  (`read_coin`), *Size a short* (`risk_budget`), *Chart*, *Watch*.
+  the watchlist. A newest scan older than 30 min is flagged (the guardian's median gap is 3 min). A search box (also in the header) opens **a coin's page**: where it stands (open short, resting
+  entry, tradable candidate, vetoed, watchlist, not in the current scan, does not qualify now, unknown ticker) and
+  why (a listed coin outside the scan says whether it is too thin for the volume floor or just quiet), its last scan
+  and score history, the session's read, our past trades on it. Buttons run the live reads on demand: *Read it now*
+  (`read_coin`), *Size a short* (`risk_budget`: the risk in $ with each multiplier and, once the coin is read, the
+  size it buys at each stop, capped at the max position), *Chart*, *Watch*. *Plan the book* runs `book_plan`: the
+  candidates that fit the free slots, in order, and the skipped ones with why (a live read, logged as a decision).
 - **Results**: does it work. Our trades by setup (win rate, avg R, P&L), then the **measured edge** by setup from
   `calibration_report` (observed target-first rate against the no-edge baseline, marked *edge*, *not proven* or
   *too few*), then every closed trade with its thesis, exit reason and lesson.
@@ -34,7 +39,7 @@ The page has two views, switched in the header (or the menu on a phone) and reme
 **Advanced** adds what the agent and a researcher need:
 - on the Overview: the risk parameters (overrides beside the `.env` baseline and bounds), the governor in full, the
   brief Claude gets at session start, and the raw JSON behind every card;
-- on the Radar: the live reads (`book_plan`, `market_map`, a fresh `scan_shorts`), snapshot and profile on a coin;
+- on the Radar: the live reads (`market_map`, a fresh `scan_shorts`), snapshot and profile on a coin;
 - on Results: the edge by tape state, the rulebook and the reports (24 h audit, research report, calibration,
   setups, the full journal);
 - **Commands**: every desk command, as a form generated from its `commands.py` declaration, the same one its MCP
@@ -61,7 +66,8 @@ npm run dev             # http://localhost:5173, /api proxied to SHORTBOT_API (d
 npm run build           # typecheck, bundle into web/static, stamp build.json
 ```
 - After any change under `ui/`, run `npm run build` and commit the bundle with it. `tests/test_web.py` compares the
-  sources' hash with `static/build.json` and fails on a stale bundle.
+  sources' hash with `static/build.json` and fails on a stale bundle. It also checks every command the page calls
+  (by name, in `ui/src`) against the registry, with the arguments it sends.
 - Nothing may be inlined (the CSP is `'self'` only): no CDN, no inline script or style element. React's `style` prop
   writes the CSSOM, which the CSP allows.
 - Layout: `api.ts`, `format.ts`, `types.ts`; `components/` (figures, the command form and sheet, the generic result

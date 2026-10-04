@@ -158,9 +158,10 @@ class Web:
             return JSONResponse(runner.jsonable(research.book(j, now_ms)))
         if view == "coin":
             symbol = q.get("symbol", "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9/:]{1,30}", symbol):
+            if not re.fullmatch(r"[\w/:]{1,30}", symbol):   # \w: Binance lists non-ASCII tickers too
                 return _err(400, "symbol: letters and digits, e.g. SOL or SOL/USDT:USDT")
-            return JSONResponse(runner.jsonable(research.coin(j, symbol, now_ms, hours)))
+            floor = getattr(getattr(getattr(get_app(), "ex", None), "limits", None), "min_quote_volume_24h", None)
+            return JSONResponse(runner.jsonable(research.coin(j, symbol, now_ms, hours, floor)))
         return _err(404, f"no research view {view}")
 
     # ------------------------------------------------------------ files

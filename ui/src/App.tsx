@@ -53,14 +53,15 @@ function Seg<T extends string>({ label, value, options, set }: { label: string; 
   )
 }
 
-function Status({ ks, onClick }: { ks?: TradingState; onClick: () => void }) {
-  const ok = !!ks && ks.state === 'ACTIVE' && ks.guardian_alive
-  const cls = !ks ? '' : ok ? 'ok' : ks.state === 'REDUCING' && ks.guardian_alive ? 'warn' : 'bad'
+// failed: the last read of trading_state failed. Without a state to show that is "unknown", in the alarm colour.
+function Status({ ks, failed, onClick }: { ks?: TradingState; failed: boolean; onClick: () => void }) {
+  const ok = !!ks && !failed && ks.state === 'ACTIVE' && ks.guardian_alive
+  const cls = !ks ? (failed ? 'bad' : '') : ok ? 'ok' : !failed && ks.state === 'REDUCING' && ks.guardian_alive ? 'warn' : 'bad'
   return (
     <button className={'status ' + cls} type="button" onClick={onClick}
       title={ks ? `Kill switch ${ks.state}; guardian heartbeat ${span(ks.guardian_heartbeat_age_s)} ago` : ''}>
       <span className="beacon" />
-      <span>{!ks ? '…' : ok ? `Active · guardian ${span(ks.guardian_heartbeat_age_s)}` : ks.state !== 'ACTIVE' ? ks.state : 'Guardian down'}</span>
+      <span>{!ks ? (failed ? 'State unknown' : '…') : failed ? `${ks.state} · not refreshed` : ok ? `Active · guardian ${span(ks.guardian_heartbeat_age_s)}` : ks.state !== 'ACTIVE' ? ks.state : 'Guardian down'}</span>
     </button>
   )
 }
@@ -81,8 +82,10 @@ function Shell({ me, commands, onLogout }: { me: Me; commands: Command[]; onLogo
   const active = visible.some((t) => t.id === tab) ? tab : 'home'
   const openTab = useCallback((t: Tab) => { setTab(t); store.set('sb-tab', t); window.scrollTo(0, 0) }, [])
   const openCoin = useCallback((s: string) => { setCoinSym(s || null); if (s) openTab('radar') }, [openTab])
+  const poll = useDeskData(mode, active === 'home', auto, !!sheet)
+  const limits = poll.data.account?.limits
   const desk = useMemo<Desk>(() => ({ mode, commands, byKey: Object.fromEntries(commands.map((c) => [c.key, c])),
-    openTab, openCoin, openSheet: setSheet }), [mode, commands, openTab, openCoin])
+    limits, openTab, openCoin, openSheet: setSheet }), [mode, commands, limits, openTab, openCoin])
 
   useEffect(() => { document.documentElement.dataset.mode = mode; store.set('sb-mode', mode) }, [mode])
   useEffect(() => {
@@ -101,7 +104,6 @@ function Shell({ me, commands, onLogout }: { me: Me; commands: Command[]; onLogo
     return () => { document.removeEventListener('click', close); document.removeEventListener('keydown', close) }
   }, [menu])
 
-  const poll = useDeskData(mode, active === 'home', auto, !!sheet)
   const ks = poll.data.trading_state
   const urgent = (poll.data.alerts?.alerts ?? []).filter((x) => x.urgent && !x.acked).length
   useEffect(() => { api<Scan>('/api/research/candidates').then(setScan, () => {}) }, [])   // the search box's suggestions
@@ -112,7 +114,7 @@ function Shell({ me, commands, onLogout }: { me: Me; commands: Command[]; onLogo
         <header className="top">
           <div className="brand"><Icon d="M3 6l6 6 4-4 8 9M21 12v5h-5" /><span>shortbot</span>
             <span className={'pill ' + (me.mode === 'live' ? 'bad' : 'demo')}>{me.mode}</span></div>
-          <Status ks={ks} onClick={() => openTab('home')} />
+          <Status ks={ks} failed={'trading_state' in poll.errors} onClick={() => openTab('home')} />
           <nav id="tabs" aria-label="Sections">
             {visible.map((t) => (
               <button key={t.id} type="button" className={'tab' + (active === t.id ? ' active' : '')}

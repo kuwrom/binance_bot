@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +17,7 @@ from starlette.testclient import TestClient
 from shortbot import cmd_research
 from shortbot.commands import CommandError
 from shortbot.journal import Journal
-from shortbot.web import auth, forms, runner, server
+from shortbot.web import auth, forms, research, runner, server
 
 PW = "correct horse battery staple"
 
@@ -209,6 +210,29 @@ def test_the_committed_bundle_was_built_from_the_ui_sources():
     assert stamp["src_hash"] == h.hexdigest(), "ui/ changed since the bundle was built: cd ui && npm run build"
 
 
+def test_every_command_the_page_calls_is_a_desk_command_with_those_arguments():
+    """The page names commands as strings: a typo, or a command renamed in commands.py, would only fail in the browser.
+    Every call site in ui/src (run, settle, a sheet's `cmd`, the Overview's reads, the reports) must be in the registry,
+    and every argument or prefill it sends must be one of the command's parameters."""
+    text = "\n".join(p.read_text() for p in sorted((Path(__file__).parent.parent / "ui" / "src").rglob("*.ts*")))
+    reg = forms.registry()
+    sent: dict[str, set[str]] = {}
+    for key, args in re.findall(r"(?:run|settle|ask|runReport)(?:<[^>]*>)?\(\s*'([\w-]+)'(?:,\s*\{([^}]*)\})?", text):
+        sent.setdefault(key, set()).update(re.findall(r"(\w+):", args))
+    for key, args in re.findall(r"\['([\w-]+)', '[^']+', \{([^}]*)\}\]", text):                 # REPORTS
+        sent.setdefault(key, set()).update(re.findall(r"(\w+):", args))
+    for key, rest in re.findall(r"cmd: '([\w-]+)'(.{0,260})", text, re.S):                       # sheets
+        prefill = re.search(r"prefill:\s*(?:[^{}\n]*\?\s*)?\{([^}]*)\}", rest.split("openSheet")[0])
+        sent.setdefault(key, set()).update(re.findall(r"(\w+):", prefill.group(1)) if prefill else [])
+    for block in re.findall(r"_READS = \[([^\]]+)\]", text):
+        for key in re.findall(r"'([\w-]+)'", block):
+            sent.setdefault(key, set())
+    assert len(sent) >= 25, sorted(sent)   # the patterns still find the call sites
+    assert set(sent) <= set(reg), sorted(set(sent) - set(reg))
+    for key, names in sent.items():
+        assert names <= {f["name"] for f in forms.fields(reg[key])}, (key, names)
+
+
 # ------------------------------------------------------------ research reads
 def test_research_shows_the_latest_scan_a_coins_standing_and_the_books_odds(web):
     c, j = web.client, web.journal
@@ -234,7 +258,14 @@ def test_research_shows_the_latest_scan_a_coins_standing_and_the_books_odds(web)
     assert c.get("/api/research/candidates?hours=x").status_code == 400
 
     state = lambda s: c.get("/api/research/coin", params={"symbol": s}).json()["standing"]["state"]  # noqa: E731
-    assert [state(s) for s in ("aaa", "BBBUSDT", "ZZZ")] == ["candidate", "vetoed", "unseen"]
+    listed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    j.db.executemany("INSERT INTO metrics (ts, symbol, price, quote_volume_24h) VALUES (?, ?, 1.0, 9e6)",
+                     [(listed_at, "QQQ/USDT:USDT"), (listed_at, "币安/USDT:USDT")])
+    j.db.commit()
+    assert [state(s) for s in ("aaa", "BBBUSDT", "QQQ", "币安", "ZZZ")] == \
+        ["candidate", "vetoed", "unscored", "unscored", "unknown"]   # a listed coin, a non-ASCII ticker, a typo
+    assert "QQQ/USDT:USDT" in c.get("/api/research/candidates").json()["symbols"]   # the search box knows it
+    assert "too thin" in research.coin(j, "QQQ", now, min_volume=2e7)["standing"]["why"]
     assert len(c.get("/api/research/coin", params={"symbol": "AAA"}).json()["history"]) == 2
     assert c.get("/api/research/coin", params={"symbol": "AAA; DROP"}).status_code == 400
     tid = j.create_trade("AAA/USDT:USDT", "pump_fade", "lower high", stop_price=1.2, leverage=2, plan={})

@@ -18,16 +18,20 @@ export interface DeskData {
   governor_status?: Governor; risk_params?: RiskParams; brief?: string; journal?: Journal; alerts?: Alerts
   book?: Book; stale?: string
 }
-export interface DeskState { data: DeskData; failed: string[]; updated: Date | null; loading: boolean }
+// errors: {command: why its last read failed}. A read that fails keeps its last good value in `data`, if it has one.
+export interface DeskState { data: DeskData; errors: Record<string, string>; updated: Date | null; loading: boolean }
+
+// What the Overview reads on every refresh (tests/test_web.py checks each name against the command registry).
+const BASIC_READS = ['trading_state', 'account', 'positions', 'pending_entries', 'governor_status']
+const ADVANCED_READS = ['risk_params', 'brief']
 
 // Polls the desk. `active` = the Overview is on screen; `auto` = refresh every 60 s while the page is visible.
 export function useDeskData(mode: Mode, active: boolean, auto: boolean, paused: boolean) {
-  const [state, setState] = useState<DeskState>({ data: {}, failed: [], updated: null, loading: false })
+  const [state, setState] = useState<DeskState>({ data: {}, errors: {}, updated: null, loading: false })
   const journalAt = useRef(0)
   const load = useCallback(async (full = false) => {
     setState((s) => ({ ...s, loading: true }))
-    const keys = ['trading_state', 'account', 'positions', 'pending_entries', 'governor_status',
-      ...(mode === 'advanced' ? ['risk_params', 'brief'] : [])]
+    const keys = [...BASIC_READS, ...(mode === 'advanced' ? ADVANCED_READS : [])]
     const wantJournal = full || !journalAt.current || Date.now() - journalAt.current > JOURNAL_EVERY_MS
     const [alerts, book, journal, ...rest] = await Promise.all([
       api<Alerts>('/api/alerts?limit=300').catch(() => null), api<Book>('/api/research/book').catch(() => null),
@@ -41,7 +45,8 @@ export function useDeskData(mode: Mode, active: boolean, auto: boolean, paused: 
       if (alerts) data.alerts = alerts
       if (book) data.book = book
       data.stale = keys.map((k) => { const g = got[k]; return g.ok ? g.res.stale_code : undefined }).find(Boolean)
-      return { data, failed: keys.filter((k) => !got[k].ok), updated: new Date(), loading: false }
+      const errors = Object.fromEntries(keys.flatMap((k) => { const g = got[k]; return g.ok ? [] : [[k, g.err]] }))
+      return { data, errors, updated: new Date(), loading: false }
     })
   }, [mode])
 
@@ -56,10 +61,19 @@ export function useDeskData(mode: Mode, active: boolean, auto: boolean, paused: 
   return { ...state, load }
 }
 
-function Banner({ d }: { d: DeskData }) {
+function Banner({ d, errors }: { d: DeskData; errors: Record<string, string> }) {
   const ks = d.trading_state, gov = d.governor_status
+  const others = Object.entries(errors).filter(([k]) => k !== 'trading_state')
   return (
     <div className="banner">
+      {errors.trading_state && (
+        <Notice level="crit" title={ks ? 'Desk state not refreshed' : 'Desk state unknown'} lines={[
+          ks ? 'The kill switch and guardian below are from the last good read.'
+            : 'The kill switch and the guardian could not be read: treat the desk as unguarded until this clears.',
+          errors.trading_state]} />
+      )}
+      {others.length > 0 && <Notice level="warn" title={`Could not read ${others.map(([k]) => k.replace(/_/g, ' ')).join(', ')}`}
+        lines={others.slice(0, 4).map(([k, e]) => `${k}: ${e}`)} />}
       {ks && ks.state !== 'ACTIVE' ? (
         <Notice level={ks.state === 'HALTED' ? 'crit' : 'warn'} title={`${ks.state}: no new entries`} lines={[ks.reason,
           ks.by && `Set by ${ks.by}${ks.at ? ' · ' + when(ks.at) : ''}`, ks.allowed && `Still allowed: ${ks.allowed}`,
@@ -136,6 +150,11 @@ function RiskRoom({ acct, gov, positions }: { acct: Account; gov: Governor; posi
       {lim.dd_stop_pct > 0 && <Meter label="Drawdown from peak" used={gov.drawdown_pct || 0} cap={lim.dd_stop_pct}
         tick={lim.dd_halve_pct} text={pct(gov.drawdown_pct || 0)}
         hint={`Size halves at ${lim.dd_halve_pct}%, entries stop at ${lim.dd_stop_pct}%`} />}
+      {lim.risk_per_trade_pct > 0 && (
+        <p className="small-print muted">Next trade risks up to <strong>{usd(acct.equity * lim.risk_per_trade_pct / 100 * (gov.m_gov ?? 1), false, 0)}</strong>
+          {' '}({pct(lim.risk_per_trade_pct, false, 1)} of equity{gov.m_gov !== 1 ? ` × governor ${gov.m_gov}` : ''}), before the per-coin
+          adjustments and the heat and daily caps: size a coin on the Radar for the exact figure.</p>
+      )}
       <div className="chips">
         {gov.regime && <span className="chip">Regime: {gov.regime}</span>}
         {gov.cell && <span className="chip adv">Cell: {gov.cell}</span>}
@@ -167,30 +186,42 @@ function Attention({ alerts }: { alerts: Alerts }) {
   )
 }
 
+// A read with no value yet: still loading, or failed (never "empty": an unread book is not a flat book).
+function Unread({ what, error, updated }: { what: string; error?: string; updated: Date | null }) {
+  if (error) return <div className="card empty error">{what} could not be read: {error}</div>
+  return <div className="card empty">{updated ? `${what} could not be read.` : 'loading…'}</div>
+}
+
 export function Overview({ desk }: { desk: ReturnType<typeof useDeskData> }) {
   const { mode, openTab } = useDesk()
-  const { data: d, failed, updated, loading, load } = desk
+  const { data: d, errors, updated, loading, load } = desk
+  const failed = Object.keys(errors)
+  const stale = failed.filter((k) => (d as Record<string, unknown>)[k] !== undefined)
   const reload = () => void load(true)
   const closed = (d.journal?.recent_trades ?? []).filter((t) => t.closed_at).slice(0, 5)
   return (
     <section className="tab-page">
-      <Banner d={d} />
+      <Banner d={d} errors={errors} />
       <div className="home">
         <div className="col">
-          {d.account && <Hero acct={d.account} journal={d.journal} />}
+          {d.account ? <Hero acct={d.account} journal={d.journal} />
+            : <section className="block"><Unread what="Equity and P&L" error={errors.account} updated={updated} /></section>}
           <section className="block">
             <header className="block-head"><h2>Open shorts</h2><span className="count">{d.positions?.length || ''}</span></header>
             <div className="stack">
-              {d.positions?.length ? d.positions.map((p) => <PositionCard key={p.symbol} p={p} lad={d.book?.ladders[p.symbol]} reload={reload} />)
-                : d.positions && <div className="card empty">Flat. No open shorts.</div>}
+              {!d.positions ? <Unread what="Open shorts" error={errors.positions} updated={updated} />
+                : d.positions.length ? d.positions.map((p) => <PositionCard key={p.symbol} p={p} lad={d.book?.ladders[p.symbol]} reload={reload} />)
+                  : <div className="card empty">Flat. No open shorts.</div>}
             </div>
           </section>
           <section className="block">
             <header className="block-head"><h2>Resting entries</h2><span className="count">{d.pending_entries?.length || ''}</span></header>
-            <div className="card list">
-              {d.pending_entries?.length ? d.pending_entries.map((e) => <EntryRow key={e.id} e={e} o={d.book?.entries[String(e.id)]} reload={reload} />)
-                : <div className="empty">No resting entries.</div>}
-            </div>
+            {!d.pending_entries ? <Unread what="Resting entries" error={errors.pending_entries} updated={updated} /> : (
+              <div className="card list">
+                {d.pending_entries.length ? d.pending_entries.map((e) => <EntryRow key={e.id} e={e} o={d.book?.entries[String(e.id)]} reload={reload} />)
+                  : <div className="empty">No resting entries.</div>}
+              </div>
+            )}
           </section>
           <section className="block">
             <header className="block-head"><h2>Recent trades</h2></header>
@@ -203,7 +234,8 @@ export function Overview({ desk }: { desk: ReturnType<typeof useDeskData> }) {
         <div className="col">
           <section className="block">
             <header className="block-head"><h2>Risk room</h2></header>
-            {d.account && d.governor_status && <RiskRoom acct={d.account} gov={d.governor_status} positions={d.positions} />}
+            {d.account && d.governor_status ? <RiskRoom acct={d.account} gov={d.governor_status} positions={d.positions} />
+              : <Unread what="Risk limits" error={errors.governor_status ?? errors.account} updated={updated} />}
           </section>
           <section className="block">
             <header className="block-head"><h2>Needs attention</h2></header>
@@ -214,7 +246,7 @@ export function Overview({ desk }: { desk: ReturnType<typeof useDeskData> }) {
       </div>
       <footer className="foot">
         <span className={failed.length ? 'error' : 'muted'}>
-          {failed.length ? `${failed.join(', ')} failed · showing the last good read`
+          {failed.length ? `${failed.join(', ')} failed` + (stale.length ? ` · showing the last good read of ${stale.join(', ')}` : '')
             : updated ? 'Updated ' + updated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'loading…'}
           {loading && updated ? ' · refreshing…' : ''}
         </span>

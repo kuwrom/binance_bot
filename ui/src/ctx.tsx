@@ -21,6 +21,7 @@ export interface Desk {
   mode: Mode
   commands: Command[]
   byKey: Dict<Command>
+  limits?: Dict<number>              // the effective risk limits, from the last account read
   openTab: (tab: Tab) => void
   openCoin: (symbol: string) => void
   openSheet: (req: SheetRequest) => void

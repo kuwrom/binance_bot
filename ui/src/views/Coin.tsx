@@ -7,11 +7,12 @@ import { Raw, Result } from '../components/Result'
 import { useDesk } from '../ctx'
 import { coin, compact, isNum, odds, pct, price, since, span, tone, usd, when } from '../format'
 import type { Candidate, CoinRead, CoinView, Dict, StopOption } from '../types'
+import { SizeCard, type Budget } from './Live'
 
 const STANDING: Dict<[string, string]> = {
   position: ['Open short', 'ok'], resting: ['Entry resting', 'demo'], candidate: ['Tradable candidate', 'ok'],
   vetoed: ['Vetoed', 'bad'], watchlist: ['On the watchlist', 'demo'], stale: ['Not in the current scan', ''],
-  unseen: ['Does not qualify', ''],
+  unscored: ['Does not qualify now', ''], unknown: ['Unknown ticker', 'bad'],
 }
 
 // "+10 lower high on 1h" -> its weight and its text
@@ -58,8 +59,11 @@ export function ScanCard({ c }: { c: Candidate }) {
   )
 }
 
+const stopsOf = (r?: CoinRead | null): [string, StopOption][] | undefined =>
+  r ? Object.entries(r.stops).filter((e): e is [string, StopOption] => typeof e[1] === 'object' && e[1] !== null) : undefined
+
 function LiveRead({ r }: { r: CoinRead }) {
-  const stops = Object.entries(r.stops).filter((e): e is [string, StopOption] => typeof e[1] === 'object')
+  const stops = stopsOf(r) ?? []
   const ev = r.evidence
   return (
     <div className="card">
@@ -97,10 +101,22 @@ export function Coin({ symbol, onClose }: { symbol: string; onClose: () => void 
   const [error, setError] = useState('')
   const [live, setLive] = useState<{ key: string; res: RunResult | { error: string } | null } | null>(null)
   const [tick, setTick] = useState(0)
+  const [read, setRead] = useState<{ r: CoinRead | null; err: string; busy: boolean } | null>(null)
+  const [budget, setBudget] = useState<{ b: Budget | null; err: string; busy: boolean } | null>(null)
   useEffect(() => {
-    setView(null); setError(''); setLive(null)
+    setView(null); setError(''); setLive(null); setRead(null); setBudget(null)
     api<CoinView>('/api/research/coin?symbol=' + encodeURIComponent(symbol)).then(setView, (e: Error) => setError(e.message))
   }, [symbol, tick])
+  const readNow = () => {
+    setRead({ r: null, err: '', busy: true })
+    run<CoinRead>('read_coin', { symbol }).then(({ result }) => setRead({ r: result, err: '', busy: false }),
+      (e: Error) => setRead({ r: null, err: e.message, busy: false }))
+  }
+  const sizeNow = () => {
+    setBudget({ b: null, err: '', busy: true })
+    run<Budget>('risk_budget', { symbol }).then(({ result }) => setBudget({ b: result, err: '', busy: false }),
+      (e: Error) => setBudget({ b: null, err: e.message, busy: false }))
+  }
   const ask = (key: string, args: Dict<string>) => {
     setLive({ key, res: null })
     run(key, args).then((res) => setLive({ key, res }), (e: Error) => setLive({ key, res: { error: e.message } }))
@@ -116,13 +132,16 @@ export function Coin({ symbol, onClose }: { symbol: string; onClose: () => void 
       <div className="card coin-head">
         <div className="pos-head">
           <div className="pos-name"><h3>{coin(sym)}<span className={'pill ' + cls}>{name}</span></h3>
-            <p className="thesis">{view.standing.why}</p></div>
+            <p className="thesis">{view.standing.why}</p>
+            {view.market && <p className="muted small-print">Last logged {when(view.market.ts)}: price {price(view.market.price)}
+              {' '}· 24h volume ${compact(view.market.quote_volume_24h)}
+              {isNum(view.market.funding_rate) && ` · funding ${pct(view.market.funding_rate * 100, true, 4)}`}</p>}</div>
           <button className="icon-btn" type="button" aria-label="Close" onClick={onClose}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
         </div>
         <div className="toolbar">
-          <button type="button" className="primary" onClick={() => ask('read_coin', { symbol: sym })}>Read it now</button>
-          <button type="button" onClick={() => ask('risk_budget', { symbol: sym })}>Size a short</button>
+          <button type="button" className="primary" disabled={read?.busy} onClick={readNow}>Read it now</button>
+          <button type="button" disabled={budget?.busy} onClick={sizeNow}>Size a short</button>
           <button type="button" onClick={() => ask('chart', { symbol: sym })}>Chart</button>
           <button type="button" onClick={() => openSheet({ cmd: 'watch', title: view.watch ? `Stop watching ${coin(sym)}` : `Watch ${coin(sym)}`,
             prefill: view.watch ? { symbol: sym, remove: 'true' } : { symbol: sym }, onDone: () => setTick((t) => t + 1) })}>
@@ -131,9 +150,12 @@ export function Coin({ symbol, onClose }: { symbol: string; onClose: () => void 
           {mode === 'advanced' && <button type="button" onClick={() => ask('coin_profile', { symbol: sym })}>Profile</button>}
         </div>
       </div>
+      {read && (read.busy ? <p className="muted">reading {coin(sym)} (live market read)…</p>
+        : read.r ? <LiveRead r={read.r} /> : <p className="card error">read_coin: {read.err}</p>)}
+      {budget && (budget.busy ? <p className="muted">sizing a short on {coin(sym)}…</p>
+        : budget.b ? <SizeCard b={budget.b} stops={stopsOf(read?.r)} /> : <p className="card error">risk_budget: {budget.err}</p>)}
       {live && (live.res === null ? <p className="muted">running {live.key} (live market read)…</p>
-        : live.key === 'read_coin' && 'result' in live.res ? <LiveRead r={live.res.result as CoinRead} />
-          : <Result title={live.key} res={live.res} />)}
+        : <Result title={live.key} res={live.res} />)}
       {view.latest && <ScanCard c={view.latest} />}
       {scores.length > 1 && (
         <div className="card">

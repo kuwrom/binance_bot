@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from .. import coin_memory
@@ -16,6 +17,7 @@ FEATURES = ("change_24h", "quote_volume", "funding_8h", "oi_value", "oi_change_2
             "off_high_pct", "liq_tier", "lifecycle_stage", "listing_age_days")
 HOUR_MS = 3_600_000
 SEEN_DAYS = 7      # the search box suggests coins the scan scored in this many days
+UNIVERSE_DAYS = 2  # and every perp in the guardian's metrics log in this many
 HISTORY = 12       # scan rows in a coin's history
 
 
@@ -60,24 +62,50 @@ def _scan_predictions(j: Any, since_ms: int, symbol: str | None = None) -> dict[
     return {r["symbol"]: r for r in rows}
 
 
+def _since(now_ms: int) -> str:
+    """UNIVERSE_DAYS ago, as the metrics log writes time (its key starts with ts: a bounded read stays an index range)."""
+    return datetime.fromtimestamp(now_ms / 1000 - UNIVERSE_DAYS * 86400, timezone.utc).isoformat(timespec="seconds")
+
+
+def _market(j: Any, symbol: str, now_ms: int) -> dict[str, Any] | None:
+    """The coin's newest row in the guardian's metrics log (every listed perp): proof it is listed, and how big it is."""
+    rows = _lazy(j, "SELECT ts, price, funding_rate, quote_volume_24h FROM metrics WHERE symbol=? AND ts >= ? "
+                    "ORDER BY ts DESC LIMIT 1", (symbol, _since(now_ms)))
+    return rows[0] if rows else None
+
+
+def _universe(j: Any, now_ms: int) -> list[str]:
+    """Every perp the guardian logged in UNIVERSE_DAYS, plus the coins the scan scored in SEEN_DAYS."""
+    listed = _lazy(j, "SELECT DISTINCT symbol FROM metrics WHERE ts >= ?", (_since(now_ms),))
+    scored = j._rows("SELECT DISTINCT symbol FROM candidates WHERE ts_ms >= ?", (now_ms - SEEN_DAYS * 24 * HOUR_MS,))
+    return sorted({r["symbol"] for r in listed} | {r["symbol"] for r in scored})
+
+
 def candidates(j: Any, now_ms: int, hours: float = 6.0, limit: int = 40) -> dict[str, Any]:
     """The newest scored row per coin within `hours`: tradable and vetoed, each best score first, plus the watchlist
-    and every coin the scan scored in SEEN_DAYS (the search box's suggestions)."""
+    and every coin the desk knows (the search box's suggestions)."""
     since = now_ms - int(hours * HOUR_MS)
     rows = j._rows("SELECT c.* FROM candidates c JOIN (SELECT MAX(id) id FROM candidates WHERE ts_ms >= ? "
                    "GROUP BY symbol) m ON c.id = m.id ORDER BY c.score DESC, c.id DESC", (since,))
     preds = _scan_predictions(j, since)
     out = [_candidate(r, preds.get(r["symbol"]), now_ms) for r in rows]
     tradable, vetoed = [c for c in out if c["tradable"]], [c for c in out if not c["tradable"]]
-    seen = j._rows("SELECT DISTINCT symbol FROM candidates WHERE ts_ms >= ? ORDER BY symbol",
-                   (now_ms - SEEN_DAYS * 24 * HOUR_MS,))
     return {"hours": hours, "as_of": max((r["ts"] for r in rows), default=None), "scored": len(out),
             "n_tradable": len(tradable), "n_vetoed": len(vetoed), "tradable": tradable[:limit],
             "vetoed": vetoed[:limit], "watchlist": coin_memory.watching(j.db, now_ms),
-            "symbols": [r["symbol"] for r in seen]}
+            "symbols": _universe(j, now_ms)}
 
 
-def _standing(trade: Any, entries: list, watch: Any, latest: dict[str, Any] | None, hours: float) -> dict[str, str]:
+def _quiet(market: dict[str, Any] | None, min_volume: float | None) -> str:
+    """Why a listed coin is not in the scan now."""
+    vol = (market or {}).get("quote_volume_24h")
+    if vol is not None and min_volume and vol < min_volume:
+        return f"24h volume ${vol / 1e6:.1f}M is under the ${min_volume / 1e6:.0f}M floor: too thin to trade"
+    return "it has not moved enough to reach the scan (the scan scores the movers and the coins that trip a trigger)"
+
+
+def _standing(trade: Any, entries: list, watch: Any, latest: dict[str, Any] | None, hours: float,
+              market: dict[str, Any] | None, min_volume: float | None) -> dict[str, str]:
     """Where the coin stands with the desk, most binding first, and why in one line."""
     if trade:
         return {"state": "position", "why": f"open short, trade #{trade['id']} ({trade.get('setup') or 'no setup'})"}
@@ -92,14 +120,18 @@ def _standing(trade: Any, entries: list, watch: Any, latest: dict[str, Any] | No
     if watch:
         return {"state": "watchlist", "why": watch.get("reason") or "on the watchlist"}
     if latest is not None:
-        return {"state": "stale", "why": f"last scored {latest['age_s'] // 3600} h ago: it has not reached the scan since"}
-    return {"state": "unseen", "why": "never scored: the scan only scores coins that move or trip a trigger"}
+        return {"state": "stale", "why": f"last scored {latest['age_s'] // 3600} h ago: " + _quiet(market, min_volume)}
+    if market is not None:
+        return {"state": "unscored", "why": "listed, never scored: " + _quiet(market, min_volume)}
+    return {"state": "unknown", "why": "not a perp the desk has seen: check the ticker"}
 
 
-def coin(j: Any, symbol: str, now_ms: int, hours: float = 6.0) -> dict[str, Any]:
+def coin(j: Any, symbol: str, now_ms: int, hours: float = 6.0, min_volume: float | None = None) -> dict[str, Any]:
     """One coin's standing with the desk: an open short, resting entries, the watchlist, its last scan (with why it
-    was tradable or vetoed), its scan history and labelled outcomes, the session's current read and our past trades."""
+    was tradable or vetoed), its scan history and labelled outcomes, the session's current read and our past trades.
+    A coin outside the scan says why: too thin (under min_volume, the effective 24h volume floor), quiet, or unknown."""
     sym = to_symbol(symbol)
+    market = _market(j, sym, now_ms)
     trade = j.active_trade(sym)
     entries = _lazy(j, f"SELECT id, group_id, status, limit_price, stop_price, setup, expires_ms FROM entries WHERE "
                       f"symbol=? AND mode=? AND {ON_BOOK} ORDER BY id", (sym, j.mode))
@@ -116,7 +148,8 @@ def coin(j: Any, symbol: str, now_ms: int, hours: float = 6.0) -> dict[str, Any]
     except sqlite3.OperationalError:   # no coin-memory tables yet
         read = None
     return {
-        "symbol": sym, "standing": _standing(trade, entries, watch, latest, hours),
+        "symbol": sym, "standing": _standing(trade, entries, watch, latest, hours, market, min_volume),
+        "market": market,
         "trade": {k: trade.get(k) for k in ("id", "status", "setup", "entry_price", "stop_price", "opened_at",
                                             "conviction", "thesis")} if trade else None,
         "entries": entries, "watch": watch, "latest": latest,

@@ -171,3 +171,5 @@ table.params tr.over td:nth-child(2) { font-weight: 700; color: var(--accent); }
   #trades-setups th, #trades-setups td { padding: 7px 4px; }
   .confirm-row { flex-direction: column; }
 }
+.card.empty.error { color: var(--neg); overflow-wrap: anywhere; }
+.banner .notice-body p { overflow-wrap: anywhere; }

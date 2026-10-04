@@ -79,6 +79,7 @@ export interface Scan {
 export interface CoinView {
   symbol: string; standing: { state: string; why: string }
   trade: Dict | null; entries: Dict[]; watch: Watch | null; latest: Candidate | null
+  market: { ts: string; price: number | null; funding_rate: number | null; quote_volume_24h: number | null } | null
   history: { ts: string; score: number; tradable: boolean; price: number; vetoes: number }[]
   outcomes: { rows: number; avg_short_ret_24h: number; hit_rate: number } | null
   read: { ts: string; read: string; bias: string; levels: Json; invalidation: number | null; expires_ms: number } | null

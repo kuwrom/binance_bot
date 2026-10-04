@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     labelled_at TEXT, label_v INTEGER, label_tries INTEGER, label_error TEXT, label_retry_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cand_unlabelled ON candidates (labelled_at, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_cand_symbol ON candidates (symbol, id);   -- one coin's scans (web coin page)
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY, ts TEXT NOT NULL, ts_ms INTEGER NOT NULL, source TEXT NOT NULL, ref_id INTEGER,
     symbol TEXT NOT NULL, entry REAL NOT NULL, stop REAL, target REAL, hours REAL NOT NULL, kind TEXT NOT NULL,
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     outcome TEXT, mfe_r REAL, mae_r REAL, labelled_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pred_unlabelled ON predictions (labelled_at, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_pred_symbol ON predictions (symbol, source, id);
+CREATE INDEX IF NOT EXISTS idx_pred_ref ON predictions (ref_id, source);   -- an entry's fill / target odds
 """
 # Label method of a candidate's outcome. NULL = legacy (1h candles from the scan's floored hour, so the first bar
 # included price action from before the scan); 2 = 5m bars opening at/after the scan time. Older versions are

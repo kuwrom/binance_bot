@@ -12,6 +12,8 @@
 @media (max-width: 480px) {   /* a phone drops the reward column: the EV already carries it */
   .odds-table th:nth-child(4), .odds-table td:nth-child(4) { display: none; }
   .odds-table th, .odds-table td { padding: 5px 4px; }
+  .size-table th:nth-child(5), .size-table td:nth-child(5) { display: none; }   /* the read lists max leverage */
+  .size-table th, .size-table td { padding: 7px 4px; }
 }
 .chip.bad { background: var(--bad-bg); color: var(--neg); }
 .chip.warn { background: var(--warn-bg); color: var(--warn-text); }
@@ -56,3 +58,6 @@ button.cand:hover strong { color: var(--accent); }
 .signals.veto { color: var(--neg); }
 @media (min-width: 980px) { .coin { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
   .coin-head, .coin > details, .coin > p { grid-column: 1 / -1; } }
+.odds-head .refresh { padding: 0 0 0 8px; font-size: 12px; }
+.hero-value.small { font-size: 2rem; margin: 0; }
+.hero-value.small .muted { font-size: 14px; font-weight: 400; letter-spacing: 0; }
