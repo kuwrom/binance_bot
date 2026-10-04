@@ -168,6 +168,7 @@ class Settings:
     gateway: bool = False
     gateway_guardian: bool = False
     invalid: tuple[str, ...] = ()   # settings that fell back to their default (the guardian alerts config_invalid)
+    guardian_market: bool = True   # SHORTBOT_GUARDIAN_MARKET=0: this guardian runs only its account's jobs (DESKS.md)
 
     @property
     def is_live(self) -> bool:
@@ -193,6 +194,7 @@ class Settings:
             bounds=ResearchBounds.from_env(),
             allow_ai_params_live=os.getenv("AI_PARAMS_IN_LIVE", "false").lower() == "true",
             gateway=sessions, gateway_guardian=guardian, invalid=(bad,) if bad else (),
+            guardian_market=os.getenv("SHORTBOT_GUARDIAN_MARKET", "1").strip().lower() not in ("0", "false", "no", "off"),
         )
 
 

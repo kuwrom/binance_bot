@@ -78,7 +78,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         self._alert = alert
         self.prechecks = prechecks
         self.budget = budget  # dynamic risk budget (risk_budget.py)
-        self.symlocks = SymbolLocks(lock_dir_for(journal.db))
+        self.symlocks = SymbolLocks(lock_dir_for(journal.db, journal.mode))
         self._one_way_ok = False
 
     def account_lock(self, action: str = "", wait_s: float | None = None):

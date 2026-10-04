@@ -111,13 +111,15 @@ _MEM_ROOT: str | None = None
 _RO_WARNED = False
 
 
-def lock_dir_for(db: sqlite3.Connection) -> Path:
+def lock_dir_for(db: sqlite3.Connection, mode: str = "demo") -> Path:
     """Next to the journal file the processes share (SHORTBOT_DB may be relative to each one's working directory).
+    Live gets its own subdirectory: the two accounts never share a position, so they never wait on each other.
     An in-memory journal (tests) gets a private directory, with real flocks all the same, removed at exit."""
     global _MEM_ROOT
     path = next((r[2] for r in db.execute("PRAGMA database_list").fetchall() if r[1] == "main"), "")
     if path:
-        return Path(path).parent / "locks"
+        root = Path(path).parent / "locks"
+        return root if mode == "demo" else root / mode
     if _MEM_ROOT is None:
         _MEM_ROOT = tempfile.mkdtemp(prefix="shortbot-locks-")
         atexit.register(shutil.rmtree, _MEM_ROOT, True)
