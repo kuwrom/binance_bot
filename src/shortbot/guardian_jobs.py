@@ -110,7 +110,7 @@ class MarketJobs:
             tickers = await self.ex.public.fetch_tickers()
             movers = sorted((t for sym, t in tickers.items() if sym in perps),
                             key=lambda t: -abs(t.get("percentage") or 0))[:SOCIAL_TOP_MOVERS]
-            syms = {t["symbol"] for t in movers} | {t["symbol"] for t in self.j.open_trades()} | \
+            syms = {t["symbol"] for t in movers} | {t["symbol"] for t in self.j.open_trades(all_modes=True)} | \
                 {e["symbol"] for e in self.entries.pending()}
             bases = sorted({x.split("/")[0].removeprefix("1000") for x in syms})
             n = await social_snapshot(self.social_store, bases)
@@ -148,6 +148,13 @@ class MarketJobs:
         procs.forget(self.j, dead)
         for f in findings:
             await self.n.send(f"stale_process:{f['pid']}", f["text"], urgent=True, cooldown_s=procs.ALERT_COOLDOWN_S)
+
+    async def check_market_feed(self) -> None:
+        """A guardian without the market jobs: is the market guardian's feed fresh (market_feed.py)?"""
+        from . import market_feed
+        why = market_feed.problem(self.j)
+        if why:
+            await self.n.send("market_feed_stale", why, urgent=True, cooldown_s=market_feed.STALE_S * 2)
 
     async def check_gateway(self) -> None:
         """Every 30 s (#36 step 4): with SHORTBOT_GATEWAY on, a stale or missing order-gateway heartbeat is alerted:
@@ -227,7 +234,7 @@ class MarketJobs:
         ts = datetime.now(UTC).replace(second=0, microsecond=0).isoformat()
         movers = sorted((t for s, t in tickers.items() if s in perps),
                         key=lambda t: t.get("percentage") or 0, reverse=True)[:20]
-        held = {t["symbol"] for t in self.j.open_trades()}
+        held = {t["symbol"] for t in self.j.open_trades(all_modes=True)}   # market data: both desks' books
         oi: dict[str, float] = {}
         for sym in {t["symbol"] for t in movers} | held:
             try:

@@ -219,8 +219,8 @@ class Journal(ResearchStore, LearningStore):
     def decisions(self, symbol: str | None = None, limit: int = 50, calls: bool = False) -> list[dict[str, Any]]:
         """Newest first. calls=True also returns the audit-only rows (AUDIT_ACTIONS: tool/CLI calls, hook rows)."""
         where, args = ("1=1", ()) if calls else (f"action NOT IN ({','.join('?' * len(AUDIT_ACTIONS))})", AUDIT_ACTIONS)
-        if symbol:
-            where, args = where + " AND symbol=?", (*args, symbol)
+        where, args = where + " AND COALESCE(mode, 'demo')=?" + (" AND symbol=?" if symbol else ""), \
+            (*args, self.mode, *([symbol] if symbol else []))   # this desk's (rows from before #24: demo's)
         return self._rows(f"SELECT * FROM decisions WHERE {where} ORDER BY id DESC LIMIT ?", (*args, limit))
 
     # ------------------------------------------------------------ trades
@@ -385,7 +385,8 @@ class Journal(ResearchStore, LearningStore):
              st["intent_id"]))
 
     def alerts(self, limit: int = 30, since: str | None = None) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM alerts WHERE COALESCE(mode, 'demo') = ?" + (" AND ts > ?" if since else "")  # this desk's
+        from .alerts_view import MINE  # this desk's alerts and the shared market ones
+        sql = f"SELECT * FROM alerts WHERE {MINE}" + (" AND ts > ?" if since else "")
         return self._rows(sql + " ORDER BY id DESC LIMIT ?", (self.mode, *([since] if since else []), limit))
 
     def record_metrics(self, rows: list[tuple]) -> None:

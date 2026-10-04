@@ -108,3 +108,46 @@ def test_per_desk_kv_never_leaks(tmp_path):
               "guardian_last_run:setup_ladder", alerts_view.ACK_KEY):
         demo.set(demo.mode_key(k), json.dumps(1))
         assert live.get(live.mode_key(k)) is None, k
+
+
+def test_both_desks_see_market_alerts_and_only_their_own_account_alerts(tmp_path):
+    demo, live = pair(tmp_path)
+    for kind, actor, sym in (("scan_alert", "guardian:scan", "A/USDT:USDT"), ("binance_new_listing", "guardian", None),
+                             ("stop_near", "guardian:positions", "A/USDT:USDT")):
+        demo.db.execute("INSERT INTO alerts (ts, kind, message, actor, symbol, mode) VALUES "
+                        "('2026-10-04T00:00:00+00:00', ?, 'x', ?, ?, 'demo')", (kind, actor, sym))
+    demo.db.commit()
+    assert {a["kind"] for a in live.alerts()} == {"scan_alert", "binance_new_listing"}
+    assert len(demo.alerts()) == 3
+
+
+async def test_decisions_are_read_per_desk(tmp_path):
+    demo, live = pair(tmp_path)
+    demo.log_decision("skip", "demo only", "A/USDT:USDT")
+    await demo.flush()
+    assert [d["reasoning"] for d in demo.decisions()] == ["demo only"] and live.decisions() == []
+
+
+def test_the_live_guardian_alerts_a_stale_market_feed(tmp_path):
+    from shortbot import market_feed
+    from shortbot.market.market_map import KV_LAST
+    demo, live = pair(tmp_path)
+    assert "never seen" in market_feed.problem(live)
+    demo.set(ks.heartbeat_key(demo), str(time.time() - market_feed.STALE_S - 60))
+    assert "min old" in market_feed.problem(live)
+    demo.set(ks.heartbeat_key(demo), str(time.time()))
+    assert "no market map" in market_feed.problem(live)
+    demo.set(KV_LAST, json.dumps({"ts": time.time(), "pause": []}))
+    assert market_feed.problem(live) is None
+
+
+def test_coin_events_are_new_per_desk(tmp_path):
+    from types import SimpleNamespace
+
+    from shortbot.guardian_coins import CoinJobs
+    demo, live = pair(tmp_path)
+    ev = [{"name": "oi_surge", "detail": "+12%"}, {"name": "btc_impulse", "detail": "quiet"}]
+    d, li = SimpleNamespace(j=demo), SimpleNamespace(j=live)
+    assert [e["name"] for e in CoinJobs._new_events(d, "A/USDT:USDT", ev)] == ["oi_surge"]
+    assert CoinJobs._new_events(d, "A/USDT:USDT", ev) == []   # demo's next pass: seen
+    assert [e["name"] for e in CoinJobs._new_events(li, "A/USDT:USDT", ev)] == ["oi_surge"]   # live: still new

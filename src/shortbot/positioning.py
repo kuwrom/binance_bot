@@ -43,8 +43,8 @@ def _r_initial(trade: dict) -> float:
 
 def adds_done(j, trade: dict) -> int:
     """Adds already made on this trade: its `add` decisions, filled or of unknown outcome (an ambiguous send may have
-    filled, #9); a refused add logs `add_rejected`. Decisions carry no mode: rows are matched by symbol from the
-    trade's opening on, and by the trade id in the snapshot."""
+    filled, #9); a refused add logs `add_rejected`. Rows are matched by symbol from the trade's opening on and by the
+    trade id in the snapshot, which is unique across both desks."""
     rows = j._rows("SELECT snapshot FROM decisions WHERE symbol=? AND action='add' AND ts >= ?",
                    (trade["symbol"], trade.get("opened_at") or ""))
     return sum((json.loads(r["snapshot"] or "{}") or {}).get("trade_id") == trade["id"] for r in rows)

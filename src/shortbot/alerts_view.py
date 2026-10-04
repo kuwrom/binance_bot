@@ -40,7 +40,14 @@ def _rows(j, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
     return [dict(r) for r in j.db.execute(sql, args).fetchall()]
 
 
-MINE = "COALESCE(mode, 'demo') = ?"   # this desk's alerts (rows from before #32 have no mode: demo's)
+# Market-wide jobs: the market guardian runs them for both desks (guardian.MARKET_JOBS), so both sessions see their
+# alerts, and the general listing/delisting heads-up (guardian_jobs._announce: no symbol on a book).
+MARKET_ACTORS = tuple(f"guardian:{j}" for j in (
+    "social", "refresh", "housekeeping", "processes", "metrics", "research", "calendar", "market_map", "sweeps",
+    "supply", "laggard", "long_shadow", "scan", "cadence_shadow", "mtf_views"))
+# this desk's alerts (rows from before #32 have no mode: demo's) and the shared market ones
+MINE = (f"(COALESCE(mode, 'demo') = ? OR actor IN ({', '.join(repr(a) for a in MARKET_ACTORS)}) OR "
+        "(kind IN ('binance_new_listing', 'binance_delisting') AND symbol IS NULL))")
 
 
 def ack_id(j) -> int:

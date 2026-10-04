@@ -19,8 +19,10 @@ waits) or posts bookkeeping (nothing waits); a wait past STALL_ALERT_S is alerte
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import functools
 import logging
+import os
 import signal
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -28,8 +30,10 @@ from typing import Any
 
 from . import audit, procs, symlock, uptime
 from .app import FLUSH_S, close_app, get_app
+from .config import Settings
 from .entries import EntryDesk
 from .gateway_guardian import Link, for_guardian
+from .gateway_wire import secure_dir
 from .guardian_coins import CoinJobs
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
@@ -73,7 +77,8 @@ FAILING = {
 }
 MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600, 240), "refresh": (3600, 240),
            "housekeeping": (86400, 240), "processes": (3600, 240), "margin_mode": (300, 240), "gateway": (30, 30),
-           "setup_ladder": (86400, 240), "setup_ladder_stops": (600, 120)}   # #69: re-enable check; stops to Telegram
+           "setup_ladder": (86400, 240), "setup_ladder_stops": (600, 120),
+           "market_feed": (300, 30)}   # only without the market jobs: is the market guardian's feed fresh?   # #69: re-enable check; stops to Telegram
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600),
             "long_shadow": (900, 900)}
@@ -150,12 +155,13 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "ladder": self.ladder_shadow, "laggard": self.laggard_study, "long_shadow": self.long_shadow,
                "scan": self.tiered_scan, "cadence_shadow": self.cadence_shadow, "mtf_views": self.mtf_views,
                "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops,
-               "coin_memory": self.coin_memory}
+               "coin_memory": self.coin_memory, "market_feed": self.check_market_feed}
 
         market = self.app.settings.guardian_market
 
         def lane(name: str, table: dict, **kw) -> Lane:
-            jobs = [Job(k, fns[k], *v) for k, v in table.items() if market or k not in MARKET_JOBS]
+            jobs = [Job(k, fns[k], *v) for k, v in table.items()
+                    if (k not in MARKET_JOBS or market) and (k != "market_feed" or not market)]
             return Lane(name, jobs, self.n, self.ex, self.j, TICK_S, **kw)
         lanes = {"protective": lane("protective", PROTECTIVE, escalate_after=ESCALATE_AFTER_FAILS,
                                     escalate_note=FAILING),
@@ -267,7 +273,26 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
             await store.w.drain(FLUSH_S)
 
 
+def hold_desk(settings: Any) -> int | None:
+    """One guardian per desk (docs/DESKS.md): a second one for the same mode (a demo guardian started with
+    SHORTBOT_MODE=live in .env, say) would race the first over its stops. Held for the process's life; an in-memory
+    journal (tests) has no desk to hold."""
+    if str(settings.db_path) == ":memory:":
+        return None
+    run = Path(settings.db_path).parent / "run"
+    secure_dir(run)
+    fd = os.open(run / f"guardian-{settings.mode}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise SystemExit(f"another guardian already runs the {settings.mode} desk ({run}/guardian-{settings.mode}"
+                         ".lock is held): one per mode") from None
+    return fd
+
+
 async def _main() -> None:
+    hold_desk(Settings.from_env())
     main_task = asyncio.current_task()
     if main_task:   # `kill` / `docker stop` (SIGTERM) cancel the guardian, so its shutdown runs (#80)
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, main_task.cancel)

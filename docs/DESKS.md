@@ -13,9 +13,18 @@ One checkout (`~/binance_bot`), one `.env`, one journal, two desks running side 
 | kill switch | its own | its own (`shortbot-admin --mode live`) |
 | code | changes it: branch, prove, merge | never changes it |
 
-Per desk in the journal: trades, entries, intents, target orders, alerts and their acknowledgement, alert cooldowns,
-the kill switch, the guardian heartbeat, equity peak and marks, governor, setup ladders, warm-ups, symbol locks.
-Shared: learnings, the registry, scans, coin memory, market data, research.
+Per desk in the journal: trades, entries, intents, decisions, target orders, alerts and their acknowledgement, alert
+cooldowns, the kill switch, the guardian heartbeat, equity peak and marks, governor, setup ladders, warm-ups, coin
+events seen, symbol locks. Shared: learnings, the registry, scans, coin memory states, market data, research, and the
+market jobs' alerts (scan, processes, social, listing heads-ups), which both sessions see.
+
+**Live depends on the demo guardian.** It runs the market jobs for both desks: the market map and its pause veto,
+scans, liquidations, streams, calendar. The live guardian protects live positions on its own, but while `guardian` is
+down live's market-pause veto reads nothing; it alerts `market_feed_stale` (urgent). Don't stop the demo stack while
+live trades. One guardian per desk: a second one for the same mode refuses to start (`data/run/guardian-<mode>.lock`).
+
+**The web console is demo's** (alerts, kill switch, positions). Follow live through its session, Telegram (`[live]`)
+and `shortbot-admin --mode live status`.
 
 ## The demo desk
 Everything in CLAUDE.md "You are in control". Code changes go on a branch in a worktree and are merged only once

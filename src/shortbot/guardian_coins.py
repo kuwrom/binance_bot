@@ -8,6 +8,7 @@ Alerts never exit a trade:
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -32,7 +33,7 @@ class CoinJobs:
     async def coin_memory(self) -> None:
         r = await coin_pass.refresh(self.ex, self.j, self.entries, book_only=not self.app.settings.guardian_market)
         for sym, st in r["coins"].items():
-            new = [e for e in st.get("events") or () if e.get("new") and e["name"] not in QUIET_EVENTS]
+            new = self._new_events(sym, st.get("events") or [])
             if new:
                 await self.n.send("coin_event", "; ".join(f"{e['name']}: {e['detail']}" for e in new)
                                   + ". Re-read the coin and rewrite its read (update_coin_read) if this changes it.",
@@ -41,6 +42,19 @@ class CoinJobs:
             if b and b["score"] >= BREAK_REAL:
                 await self.n.send("break_watch", break_text(b), sym, urgent=True, cooldown_s=BREAK_WATCH_COOLDOWN_S)
         log.info("coin memory: %d coins, %d failed, %d reads scored", len(r["coins"]), len(r["errors"]), r["scored"])
+
+    def _new_events(self, sym: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Events this desk hasn't seen on its previous pass. Per desk (Journal.mode_key): coin_state is shared, so its
+        `new` flag says only whether the last pass of either guardian saw it (docs/DESKS.md)."""
+        key = self.j.mode_key(f"coin_events_seen:{sym}")
+        try:
+            seen = set(json.loads(self.j.get(key) or "[]"))
+        except ValueError:
+            seen = set()
+        names = sorted({e["name"] for e in events})
+        if names != sorted(seen):
+            self.j.mark(key, json.dumps(names))
+        return [e for e in events if e["name"] not in seen and e["name"] not in QUIET_EVENTS]
 
 
 def break_text(b: dict[str, Any]) -> str:

@@ -58,9 +58,10 @@ class MarginChecks:
             resp = await self.ex.require_trade().fapiPrivateGetAdlQuantile({})
         except Exception as e:  # noqa: BLE001 - each short's watch result carries it
             return {}, [], f"adl: adlQuantile read failed: {type(e).__name__}: {e}"
-        if resp and self.j.get(ADL_SAMPLE_KEY) is None:   # the live shape, once (unverified on demo)
+        key = self.j.mode_key(ADL_SAMPLE_KEY)   # per desk: the live shape, once (unverified on demo)
+        if resp and self.j.get(key) is None:
             raw = json.dumps(resp, default=str)[:4000]
-            self.j.mark(ADL_SAMPLE_KEY, raw)
+            self.j.mark(key, raw)
             log.info("adlQuantile first non-empty answer: %s", raw)
         got, bad = margin.parse_adl(resp)
         if bad:

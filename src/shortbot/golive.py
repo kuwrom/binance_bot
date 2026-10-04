@@ -70,9 +70,10 @@ NEAR_MISSES = ("stop_restored", "stop_failed", "forced_close", "bridge_left", "b
 OWNER_STEPS = (
     "This report only reads. Only the owner edits .env or switches to live: deploy/DEPLOY.md §6.",
     "1. Create the live key (DEPLOY §2); add BINANCE_LIVE_API_KEY and BINANCE_LIVE_API_SECRET to .env.",
-    "2. Set SHORTBOT_MODE=live and LIVE_CONFIRM=I_ACCEPT_REAL_MONEY_RISK.",
-    "3. Keep the limits small: MAX_POSITION_NOTIONAL, MAX_TOTAL_NOTIONAL, RISK_PER_TRADE_PCT.",
-    "4. `docker compose up -d` (restarts the guardian), then restart Claude Code.",
+    "2. Add LIVE_CONFIRM=I_ACCEPT_REAL_MONEY_RISK and COMPOSE_PROFILES=live; keep SHORTBOT_MODE=demo (live runs "
+    "next to demo: docs/DESKS.md).",
+    "3. Keep the .env baseline limits small: MAX_POSITION_NOTIONAL, MAX_TOTAL_NOTIONAL, RISK_PER_TRADE_PCT.",
+    "4. `docker compose up -d` starts guardian-live and gateway-live; the live session is `SHORTBOT_MODE=live claude`.",
     f"Start at minimum size: the first {LIVE_PROBATION_N} live trades are probation (`shortbot golive` in live mode "
     "compares their fills with the model and with demo).")
 
