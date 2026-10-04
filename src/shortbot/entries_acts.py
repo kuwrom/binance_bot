@@ -139,11 +139,13 @@ async def withdraw_order(desk: EntryDesk, entry_id: int, order_id: str) -> str:
 
 
 @handler("rollback_split")
-async def rollback_split(desk: EntryDesk, entry_id: int, tranche: str) -> None:
-    """A dead call's split (row `entry_id` was placing past GRACE_S): one unit, so its acked, never-pinned legs go."""
+async def rollback_split(desk: EntryDesk, entry_id: int, tranche: str, reason: str | None = None) -> None:
+    """A dead call's split (row `entry_id` was placing past GRACE_S, or its legs rest unpinned after the call died:
+    entry_intents._dead_splits, #86): one unit, so its acked, never-pinned legs go."""
     legs = desk._rows("tranche=? AND status='pending'", (tranche,))
     async with desk.tr.symbol_lock(_row(desk, entry_id)["symbol"], f"entry #{entry_id}: roll back a dead call's split"):
-        await desk._rollback([unit(x) for x in legs if "ladder_live" not in x["plan"]])
+        await desk._rollback([unit(x) for x in legs if "ladder_live" not in x["plan"]],
+                             *([reason] if reason else []))
 
 
 @handler("cancel_prearm")

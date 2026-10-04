@@ -19,8 +19,9 @@ Transitions are compare-and-set (EntryDesk._settle: one UPDATE ... WHERE status=
 guardian never overwrite each other, and no write transaction is held across an exchange call. The sends are intents
 of the caller's job (#36 step 2b, entries_acts.py: rollback_split, withdraw_order, cancel_prearm; orphans.py): this
 module decides from reads and journals what they answer.
-Known gap (accepted): a propose call that dies after every split leg is acked but before tranches.finalize leaves
-the legs resting, unpinned; only a leg still 'placing' gets its split rolled back.
+- a split entry's legs left pending but never pinned (tranches.finalize) by a propose call that died after their
+  acks (its intent, found by a leg's client id, no longer open; GRACE_S after the send): rolled back as one unit, as
+  a dead 'placing' leg's split is (#86; a leg that filled meanwhile is kept and protected)
 """
 
 from __future__ import annotations
@@ -106,7 +107,7 @@ async def reconcile(desk) -> list[dict[str, Any]]:
             continue
         if ev:
             events.append(ev)
-    for step in (_resolve_prearms, _sweep, orphans.sweep):
+    for step in (_resolve_prearms, _dead_splits, _sweep, orphans.sweep):
         try:
             events += await step(desk)
         except Exception as e:  # noqa: BLE001 - retried next tick (reported unless transient)
@@ -197,6 +198,24 @@ async def _resolve_prearms(desk) -> list[dict[str, Any]]:
                     continue
             await desk._update(r["id"], prearm_id=o["id"])
             events.append({"entry_id": r["id"], "event": "prearm_resolved", "cancelled": r["status"] != "pending"})
+    return events
+
+
+async def _dead_splits(desk) -> list[dict[str, Any]]:
+    """Pending split legs never pinned, whose propose call is known dead: its intent (the one that linked the leg's
+    client id) is no longer open. A call outside any intent is left alone: nothing tells whether it still runs."""
+    events: list[dict[str, Any]] = []
+    for r in desk._rows("status='pending' AND tranche IS NOT NULL AND client_id IS NOT NULL"):
+        if "ladder_live" in r["plan"] or _age_s(r) < GRACE_S or any(e["tranche"] == r["tranche"] for e in events):
+            continue
+        owner = desk.j.db.execute("SELECT i.id, i.status FROM intent_orders o JOIN intents i ON i.id = o.intent_id"
+                                  " WHERE o.client_id=?", (r["client_id"],)).fetchone()
+        if owner is None or owner["status"] in ("received", "running"):
+            continue
+        why = f"split entry rolled back: its call died before its legs were placed and pinned (intent {owner['id']})"
+        await desk.act("rollback_split", r, tranche=r["tranche"], reason=why)
+        await desk.tr.alert("entry_intent", f"tranche {r['tranche']} ({r['symbol']}): {why}", r["symbol"], False)
+        events.append({"entry_id": r["id"], "event": "split_rolled_back", "tranche": r["tranche"]})
     return events
 
 

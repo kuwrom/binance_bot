@@ -292,14 +292,16 @@ class EntryPlacement:
             pass   # the row keeps prearm_cid: entry_intents finds the stop by it
         return (o or {}).get("id")
 
-    async def _rollback(self, got: list[dict[str, Any]]) -> None:
-        """Undo a split entry's placed legs after a later leg failed. Cancel each limit FIRST: only a leg cancelled
-        unfilled loses its pre-armed stop. A leg that (partly) filled keeps its stop and stays pending, pinned to its
-        own size, so the poll adopts and protects it (MOVR 2026-10-01: a stripped stop left a naked short)."""
+    async def _rollback(self, got: list[dict[str, Any]],
+                        reason: str = "split entry rejected: sibling leg failed") -> None:
+        """Undo a split entry's placed legs after a later leg failed (or its call died). Cancel each limit FIRST: only
+        a leg cancelled unfilled loses its pre-armed stop. A leg that (partly) filled keeps its stop and stays pending,
+        pinned to its own size, so the poll adopts and protects it (MOVR 2026-10-01: a stripped stop left a naked
+        short)."""
         kept = []
         for x in got:
             row = self._rows("id=?", (x["entry_id"],))[0]
-            if await self._cancel_entry(row, "cancelled", "split entry rejected: sibling leg failed") != "unfilled":
+            if await self._cancel_entry(row, "cancelled", reason) != "unfilled":
                 kept.append(x)   # (partly) filled, or the cancel failed: keeps its stop, the poll reconciles
         if kept:
             from . import tranches
