@@ -73,6 +73,12 @@ def gap(j: Journal, start: datetime, secs: float, tag: str | None = None) -> Non
     j.db.commit()
 
 
+def mark(j: Journal, at: datetime, equity: float, unrealized: float = 0.0) -> None:
+    """The day's equity mark (equity_marks.py): the first equity the guardian saw that UTC day."""
+    j.set(j.mode_key(f"eq_mark:day:{at.date().isoformat()}"), json.dumps({"equity": equity, "ts": ms(at),
+                                                                         "unrealized": unrealized}))
+
+
 def plumbing(j: Journal, age_days: float = 2.0, skip: tuple[str, ...] = ()) -> None:
     at = NOW - timedelta(days=age_days)
     for name in drill_log.NAMES:
@@ -107,17 +113,17 @@ def desk(monkeypatch: Any = None, entry_div: int = 2, entry: tuple[str, float] =
     j = Journal(path)
     j.set(j.mode_key(uptime.SINCE_KEY), SINCE)
     j.set(ks.HEARTBEAT_KEY, str(NOW.timestamp() - 30))
-    eq = 1000.0
-    marks: dict[str, float] = {"2026-10-03": eq}
+    closes: list[tuple[datetime, float]] = []
     for i in range(n):
         opened = DAY0 + timedelta(days=i // entry_div, hours=i % 2)
         closed = DAY0 + timedelta(days=i // 2, hours=6 + i % 2)
         r = CYCLE[i % len(CYCLE)]
         trade(j, r, opened, closed, f"C{i % COINS}/USDT:USDT", entry=entry, exit_bps=exit_bps, fees=fees)
-        eq += r * 5
-        marks.setdefault((closed + timedelta(days=1)).date().isoformat(), eq)
-    for day, e in marks.items():
-        j.set(j.mode_key(f"eq_mark:day:{day}"), json.dumps({"equity": e, "ts": 0}))
+        closes.append((closed, r * 5))
+    day = datetime.fromisoformat(SINCE)
+    while day <= max(c for c, _ in closes) + timedelta(days=1):   # each day's first equity, a minute after 00:00
+        mark(j, day + timedelta(minutes=1), 1000.0 + sum(p for c, p in closes if c < day))
+        day += timedelta(days=1)
     forward(j, adj, monkeypatch)
     plumbing(j)
     alert(j, "stop_restored", DAY0 + timedelta(days=3), "C1/USDT:USDT")    # a near-miss: listed, not gated

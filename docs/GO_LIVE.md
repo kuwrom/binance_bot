@@ -2,7 +2,7 @@
 
 `.venv/bin/shortbot golive --text` (MCP `golive_report`, web console Research) answers **READY** or **NOT READY** from the demo journal, and names every blocker with its evidence. It only reads: switching to live is the owner's, in `.env` (deploy/DEPLOY.md §6). The session brief shows the same verdict on one line, `go-live: NOT READY — <n> blockers: …`, from a light check that skips the drawdown bootstrap and uses its floor instead, so it is never looser than the full report.
 
-Code: `golive.py` (the criteria), `golive_view.py` (plumbing, text, brief line, live probation).
+Code: `golive.py` (the criteria), `golive_equity.py` (the equity drawdown), `golive_view.py` (plumbing, text, brief line, live probation).
 
 ## Runbook
 1. **Plumbing, once a month** (every result counts for 30 days; deploy/DEPLOY.md §7a has the details):
@@ -31,11 +31,21 @@ Each criterion reports `ok`, `value`, `threshold`, `source`, `summary` and `deta
 | expectancy | lower 95% bound of mean R > 0, on the worse of demo R and mainnet-repriced R | two-way clustered se, t(min(days, coins) − 1). Repricing: each trade's R plus its fills' `excess_bps` (fill_report, #35) × notional / risk | Cameron, Gelbach & Miller 2011; the demo venue is not mainnet, so the worse of the two counts |
 | stress | mean R > 0 at 1.5× fees and 2× slippage | each trade at the worse of demo and mainnet R, minus 0.5× its fees and one more model slippage charge | `backtest/run.py` STRESS; docs/BACKTEST.md: SURVIVES needs stress R > 0 |
 | drawdown | each setup's max drawdown of cumulative R ≤ its ladder halve level | `backtest/drawdown.max_drawdown` per setup, in close order | `setup_ladder.thresholds`: the 80% quantile of the 100-trade max DD of a +0.10R setup (Bailey & López de Prado 2015; docs/PROPOSALS.md P2) |
-| equity | drawdown of the daily equity marks < `dd_halve_pct` (8%) | kv `eq_mark:day:*` (the first equity of each UTC day, equity_marks.py) | the governor's halve tier (docs/RISK_GOVERNANCE.md, .env baseline) |
+| equity | drawdown of equity < `dd_halve_pct` (8%), net of transfers and demo resets | kv `eq_mark:day:*` (each UTC day's first equity) and `day_low:*` / `day_peak:*` (the day's intraday range); see "Equity" below | the governor's halve tier (docs/RISK_GOVERNANCE.md, .env baseline) |
 | uptime | uptime recorded; no untagged gap, nor one open now, > 600 s | `guardian_gaps` (uptime.py) and the heartbeat's age | `killswitch.STALE_HEARTBEAT_S`: past it the watchdog trips HALTED. Drill-tagged gaps are planned |
 | incidents | 0 alerts of NAKED_POSITION, stop_missing, stop_restore_failed, untracked_position, unexpected_long, position_flip | the alerts table in the window. Near-misses (stop_restored, stop_failed, forced_close, bridge_*, stop_left, widen_undone, close_incomplete/unknown, fill_unresolved, orphan_stop_*) are listed, not gated | a position without its stop, or one the desk didn't open (guardian_positions.py, stops.py) |
 | slippage | `fill_report.calibrate(since=window start)` ok: ≥ 30 trades opened in the window with market or stop fills over ≥ 20 days, k > 0 | k refit from the window trades' own fills vs the model's 20 bp | fill_report (#35) |
 | plumbing | each drill's latest result is a pass; each probe matches its fake (or is explained); the backup drill passed; the gateway soak is clean. Each within 30 days | `drill_result` / `probe_result` / `probe_explained` decisions, kv `backup_drill_last_ok`, kv `gateway_heartbeat`, the intents table | plan-46 §3b; DEPLOY §7a; docs/GATEWAY.md D6 (no breakglass or unknown rows left unexplained) |
+
+Equity details (`golive_equity.py`):
+- **Series.** This is the finest series the journal keeps. Each UTC day has its first equity mark (`eq_mark:day:<date>`: equity, its ms and the unrealized P&L in it; equity_marks.py, #16). Each day also has the lowest and highest day P&L the guardian saw, once a minute (`day_low` from #87, `day_peak`). Day P&L is net of TRANSFER income, so mark + low and mark + high are the day's intraday low and high. `equity_peak` and `kill_switch_obs:*` (#63) hold only their latest value, so they are not a series.
+- **Order within a day.** It is unknown whether the low or the high came first. The drawdown into the low is measured from the peak before that day, and none is invented from a high down to an earlier low.
+- **Transfers and demo resets.** Between two consecutive marks, equity should move by the P&L booked in between plus the change in unrealized P&L.
+  - Booked P&L comes from this mode's trades, drills included. Each exit fill's gross counts when it filled (`fill_refs`), and the rest of the trade's net pnl (fees, funding) counts at its close.
+  - A residual past `equity_marks.tolerance` (max(1 USDT, 0.1% of equity)) is a **jump**: a TRANSFER or another non-trading income type, a demo balance reset (no income row), or P&L the journal doesn't hold (a position the desk didn't open, which the incidents criterion catches as `untracked_position`).
+  - Each jump moves the peak by its size, as `equity_marks.adjusted_peak` does for a transfer, so only trading P&L counts as drawdown. Jumps are listed in `detail.jumps`, and that day's intraday range is not used.
+  - If either mark of a pair has no unrealized P&L stored, the pair can't be checked, and its move counts as trading.
+- `detail.marks_only_pct` is the old figure (daily marks only), kept for comparison.
 
 Plumbing details:
 - **Drills:** kill-switch, restart, backup, backup-offbox (attested). `awaiting_clear` is not a pass.

@@ -22,6 +22,7 @@
   - An equity move the income history doesn't explain yet is `pending` for 2 min, and the income view is used meanwhile.
   - A late or unreadable mark falls back to the old, worse definition: realized since the period start + all unrealized.
   - One income read per `account()` call. If it fails, there is no figure, and nothing is tripped or armed on a guess. Opening paths (`open_short`, limit entries, amends, adds) refuse.
+  - Each guardian pass also keeps the day's highest and lowest day P&L (kv `day_peak:<date>`, `day_low:<date>`). The peak arms the give-back stop; both give the go-live gate the day's intraday equity range (docs/GO_LIVE.md, `golive_equity.py`).
   - In the guardian the pass still succeeds, because its stops were checked: the heartbeat stays fresh, so an income outage never becomes a stale-heartbeat HALTED. It alerts `day_pnl_unverified`.
 - **Daily cap** = equity × base% × f, with f = min(1, BTC vol_target/vol_now) × regime factor (favorable 1, caution 0.75, hostile or unknown 0.5), floored at 0.5. Hitting it means no new entries until 00:00 UTC. The research base is 1.5%; ours is `daily_loss_limit_pct`.
 - **Weekly cap:** 4%, then halt until Monday and review.

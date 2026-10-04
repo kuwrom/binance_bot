@@ -199,6 +199,19 @@ def _raise_day_peak(journal: Journal, key: str, day_pnl: float) -> None:
     journal.set(key, str(max(float(journal.get(key) or 0.0), day_pnl)))
 
 
+def track_day_low(journal: Journal, day_pnl: float, now: datetime | None = None) -> float:
+    """Lowest day P&L seen today (0 = the day's mark): with track_day_peak, the day's intraday equity range, which the
+    go-live gate's drawdown reads (golive_equity.py). Merged like the peak: the stored value only ever goes down."""
+    key = journal.mode_key(f"day_low:{(now or datetime.now(UTC)).date().isoformat()}")
+    low = min(float(journal.get(key) or 0.0), float(journal.pending(key) or 0.0), day_pnl)
+    journal.merge(key, str(low), _lower_day_low, key, low)
+    return low
+
+
+def _lower_day_low(journal: Journal, key: str, day_pnl: float) -> None:
+    journal.set(key, str(min(float(journal.get(key) or 0.0), day_pnl)))
+
+
 def quarter_start(now: datetime) -> str:
     return now.replace(month=3 * ((now.month - 1) // 3) + 1, day=1, hour=0, minute=0, second=0,
                        microsecond=0).isoformat()

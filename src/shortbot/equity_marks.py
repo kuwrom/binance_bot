@@ -70,6 +70,11 @@ def transfers(rows: list[dict[str, Any]], since_ms: int, until_ms: int | None = 
 PENDING_MS = 120_000     # how long an unexplained equity move is treated as income not yet reported
 
 
+def tolerance(equity: float) -> float:
+    """The equity move income may leave unexplained before it counts as a disagreement (rounding, rebates)."""
+    return max(1.0, 0.001 * abs(equity))
+
+
 def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_day: float, old_week: float,
                now: datetime | None = None, unrealized: float | None = None) -> dict[str, Any]:
     """{'day_pnl', 'week_pnl', 'late': {...}, 'pending': {...}, 'degraded': bool} from the marks.
@@ -98,7 +103,7 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
                 b = min((trading_income(transfer_rows, t0) + du for t0 in (ts, ts // 1000 * 1000)),
                         key=lambda x: abs(pnl - x))
                 pk = journal.mode_key(f"eq_pending:{kind}")
-                if abs(pnl - b) > max(1.0, 0.001 * abs(equity)):
+                if abs(pnl - b) > tolerance(equity):
                     first = int(journal.get(pk) or 0) or now_ms
                     if first == now_ms:
                         journal.mark(pk, str(now_ms))   # its age must grow during a held lock too (#81)

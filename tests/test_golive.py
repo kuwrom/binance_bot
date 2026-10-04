@@ -117,11 +117,24 @@ def test_drawdown_fails_alone_past_the_setup_ladder_halve_level(monkeypatch):
     assert blockers(j, light=True) == ["drawdown"]
 
 
-def test_equity_fails_alone_at_the_governors_halve_tier(monkeypatch):
+def test_equity_fails_alone_at_the_governors_halve_tier_on_an_intraday_low(monkeypatch):
     j = rig.desk(monkeypatch)
-    j.set("eq_mark:day:2026-10-20", json.dumps({"equity": 900.0, "ts": 0}))
+    j.set("day_low:2026-10-20", "-100.0")      # the guardian's lowest day P&L that day: back by the next mark
     c = run(j)["criteria"]["equity"]
     assert blockers(j) == ["equity"] and c["value"] >= 8.0 and c["threshold"].startswith("< 8.0")
+    assert c["detail"]["at"] == "2026-10-20" and c["detail"]["kind"] == "intraday low"
+    assert c["detail"]["marks_only_pct"] == 0.0     # the daily marks alone never saw it
+
+
+def test_a_withdrawal_or_demo_reset_is_netted_not_a_drawdown(monkeypatch):
+    j = rig.desk(monkeypatch)
+    for k, v in j.db.execute("SELECT k, v FROM kv WHERE k >= 'eq_mark:day:2026-10-20' AND k < 'eq_mark:day;'"
+                             ).fetchall():
+        j.set(k, json.dumps({**json.loads(v), "equity": json.loads(v)["equity"] - 500.0}))
+    c = run(j)["criteria"]["equity"]
+    assert c["ok"] and c["value"] < 1.0 and c["detail"]["marks_only_pct"] > 40
+    assert [(x["to"], x["jump"]) for x in c["detail"]["jumps"]] == [("2026-10-20", -500.0)]
+    assert "1 jump netted" in c["summary"]
 
 
 def test_uptime_fails_alone_on_an_untagged_gap_but_not_on_a_drill_one(monkeypatch):
@@ -153,6 +166,17 @@ def test_slippage_fails_alone_when_the_fills_cannot_calibrate_the_model(monkeypa
     assert blockers(j) == ["slippage"]
 
 
+def test_slippage_calibrates_on_the_windows_fills_only(monkeypatch):
+    j = rig.desk(monkeypatch)
+    before = run(j)["criteria"]["slippage"]
+    for i in range(40):   # an older stack's demo fills, before the window: with them k would be <= 0
+        t0 = rig.DAY0 - timedelta(days=30 - i * 0.5)
+        rig.trade(j, 0.5, t0, t0 + timedelta(hours=2), entry=("market", -40.0), exit_bps=-40.0)
+    c = run(j)["criteria"]["slippage"]
+    assert c["ok"] and c["value"] == before["value"] and c["detail"]["n_trades"] == 60
+    assert c["detail"]["since"] == rig.SINCE
+
+
 def test_plumbing_fails_alone_when_a_drill_is_older_than_30_days(monkeypatch):
     j = rig.desk(monkeypatch)
     j.db.execute("DELETE FROM kv WHERE k='backup_drill_last_ok'")
@@ -166,17 +190,6 @@ def test_mainnet_repricing_moves_r_by_the_excess_over_the_model():
     j = Journal(":memory:")
     rig.trade(j, 1.0, rig.DAY0, rig.DAY0 + timedelta(hours=2), entry=("limit", -50.0), exit_bps=0.0)
     rig.trade(j, 1.0, rig.DAY0, rig.DAY0 + timedelta(hours=2), refs=False)
-def test_slippage_calibrates_on_the_windows_fills_only(monkeypatch):
-    j = rig.desk(monkeypatch)
-    before = run(j)["criteria"]["slippage"]
-    for i in range(40):   # an older stack's demo fills, before the window: with them k would be <= 0
-        t0 = rig.DAY0 - timedelta(days=30 - i * 0.5)
-        rig.trade(j, 0.5, t0, t0 + timedelta(hours=2), entry=("market", -40.0), exit_bps=-40.0)
-    c = run(j)["criteria"]["slippage"]
-    assert c["ok"] and c["value"] == before["value"] and c["detail"]["n_trades"] == 60
-    assert c["detail"]["since"] == rig.SINCE
-
-
     a, b = golive.sample(j, "")
     model_exit = 20 / (rig.VOL / 1e6) ** 0.5
     assert a["excess_bps"] == pytest.approx(-50.0 - model_exit, abs=0.02)

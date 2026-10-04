@@ -25,7 +25,7 @@ from .guardian_loop import guarded, send_safe
 from .intents import Intent
 from .journal import Journal
 from .killswitch import ACTIVE, HALTED, REDUCING
-from .risk_budget import track_day_peak
+from .risk_budget import track_day_low, track_day_peak
 from .symlock import SymbolBusy
 
 if TYPE_CHECKING:
@@ -135,6 +135,7 @@ class PositionChecks:
             self.j, self.app.settings, acct["equity"], day_pnl,
             {k: acct[k] for k in ("old_day_pnl", "late", "pending", "degraded")}), self.n)
         await self._daily_loss_alert(day_pnl, hit)
+        track_day_low(self.j, day_pnl)   # after the trip: the day's intraday low, for the go-live gate (#87)
 
     async def _day_pnl_read(self) -> dict | None:
         """trader.account() with fresh positions (a plan close in this pass is in income already); None when it can't

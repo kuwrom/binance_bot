@@ -96,6 +96,14 @@ async def test_a_new_loss_today_trips_every_consumer():
     assert not ev["late"]["day"] and not ev["pending"]["day"] and not ev["degraded"]
 
 
+async def test_each_pass_records_the_days_low_for_the_go_live_gate():
+    g, fake = desk(mark=10_400)                         # 400 lost since 00:00 UTC
+    income(fake, "REALIZED_PNL", -400)
+    await g.check_positions()
+    key = f"day_low:{datetime.now(UTC).date().isoformat()}"
+    assert float(g.j.get(key) or g.j.pending(key) or 0) == -400   # golive_equity.py: the day's intraday low
+
+
 @pytest.mark.parametrize("equity, verdict", [(9_705, (False, ACTIVE, False, False, 0.0)),
                                              (9_700, (True, REDUCING, True, False, 0.0))])
 async def test_all_consumers_share_the_start_of_day_basis_at_the_limit(equity, verdict):

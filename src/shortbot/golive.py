@@ -21,8 +21,8 @@ passes. Every threshold names where it comes from (repo rule: parameters come fr
 - drawdown: each setup's max drawdown of cumulative R <= its setup-ladder halve level (setup_ladder.thresholds: the 80%
   quantile of the 100-trade max DD of a +0.10R setup; a bootstrap from 50 trades). Light mode skips the bootstrap and
   uses its floor (CLAMP[0] x prior), never a looser bound.
-- equity: drawdown of the daily equity marks (equity_marks.py: the first equity of each UTC day) < the governor's
-  halve tier (dd_halve_pct).
+- equity: drawdown of equity < the governor's halve tier (dd_halve_pct), from the finest series the journal keeps (each
+  UTC day's first equity and its intraday low and high), net of transfers and demo resets (golive_equity.py).
 - uptime: uptime recorded (kv uptime_since); no untagged guardian gap, nor one open now, past the session watchdog's
   stale limit. Drill-tagged gaps are planned outages.
 - incidents: zero unprotected-position alerts in the window; near-misses are listed, not gated.
@@ -42,6 +42,7 @@ from typing import Any
 
 from . import cluster_se as C
 from . import fill_report as FR
+from . import golive_equity as GE
 from . import golive_view, uptime
 from . import killswitch as ks
 from . import registry as R
@@ -244,34 +245,19 @@ def drawdown_crit(trades: list[dict[str, Any]], light: bool = False) -> dict[str
                 else "no closed trades in the window", detail)
 
 
-def _day_marks(j: Any, since_day: str) -> list[tuple[str, float]]:
-    pre, tail, out = "eq_mark:day:", j.mode_key(""), []
-    for k, v in j.db.execute("SELECT k, v FROM kv WHERE k >= ? AND k < ?", (pre, pre[:-1] + ";")):
-        day = k[len(pre):]
-        if (tail and not day.endswith(tail)) or (not tail and "@" in day):
-            continue
-        day = day[:len(day) - len(tail)]
-        try:
-            eq = float(json.loads(v)["equity"])
-        except (ValueError, KeyError, TypeError):
-            continue
-        if day >= since_day:
-            out.append((day, eq))
-    return sorted(out)
-
-
 def equity_crit(j: Any, start: str, limits: RiskLimits) -> dict[str, Any]:
-    marks, peak, worst, at = _day_marks(j, start[:10]), 0.0, 0.0, None
-    for day, eq in marks:
-        peak = max(peak, eq)
-        if peak > 0 and (dd := (peak - eq) / peak * 100) > worst:
-            worst, at = dd, day
-    return crit(bool(marks) and worst < limits.dd_halve_pct, round(worst, 2) if marks else None,
-                f"< {limits.dd_halve_pct}% drawdown of the daily equity marks",
-                "the governor's halve tier dd_halve_pct (config.RiskLimits, .env baseline; docs/RISK_GOVERNANCE.md "
-                "'Drawdown from peak'); marks: equity_marks.py",
-                f"max {worst:.2f}% ({at or 'no drawdown'}) over {len(marks)} daily marks" if marks
-                else "no daily equity marks in the window", {"marks": len(marks), "worst_day": at})
+    d = GE.drawdown(j, start)
+    worst, jumps = d["max_dd_pct"], d["jumps"]
+    where = f"{d['at']} {d['kind']}" if d["at"] else "no drawdown"
+    each = ", ".join(f"{x['jump']:+.2f} USDT {x['from']}→{x['to']}" for x in jumps[:3]) + ", …" * (len(jumps) > 3)
+    net = (f"; {len(jumps)} jump{'s' * (len(jumps) != 1)} netted ({each}): a transfer, a demo reset or P&L the "
+           "journal doesn't hold") if jumps else ""
+    return crit(worst is not None and worst < limits.dd_halve_pct, worst,
+                f"< {limits.dd_halve_pct}% drawdown of equity (day marks and intraday range), net of transfers and "
+                "resets", "the governor's halve tier dd_halve_pct (config.RiskLimits, .env baseline; "
+                "docs/RISK_GOVERNANCE.md 'Drawdown from peak'); series and netting: golive_equity.py",
+                f"max {worst:.2f}% ({where}) over {d['marks']} day marks and {d['ranges']} intraday ranges (marks "
+                f"alone {d['marks_only_pct']:.2f}%){net}" if d["marks"] else "no daily equity marks in the window", d)
 
 
 def uptime_crit(j: Any, start: str, now: datetime) -> dict[str, Any]:
