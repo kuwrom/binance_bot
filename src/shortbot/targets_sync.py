@@ -27,7 +27,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, errors, targets
+from . import clientid, errors, intents, targets
 from .steps import floor_amount
 from .symlock import SymbolBusy
 
@@ -182,6 +182,7 @@ async def _place(tr, symbol: str, trade: dict, w: dict) -> None:
             await targets.move(tr.j, row, "unknown",
                                f"send status unknown ({type(e).__name__}): resolved by client id")
             return
+        intents.settle(tr.j, cid, clientid.outcome(cid, o))   # found by its id: no longer in doubt (#86)
     await _landed(tr, row, o)
 
 

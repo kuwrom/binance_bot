@@ -108,3 +108,5 @@ async def test_target(fault, tmp_path, monkeypatch):
     assert close_stops(fake) == [1.05] and bridges(fake) == [] and fake.position == 100
     assert {x["status"] for x in g.j._rows("SELECT status FROM intents")} == {"done"} and resolutions(g.j) == []
     assert fake.fired == [("create_order", "target", fault)]
+    if ran:   # found by its client id in the same pass: its outcome is recorded, none is left in doubt
+        assert intents.unsettled(g.j) == []

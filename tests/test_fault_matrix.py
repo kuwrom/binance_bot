@@ -160,8 +160,8 @@ async def test_stop_swap_bridge(fault, monkeypatch):
     ran = fault in RAN
     assert bool(res["ok"]) is ran, res
     assert bridges(fake) == [] and fake.prearms == {} and fake.position == 100 and len(cids(fake, "bridge")) == 1
-    if ran:   # found by its client id: the swap went on
-        assert close_stops(fake) == [1.02] and row["status"] == "done"
+    if ran:   # found by its client id: the swap went on, the bridge's outcome recorded
+        assert close_stops(fake) == [1.02] and row["status"] == "done" and intents.unsettled(t.j) == []
     else:     # never placed: nothing was cancelled, the old stop stays; a bridge is never sent twice
         assert close_stops(fake) == [1.05] and "bridge stop was not placed" in res["error"]
         assert row["status"] == "failed" and t.j.active_trade(SYM)["stop_price"] == 1.05

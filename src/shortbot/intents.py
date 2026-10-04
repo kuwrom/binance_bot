@@ -291,6 +291,14 @@ def orders(j: Journal, intent_id: str) -> list[dict[str, Any]]:
                                           (intent_id,))]
 
 
+def unsettled(j: Journal) -> list[dict[str, Any]]:
+    """#86's invariant: sends still without an outcome whose intent no longer waits for the resolver (it finished, or
+    was resolved). Empty when every flow records what it found by client id and every doubt makes its intent unknown."""
+    return j._rows("SELECT o.intent_id, o.client_id, o.kind, i.kind AS intent_kind, i.status FROM intent_orders o"
+                   " JOIN intents i ON i.id = o.intent_id WHERE o.outcome IS NULL AND i.status NOT IN"
+                   " ('received', 'running', 'busy', 'unknown', 'interrupted') ORDER BY o.at, o.rowid")
+
+
 # ------------------------------------------------------------ resolution (resolver.py)
 def unresolved(j: Journal) -> list[dict[str, Any]]:
     """This mode's unknown and interrupted intents that sent orders under client ids, oldest first."""

@@ -116,6 +116,16 @@ async def test_a_plan_step_whose_breakeven_swap_fails_after_its_target_close_is_
     assert list(fake.stops.values()) == [1.05]    # the old stop was restored
 
 
+# ------------------------------------------------------------ a send its flow found by client id is settled
+async def test_a_bridge_found_by_its_client_id_after_a_lost_answer_is_settled_placed(monkeypatch):
+    t, fake = trader()
+    assert (await open_default(t))["ok"]
+    fake.price, fake.ack_lost = 0.95, 1           # the bridge rests, its answer is lost: found by its client id
+    res, row = await submit(t, monkeypatch, lambda: t.move_stop(SYM, 1.02, "tighten"))
+    assert res["ok"] and row["status"] == "done" and list(fake.stops.values()) == [1.02]
+    assert outcomes(t.j, row) == [("bridge", "placed"), ("stop", "placed")] and intents.unsettled(t.j) == []
+
+
 # ------------------------------------------------------------ unknown: a send whose outcome stays unknown
 async def test_a_partial_close_whose_answer_and_lookups_are_lost_is_unknown(monkeypatch):
     t, fake = trader()

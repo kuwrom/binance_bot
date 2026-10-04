@@ -282,6 +282,23 @@ def test_an_unknown_intent_is_resolved_once_and_its_orders_outcome_set_once(j):
         j.db.execute("UPDATE intents SET status='partial'")
 
 
+def test_unsettled_lists_a_finished_intents_sends_still_in_doubt_and_nothing_else(j):
+    """#86: an intent that finished (not unknown or interrupted: the resolver's) with a send of no outcome."""
+    rows = {}
+    for st in ("done", "unknown", "running"):
+        it = Intent("t_act", {"symbol": SYM}, SYM)
+        intents.receive(j, it)
+        intents.start(j, it.id)
+        with audit.within(it.id):
+            intents.link(j, f"sb-c{st}-1", SYM)
+            intents.link(j, f"sb-c{st}-2", SYM)
+        intents.record(j, f"sb-c{st}-2", "filled")
+        if st != "running":
+            intents.finish(j, it.id, Result(st, True, {"ok": True}))
+        rows[st] = it.id
+    assert [(r["intent_id"], r["client_id"]) for r in intents.unsettled(j)] == [(rows["done"], "sb-cdone-1")]
+
+
 def test_an_old_journal_gets_the_new_columns_and_triggers(tmp_path):
     db = sqlite3.connect(tmp_path / "old.db")
     db.executescript("""

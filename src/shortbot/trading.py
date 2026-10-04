@@ -285,8 +285,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
                 if unknown:
                     await _sleep(1)
                 if (unknown or doubt) and (found := await self.find_stop(symbol, cid)):
-                    intents.settle(self.j, cid, "placed")
-                    return found
+                    return found   # find_stop recorded it placed
                 if not (unknown or doubt):   # nothing of it ever landed
                     intents.settle(self.j, cid, "rejected")
                 if not unknown or i == tries - 1:
@@ -296,18 +295,23 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
 
     async def find_stop(self, symbol: str, cid: str) -> dict | None:
         """The conditional order sent under `cid`: by its client id (Query Algo Order), else among the open conditional
-        orders (a verified shape; the lookup's not-found answer is not, #55). None when neither shows it."""
+        orders (a verified shape; the lookup's not-found answer is not, #55). None when neither shows it. Found, it
+        reached the book: the running intent records it (#86), so no send it found stays in doubt."""
+        found = None
         try:
             o = await clientid.lookup(self.t, symbol, cid, trigger=True)
-            if o and o.get("clientOrderId") == cid:
-                return o
+            found = o if o and o.get("clientOrderId") == cid else None
         except Exception:  # noqa: BLE001 - the listing may still show it
             pass
-        try:
-            return next((o for o in await self.t.fetch_open_orders(symbol, params={"trigger": True})
-                         if o.get("clientOrderId") == cid), None)
-        except Exception:  # noqa: BLE001 - not seen: the caller decides
-            return None
+        if found is None:
+            try:
+                found = next((o for o in await self.t.fetch_open_orders(symbol, params={"trigger": True})
+                              if o.get("clientOrderId") == cid), None)
+            except Exception:  # noqa: BLE001 - not seen: the caller decides
+                return None
+        if found is not None:
+            intents.settle(self.j, cid, "placed")
+        return found
 
     async def verified_position(self, symbol: str, tries: int = 4) -> dict | None:
         """The symbol's position, read up to `tries` times 0.5 s apart (a fill can lag the position endpoint); None
