@@ -43,9 +43,9 @@ Also available: `lab.ohlcv`, `lab.oi_history`, `lab.funding_history`, `lab.taker
 
 ## Acting on findings
 Settle each change with the data, not by asking the owner which option they prefer: run the study, record it, change it openly, then tell the owner what changed and why. Ask only on a genuine risk-appetite trade-off, with each option quantified. Code changes need tests (`.venv/bin/pytest -q`).
-- **A threshold looks wrong**: open a named experiment with `set_risk_params` (risk limits), or propose a code change to the signal in `signals/*.py` (score points and vetoes).
+- **A threshold looks wrong**: open a named experiment with `set_risk_params` (risk limits), or change the signal in `signals/*.py` yourself (score points and vetoes): tests green, commit, push; record the evidence.
 - **A new signal**: write one `@signal(...)` function in `src/shortbot/signals/` (data via the MarketContext, which adds a getter in `market/hub.py` if a new feed is needed). Its features are logged and reported automatically. Give it points or vetoes only when the data supports it (`research_report.by_feature_tertile`).
 - **A new tape state**: add one `TapeRule` in `src/shortbot/tape.py`.
 - **A new setup**: trade it as `exp_<name>` first. Once the evidence holds, register it in `setups.py` with a detector and default plan, and add a skill in `.claude/skills/<name>/SKILL.md`.
-- **A veto costs more than it saves**: `add_learning` with the numbers, then propose relaxing it. Single trades can bypass it with `veto_override`.
+- **A veto costs more than it saves**: `add_learning` with the numbers, then relax it in the code, openly and with that evidence. Single trades can bypass it with `veto_override`.
 - **Retire** a setup with `status="retired"`. History is kept.

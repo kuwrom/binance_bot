@@ -27,8 +27,10 @@ from .app import close_app
 from .commands import Command, CommandError
 from .redact import install_log_redaction
 
-INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Call start_session first, then follow the
+INSTRUCTIONS = """You run this Binance USDⓈ-M futures research desk. Call start_session first, then follow the
 `trading-session` skill.
+You are in control: trade on your own judgement, and beyond trading query any data, run scripts and studies, change
+and test the code and research the web (CLAUDE.md "You are in control"). Human-only: shortbot-admin, .env, live.
 Flow: journal+learnings -> market_regime -> positions (manage first, per each trade's plan) -> scan_shorts ->
 coin_snapshot on 5-10 -> load the setup's skill -> decide on the evidence -> enter WITH a plan (trigger,
 invalidation, targets, time stop, auto flags) -> tell the human what you did and why.

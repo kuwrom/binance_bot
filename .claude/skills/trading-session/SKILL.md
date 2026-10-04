@@ -6,6 +6,8 @@ when_to_use: User says "run a trading session", "let's trade", "check the market
 
 # Trading session
 
+**You are in control** (CLAUDE.md "You are in control"). Your judgement is the desk's measured edge: declining a high-score signal or closing a trade the engine still rates valid is your call; record why. Beyond this checklist, query any data, run a script or study, or change the app whenever the session needs it. Only the human-only walls are off limits.
+
 The shortbot state was injected at session start: kill switch, stale processes, open positions, entry orders, unacknowledged alerts (urgent first), the learnings rulebook and the learnings relevant now. If you don't see it, run `.venv/bin/shortbot brief`.
 
 ## 0. Start: session, kill switch, health
