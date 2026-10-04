@@ -1,6 +1,6 @@
 """Guardian uptime (#46): when the desk's protection went unverified, as rows a go-live report can read.
 
-- The heartbeat (killswitch.HEARTBEAT_KEY) is stamped by a positions pass that verified every held position (#61).
+- The heartbeat (killswitch.heartbeat_key, per mode) is stamped by a positions pass that verified every held position (#61).
   Guardian._heartbeat hands each stamp here with the one before it: this process's last, or, at its first stamp, the
   previous process's (the kv value it left). A gap over GAP_S (3 positions passes, killswitch.VERIFIED_S) is a row in
   `guardian_gaps` (journal_tables.py) from the last verified stamp to this one, so a guardian that was down, hung, or
@@ -117,12 +117,12 @@ def gaps(j: Any, since: str | None = None) -> list[dict[str, Any]]:
 def summary(j: Any, since: str | None = None, now: float | None = None) -> dict[str, Any]:
     """The gaps from max(since, uptime_since), the longest untagged one, and the gap still open now (the heartbeat's
     age past GAP_S: a guardian down at this moment). covered: uptime_since is set, so rows exist for the window."""
-    from .killswitch import HEARTBEAT_KEY
+    from .killswitch import heartbeat_key
     now = time.time() if now is None else now
     first = uptime_since(j)
     start = max(x for x in (since, first, "") if x is not None) or None
     rows = gaps(j, start)
-    hb = stamp_of(j.get(HEARTBEAT_KEY))
+    hb = stamp_of(j.get(heartbeat_key(j)))
     age = None if hb is None else max(0.0, now - hb)
     untagged = [r["secs"] for r in rows if not r["tag"]]
     return {"since": start, "uptime_since": first, "covered": first is not None, "gaps": rows,

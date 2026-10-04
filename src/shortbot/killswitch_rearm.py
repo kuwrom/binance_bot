@@ -20,7 +20,7 @@ from .journal import Journal
 
 DAILY, DRAWDOWN = "daily_loss", "drawdown"
 LAPSE = {DAILY: "day", DRAWDOWN: "week"}   # the equity_marks period whose end lapses a hold
-# account-level: read and written through journal.mode_key (trading_state itself stays shared across modes)
+# account-level: read and written through journal.mode_key, like trading_state itself (killswitch.state_key)
 KV_OBS = "kill_switch_obs:"                # + condition: the guardian's latest reading
 KV_HOLD = "kill_switch_clearance"
 REARM_MARGIN_PP = 1.0

@@ -21,7 +21,7 @@ def later(minutes=0, days=0):
 
 async def cleared(j, margin=1.0, now=NOW):
     """What shortbot-admin clear does: preview the hold the human confirms, swap the row they saw."""
-    r = await ks.clear(j, SETTINGS, ACTIVE, "human:kibrom (tty)", "reviewed", j.get(ks.KV_KEY),
+    r = await ks.clear(j, SETTINGS, ACTIVE, "human:kibrom (tty)", "reviewed", j.get(ks.state_key(j)),
                        hold=rearm.preview(j, margin, now))
     assert r["ok"] and ks.read(j)["state"] == ACTIVE
     return r
@@ -149,5 +149,5 @@ async def test_readings_and_holds_belong_to_one_account(tmp_path):
     await cleared(live)
     assert ks.status(live)["rearm"]["drawdown"] and ks.status(demo)["rearm"] is None
     assert rearm.preview(demo, 1.0, NOW)["held"] == {}                 # demo never saw live's reading
-    assert (await dd(demo, 13.0, later(1)))["changed"]                # the state row itself is shared
-    assert ks.read(live)["state"] == REDUCING
+    assert (await dd(demo, 13.0, later(1)))["changed"]
+    assert ks.read(demo)["state"] == REDUCING and ks.read(live)["state"] == ACTIVE   # one state row per account

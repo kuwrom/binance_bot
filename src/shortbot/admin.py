@@ -118,7 +118,7 @@ async def run(args: argparse.Namespace, settings: Settings | None = None, journa
     s = settings or Settings.from_env()
     j = journal or Journal(s.db_path, s.mode)
     if args.cmd == "status":
-        return ks.status(j)
+        return {"mode": s.mode, **ks.status(j)}
     if args.cmd == "equity-peak":
         return await reset_peak(j, s, args.reason, equity_fn)
     if args.cmd == "ladder-status":
@@ -127,7 +127,7 @@ async def run(args: argparse.Namespace, settings: Settings | None = None, journa
         return await ladder_clear(j, s, args.setup, args.reason)
     if args.cmd == "ladder-reset":
         return await ladder_reset(j, s, args.setup, args.reason)
-    shown = j.get(ks.KV_KEY)   # the exact row the human confirms; the clear swaps only that row
+    shown = j.get(ks.state_key(j))   # the exact row the human confirms; the clear swaps only that row
     st = ks.read(j)
     if ks.LEVEL[args.to] >= st["level"]:
         return {"ok": False, "error": f"the desk is {st['state']}: {args.to} is not a loosening (to trip it, use "
@@ -136,12 +136,12 @@ async def run(args: argparse.Namespace, settings: Settings | None = None, journa
         hold = rearm.preview(j, args.rearm_margin)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
-    why = confirm(f"kill switch {st['state']} since {st.get('at')} by {st.get('by')}: {st.get('reason')}\n"
+    why = confirm(f"[{s.mode.upper()}] kill switch {st['state']} since {st.get('at')} by {st.get('by')}: {st.get('reason')}\n"
                   f"after the clear, the loss trips hold at what you accept now:\n{rearm.describe(hold)}\n"
                   f"set it to {args.to}")
     if why:
         return {"ok": False, "error": why}
-    return await ks.clear(j, s, args.to, _by(), args.reason, shown, hold)
+    return {"mode": s.mode, **await ks.clear(j, s, args.to, _by(), args.reason, shown, hold)}
 
 
 async def reset_peak(j: Journal, s: Settings, reason: str, equity_fn) -> dict[str, Any]:
@@ -251,6 +251,8 @@ async def ladder_reset(j: Journal, s: Settings, setup: str, reason: str) -> dict
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="shortbot-admin", description="Human-only kill-switch, equity-peak and "
                                 "setup-ladder controls. Run it in your own terminal, not through Claude.")
+    p.add_argument("--mode", choices=("demo", "live"), help="the desk to act on (default: SHORTBOT_MODE from the "
+                   "environment or .env); each mode has its own kill switch, peak and ladders (docs/DESKS.md)")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="state, who set it and why, guardian heartbeat")
     c = sub.add_parser("clear", help="loosen the kill switch (asks for a code on this terminal)")
@@ -278,6 +280,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     install_log_redaction()
     args = parser().parse_args()
+    if args.mode:   # before Settings.from_env: live still needs LIVE_CONFIRM
+        os.environ["SHORTBOT_MODE"] = args.mode
     audit.set_process("admin")
     # the human's kill-switch rows say so (#24); a flatten never waits for exchange budget (#70)
     with audit.acting(f"admin:{args.cmd}"), weight.tagged(weight.PROTECTIVE):

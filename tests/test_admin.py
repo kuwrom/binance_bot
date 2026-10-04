@@ -175,3 +175,15 @@ def test_confirm_reads_the_code_from_a_real_terminal(monkeypatch):
     os.close(master)
     os.close(slave)
     assert not t.is_alive() and out == {"why": None}, out
+
+
+async def test_admin_clears_only_the_desk_it_runs_for(monkeypatch, tmp_path):
+    import dataclasses
+    demo, live = Journal(tmp_path / "j.db", "demo"), Journal(tmp_path / "j.db", "live")
+    await ks.trip(demo, SETTINGS, HALTED, "drill", "plumbing drill")
+    await ks.trip(live, SETTINGS, HALTED, "agent", "untracked position")
+    monkeypatch.setattr(admin, "_tty", lambda: Tty())
+    r = await admin.run(clear_args(), dataclasses.replace(SETTINGS, mode="live"), live)
+    assert r["ok"] and r["mode"] == "live" and "[LIVE] kill switch HALTED" in Tty.shown
+    assert ks.read(live)["state"] == ACTIVE and ks.read(demo)["state"] == HALTED
+    assert admin.parser().parse_args(["--mode", "live", "status"]).mode == "live"

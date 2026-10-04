@@ -100,7 +100,7 @@ async def before(app: Any, sym: str, sym2: str) -> dict[str, Any]:
         return {**d.finish("fail", **head, trade_id=tid), "left": await d.left([sym, sym2])}
     snap = {"run": d.run, "started": d.started, "at": time.time(), "at_iso": now_iso(), "trade_id": tid,
             "symbol": sym, "second": sym2, "group_id": group, "entry_id": eid, "order_id": oid,
-            "heartbeat": j.get(ks.HEARTBEAT_KEY), "checks": d.checks, "steps": d.steps}
+            "heartbeat": j.get(ks.heartbeat_key(j)), "checks": d.checks, "steps": d.steps}
     await j.write(Journal.set, j.mode_key(STATE_KEY), json.dumps(snap, default=str))
     d.note("before: snapshot", {k: v for k, v in snap.items() if k not in ("checks", "steps")}, sym)
     return {"ok": True, **head, "run": d.run, "trade_id": tid, "entry_id": eid, "checks": d.checks,

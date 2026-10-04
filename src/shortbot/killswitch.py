@@ -14,8 +14,8 @@ Anyone may tighten the state (the agent via `halt_trading` / `shortbot kill-swit
 watchdog). Loosening it is human-only (`shortbot-admin clear`, from a real terminal), with one exception: a HALTED
 caused only by a stale guardian heartbeat (laptop sleep, an outage) clears itself back to what it replaced once the
 heartbeat is fresh again; every other cause is sticky. Each change writes a decision row and an alert. The state is
-one journal kv row shared by guardian, MCP server and CLI, changed only by compare-and-swap, so two processes
-tripping at once can never lower it or lose a cause. An unreadable row (or prior state) is REDUCING everywhere.
+one journal kv row per account (demo bare, live `@live`: docs/DESKS.md) shared by that mode's guardian, MCP servers
+and CLI, changed only by compare-and-swap, so two processes tripping at once can never lower it or lose a cause. An unreadable row (or prior state) is REDUCING everywhere.
 A human clear holds the loss trips at what the human accepted (killswitch_rearm.py).
 """
 
@@ -49,6 +49,19 @@ CLEAR_HINT = "only a human clears it: `.venv/bin/shortbot-admin clear --reason '
 _KEEP = ("state", "by", "reason", "at", "cause")
 
 
+# Per account: each mode has its own state, heartbeat and fresh-pass count (Journal.mode_key; demo keeps the bare keys)
+def state_key(j: Journal) -> str:
+    return j.mode_key(KV_KEY)
+
+
+def heartbeat_key(j: Journal) -> str:
+    return j.mode_key(HEARTBEAT_KEY)
+
+
+def fresh_key(j: Journal) -> str:
+    return j.mode_key(FRESH_KEY)
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -69,7 +82,7 @@ def _unreadable(raw: Any, what: str = "state row") -> dict[str, Any]:
 
 def read(j: Journal) -> dict[str, Any]:
     """The current state; no row = ACTIVE. An unreadable row fails closed (REDUCING)."""
-    raw = j.get(KV_KEY)
+    raw = j.get(state_key(j))
     st = _parse(raw)
     if st:
         return {**st, "level": LEVEL[st["state"]]}
@@ -82,9 +95,9 @@ def _cas(j: Journal, old: str | None, new: dict[str, Any], also: dict[str, str] 
     """Write `new` only if the row still holds `old` (one statement: atomic across processes); `also` (kv rows) is
     written in the same transaction, and only when the swap happened. Run as a unit: await j.write(_cas, ...)."""
     if old is None:
-        n = j.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (KV_KEY, json.dumps(new))).rowcount
+        n = j.db.execute("INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)", (state_key(j), json.dumps(new))).rowcount
     else:
-        n = j.db.execute("UPDATE kv SET v=? WHERE k=? AND v=?", (json.dumps(new), KV_KEY, old)).rowcount
+        n = j.db.execute("UPDATE kv SET v=? WHERE k=? AND v=?", (json.dumps(new), state_key(j), old)).rowcount
     for k, v in (also or {}).items() if n else ():
         j.db.execute("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", (k, v))
     j.db.commit()
@@ -107,7 +120,7 @@ async def trip(j: Journal, settings: Settings, state: str, by: str, reason: str,
     row = {"state": state, "level": LEVEL[state], "by": by, "reason": reason.strip(), "at": _now_iso(),
            "cause": cause}
     for _ in range(5):
-        raw = j.get(KV_KEY)
+        raw = j.get(state_key(j))
         parsed = _parse(raw)   # an unreadable row (REDUCING) is overwritten by any trip
         cur = parsed or ({"state": ACTIVE} if raw is None else _unreadable(raw))
         if parsed and LEVEL[cur["state"]] >= LEVEL[state]:
@@ -126,7 +139,7 @@ async def trip(j: Journal, settings: Settings, state: str, by: str, reason: str,
     else:
         raise RuntimeError("kill switch state kept changing under us; trip again")
     if cause == STALE:
-        j.post(Journal.set, FRESH_KEY, "{}")
+        j.post(Journal.set, fresh_key(j), "{}")
     j.log_decision("kill_switch", f"{cur['state']} -> {state} by {by}: {reason}", None,
                    snapshot={**new, "evidence": evidence})
     await notify(j, settings, "kill_switch", f"{state} (was {cur['state']}) by {by}: {reason}. Allowed now: "
@@ -159,9 +172,9 @@ async def clear(j: Journal, settings: Settings, state: str, by: str, reason: str
 def _fresh_passes(j: Journal, now: float | None) -> int:
     """Consecutive DISTINCT fresh heartbeats seen (each one = a guardian protective pass that worked); a stale or
     missing one resets the count. Re-reading the same heartbeat from another process doesn't count again."""
-    hb, age = j.get(HEARTBEAT_KEY), heartbeat_age(j, now)
+    hb, age = j.get(heartbeat_key(j)), heartbeat_age(j, now)
     try:
-        seen = json.loads(j.get(FRESH_KEY) or "{}")
+        seen = json.loads(j.get(fresh_key(j)) or "{}")
         n, last = (int(seen.get("n", 0)), seen.get("hb")) if isinstance(seen, dict) else (0, None)
     except ValueError:
         n, last = 0, None
@@ -171,7 +184,7 @@ def _fresh_passes(j: Journal, now: float | None) -> int:
         n, last = n + 1, hb
     else:
         return n
-    j.post(Journal.set, FRESH_KEY, json.dumps({"n": n, "hb": last}))
+    j.post(Journal.set, fresh_key(j), json.dumps({"n": n, "hb": last}))
     return n
 
 
@@ -179,7 +192,7 @@ async def auto_clear_stale(j: Journal, settings: Settings, now: float | None = N
     """Lift a stale-heartbeat halt after AUTO_CLEAR_CHECKS distinct fresh heartbeats (guardian passes): back to the row
     it replaced, or to a sticky trip that landed meanwhile (the most severe, latest first). Withdrawn entries stay
     withdrawn."""
-    raw = j.get(KV_KEY)
+    raw = j.get(state_key(j))
     st = _parse(raw)
     if not st or st.get("cause") != STALE:
         return None
@@ -198,7 +211,7 @@ async def auto_clear_stale(j: Journal, settings: Settings, now: float | None = N
     new = {**new, "level": LEVEL[new["state"]], "prev": HALTED}
     if not await j.write(_cas, raw, new):
         return None
-    j.post(Journal.set, FRESH_KEY, "{}")
+    j.post(Journal.set, fresh_key(j), "{}")
     j.log_decision("kill_switch_auto_clear", f"HALTED (stale heartbeat) -> {new['state']}", None,
                    snapshot={"restored": new, "cleared": {k: st.get(k) for k in _KEEP}})
     await notify(j, settings, "kill_switch_clear", f"stale-heartbeat halt lifted: guardian is back. Now {new['state']}"
@@ -209,7 +222,7 @@ async def auto_clear_stale(j: Journal, settings: Settings, now: float | None = N
 
 # ------------------------------------------------------------ guardian watchdog
 def heartbeat_age(j: Journal, now: float | None = None) -> float | None:
-    hb = j.get(HEARTBEAT_KEY)
+    hb = j.get(heartbeat_key(j))
     try:
         return (now or time.time()) - float(hb) if hb is not None else None
     except ValueError:
