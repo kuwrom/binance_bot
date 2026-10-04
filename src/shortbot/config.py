@@ -9,6 +9,7 @@ Every opening order is still checked by risk.check_open_short against the effect
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -162,7 +163,11 @@ class Settings:
     limits: RiskLimits = field(default_factory=RiskLimits)     # fixed baseline (guardian uses only this)
     bounds: ResearchBounds = field(default_factory=ResearchBounds)
     allow_ai_params_live: bool = False                         # AI overrides in live mode? human-only
-    gateway: bool = False   # SHORTBOT_GATEWAY=1: sessions send order writes to shortbot-gateway (#36, GATEWAY.md §3)
+    # SHORTBOT_GATEWAY (#36, GATEWAY.md §3; gateway_flag): sessions / the guardian send order writes to shortbot-gateway.
+    # From the environment both default on; a Settings built directly (tests, tools) writes in-process unless told.
+    gateway: bool = False
+    gateway_guardian: bool = False
+    invalid: tuple[str, ...] = ()   # settings that fell back to their default (the guardian alerts config_invalid)
 
     @property
     def is_live(self) -> bool:
@@ -176,6 +181,7 @@ class Settings:
         if mode == "live" and os.getenv("LIVE_CONFIRM") != LIVE_CONFIRM_PHRASE:
             raise ValueError(f"Live mode requires LIVE_CONFIRM={LIVE_CONFIRM_PHRASE}")
         prefix = "LIVE" if mode == "live" else "DEMO"
+        sessions, guardian, bad = gateway_flag(os.getenv("SHORTBOT_GATEWAY"))
         return cls(
             mode=mode,
             api_key=os.getenv(f"BINANCE_{prefix}_API_KEY", ""),
@@ -186,5 +192,22 @@ class Settings:
             limits=RiskLimits.from_env(),
             bounds=ResearchBounds.from_env(),
             allow_ai_params_live=os.getenv("AI_PARAMS_IN_LIVE", "false").lower() == "true",
-            gateway=os.getenv("SHORTBOT_GATEWAY", "").strip().lower() in ("1", "true", "yes", "on"),
+            gateway=sessions, gateway_guardian=guardian, invalid=(bad,) if bad else (),
         )
+
+
+GATEWAY_ON, GATEWAY_SESSIONS, GATEWAY_OFF = ("", "1", "true", "yes", "on"), ("sessions",), ("0", "false", "no", "off")
+
+
+def gateway_flag(raw: str | None) -> tuple[bool, bool, str | None]:
+    """SHORTBOT_GATEWAY -> (sessions use the gateway, the guardian does, why the value was not understood).
+    Unset or on: both (#36 step 5-6). `sessions`: the sessions only (the guardian writes in-process: step 6's rollback).
+    0/off: neither (step 5's rollback). Anything else is the default, never an error: a typo in .env must not stop
+    the guardian from starting (positions would go unprotected); it is logged here and alerted by the guardian."""
+    v = (raw or "").strip().lower()
+    if v in GATEWAY_ON or v in GATEWAY_SESSIONS or v in GATEWAY_OFF:
+        return v not in GATEWAY_OFF, v in GATEWAY_ON, None
+    why = (f"SHORTBOT_GATEWAY={raw!r} is not one of 1/on, sessions, 0/off: using the default (on: sessions and the "
+           "guardian go through the order gateway)")
+    logging.getLogger("shortbot.config").warning("%s", why)
+    return True, True, why

@@ -200,6 +200,9 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
     async def _startup(self) -> None:
         await send_safe(self.n, "guardian_started", f"Guardian online ({self.app.settings.mode}). Trading keys: "
                         f"{'yes' if self.ex.trade else 'NO (monitor-only)'}", cooldown_s=0)
+        for why in getattr(self.app.settings, "invalid", ()):   # a bad value fell back to its default (config.py)
+            await send_safe(self.n, "config_invalid", f"{why}. Fix it in .env and restart the desk (deploy/DEPLOY.md "
+                            "§4a).", urgent=True, cooldown_s=0)
         procs.register(self.j, "guardian", self.app.settings.mode)   # #58: the processes job compares its code
         db = self.app.settings.db_path   # resolve() and docker_vm's file reads: off the loop
         vm = await asyncio.to_thread(lambda: procs.docker_vm(Path(db).expanduser().resolve().parent))
