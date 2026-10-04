@@ -215,9 +215,7 @@ async def test_killed_mid_halted_withdrawal(tmp_path):
     verified(g)
 
 
-@pytest.mark.xfail(strict=True, reason="bug: intent_interrupted tells the human a dead withdraw_entries intent 'sent "
-                   "nothing' although its cancel ran: a cancel has no client id, so the sweep finds no linked order")
 async def test_the_interrupted_alert_never_says_a_withdrawal_that_cancelled_sent_nothing(tmp_path):
     _, g = await halted_crash(tmp_path)
     (swept,) = alerts(g, "intent_interrupted")
-    assert "withdraw_entries" in swept and "sent nothing" not in swept
+    assert "withdraw_entries" in swept and "sent nothing" not in swept and "may have sent is not linked" in swept
