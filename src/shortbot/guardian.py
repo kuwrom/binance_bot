@@ -37,7 +37,7 @@ from .guardian_margin import MarginChecks
 from .guardian_plan import PlanChecks
 from .guardian_positions import PositionChecks
 from .guardian_watch import WatchChecks
-from .killswitch import HEARTBEAT_KEY
+from .killswitch import heartbeat_key
 from .margin import ADL_PERSIST_PASSES
 from .market import stream_read
 from .market.liquidations import LiquidationRecorder, LiquidationStore
@@ -81,6 +81,11 @@ SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events bet
         "cadence_shadow": (60, 50),   # #40: logs two rules every minute on live bars; no deep scores, no alerts
         "mtf_views": (60, 50)}        # #41: every coin's 5m-1d state at each 15m close, logged; no exchange calls
 COINS = {"coin_memory": (900, 300)}   # focus coins: state, events, break scores (coin_memory.py); alerts, never acts
+# Market-wide jobs: one guardian runs them for both desks (Settings.guardian_market; the live guardian sets it off,
+# docs/DESKS.md). The rest, and coin_memory on its own book, are this account's and always run.
+MARKET_JOBS = frozenset({"social", "refresh", "housekeeping", "processes", "metrics", "research", "calendar",
+                         "market_map", "sweeps", "supply", "laggard", "long_shadow", "scan", "cadence_shadow",
+                         "mtf_views"})
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
 DELAYED_LANES = ("research", "scan", "coins")   # they start RESEARCH_START_DELAY_S after the others
 # a user-data event runs its job at once, but no sooner than this after the job's last start: a burst is one run, and
@@ -147,13 +152,17 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops,
                "coin_memory": self.coin_memory}
 
+        market = self.app.settings.guardian_market
+
         def lane(name: str, table: dict, **kw) -> Lane:
-            return Lane(name, [Job(k, fns[k], *v) for k, v in table.items()], self.n, self.ex, self.j, TICK_S, **kw)
-        return {"protective": lane("protective", PROTECTIVE, escalate_after=ESCALATE_AFTER_FAILS,
-                                   escalate_note=FAILING),
-                "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
-                "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH),
-                "scan": lane("scan", SCAN), "coins": lane("coins", COINS)}
+            jobs = [Job(k, fns[k], *v) for k, v in table.items() if market or k not in MARKET_JOBS]
+            return Lane(name, jobs, self.n, self.ex, self.j, TICK_S, **kw)
+        lanes = {"protective": lane("protective", PROTECTIVE, escalate_after=ESCALATE_AFTER_FAILS,
+                                    escalate_note=FAILING),
+                 "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
+                 "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH),
+                 "scan": lane("scan", SCAN), "coins": lane("coins", COINS)}
+        return {name: ln for name, ln in lanes.items() if ln.jobs}
 
     def _leased(self, what: str, fn: Callable[[], Awaitable[Any]]) -> Callable[[], Awaitable[None]]:
         """A reconciling job under the reconcile lease (symlock.reconciling, GATEWAY §5): while the gateway's start-up
@@ -194,9 +203,9 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
             log.info("heartbeat withheld: the fill poll is failing")
             return
         first = self._last_beat is None
-        prev = uptime.stamp_of(self.j.get(HEARTBEAT_KEY)) if first else self._last_beat
+        prev = uptime.stamp_of(self.j.get(heartbeat_key(self.j))) if first else self._last_beat
         self._last_beat = at
-        self.j.post(lambda j: j.set(HEARTBEAT_KEY, str(at)))
+        self.j.post(lambda j: j.set(heartbeat_key(j), str(at)))
         uptime.beat(self.j, prev, at, first)
 
     def _journal_stalled(self, waited: float, who: dict | None) -> None:
@@ -234,10 +243,11 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         runs: dict[str, Callable[[], Awaitable[Any]]] = {
             name: functools.partial(ln.run, RESEARCH_START_DELAY_S if name in DELAYED_LANES else 0.0)
             for name, ln in self.lanes.items()}
-        # continuous liquidation recording (websocket; the only source of Binance liquidation data)
-        runs["liquidations"] = LiquidationRecorder(self.liq_store).run
-        if self.streams_db:   # tier 0: market streams into the local store, on its own thread (stream_task.py)
-            runs["streams"] = StreamTask(self.ex, self.streams_db).run
+        if self.app.settings.guardian_market:   # market data: recorded once, by the market guardian (MARKET_JOBS)
+            # continuous liquidation recording (websocket; the only source of Binance liquidation data)
+            runs["liquidations"] = LiquidationRecorder(self.liq_store).run
+            if self.streams_db:   # tier 0: market streams into the local store, on its own thread (stream_task.py)
+                runs["streams"] = StreamTask(self.ex, self.streams_db).run
         if self.user_stream:   # fills and stop-outs pushed by Binance: latency only, the polls stay the truth
             runs["user_stream"] = self.user_stream.run
         self._tasks = [asyncio.create_task(supervised(name, fn, self.n), name=f"guardian:{name}")

@@ -23,13 +23,14 @@ QUIET_EVENTS = ("btc_impulse",)   # market-wide: listed on every coin; market_ma
 class CoinJobs:
     """Guardian mixin: needs ex, j, n, entries."""
 
+    app: Any
     ex: Any
     j: Any
     n: Any
     entries: Any
 
     async def coin_memory(self) -> None:
-        r = await coin_pass.refresh(self.ex, self.j, self.entries)
+        r = await coin_pass.refresh(self.ex, self.j, self.entries, book_only=not self.app.settings.guardian_market)
         for sym, st in r["coins"].items():
             new = [e for e in st.get("events") or () if e.get("new") and e["name"] not in QUIET_EVENTS]
             if new:

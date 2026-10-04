@@ -71,14 +71,18 @@ def _ago(ms: int) -> str:
 
 
 # ------------------------------------------------------------ the focus set
-def focus_symbols(j: Any, entries: Any, now_ms: int, cap: int = FOCUS_CAP) -> dict[str, list[str]]:
+def focus_symbols(j: Any, entries: Any, now_ms: int, cap: int = FOCUS_CAP, book_only: bool = False
+                  ) -> dict[str, list[str]]:
     """{symbol: why} in priority order: open trades, resting entries, the watchlist, the top SCAN_TOP tradable
-    candidates of the last hour (a SQL window: j.candidates() would load 5,000 rows)."""
+    candidates of the last hour (a SQL window: j.candidates() would load 5,000 rows). book_only: the first two (a
+    guardian without the market jobs: the market guardian covers the rest)."""
     out: dict[str, list[str]] = {}
     for t in j.open_trades():
         out.setdefault(t["symbol"], []).append(f"trade #{t['id']}")
     for e in entries.pending() if entries is not None else ():
         out.setdefault(e["symbol"], []).append(f"entry #{e['id']}")
+    if book_only:
+        return dict(list(out.items())[:cap])
     for w in watching(j.db, now_ms):
         out.setdefault(w["symbol"], []).append("watch")
     for sym, score in j.db.execute(

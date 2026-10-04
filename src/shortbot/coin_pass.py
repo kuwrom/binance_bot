@@ -69,11 +69,11 @@ async def fakeouts(path: str | None) -> dict[str, float]:
 
 
 async def refresh(ex: Any, j: Any, entries: Any, symbols: list[str] | None = None,
-                  now_ms: int | None = None) -> dict[str, Any]:
+                  now_ms: int | None = None, book_only: bool = False) -> dict[str, Any]:
     """One pass over the focus set (or `symbols`). {"focus", "coins": {symbol: state}, "errors", "scored"}. A coin
     whose data failed is left out (its error listed); a pass in which every coin failed raises."""
     now_ms = now_ms or clock.now_ms()
-    full = focus_symbols(j, entries, now_ms)
+    full = focus_symbols(j, entries, now_ms, book_only=book_only)
     focus = full if symbols is None else {to_symbol(s): full.get(to_symbol(s), ["asked"]) for s in symbols}
     syms, path = list(focus), j.w.path
     hub = DataHub(ex)
