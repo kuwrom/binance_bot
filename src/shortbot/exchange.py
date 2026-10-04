@@ -9,13 +9,16 @@ import asyncio
 import contextvars
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
 from . import weight
 from .config import Settings
 from .risk import bracket_for
+
+if TYPE_CHECKING:
+    from .params import ResearchParams
 
 log = logging.getLogger("shortbot.exchange")
 NO_DELIVERY = 4133404800000  # Binance's placeholder deliveryDate for perpetuals
@@ -125,7 +128,7 @@ class Exchanges:
         self._trade_next_load = 0.0   # when the trading client's markets are due a refresh
         self._trade_tried_at = 0.0    # last load attempt, success or not
         self._brackets: dict[str, tuple[float, list[dict]]] = {}   # symbol -> (read at, bracket rows)
-        self.params = None  # ResearchParams when running as the AI analyst; None = fixed baseline
+        self.params: ResearchParams | None = None  # set when running as the AI analyst; None = fixed baseline
 
     @property
     def limits(self):
@@ -296,10 +299,11 @@ class Exchanges:
 
     async def long_short_ratios(self, symbol: str, period: str = "1h") -> dict[str, float | None]:
         args = {"symbol": to_raw(symbol), "period": period, "limit": 1}
-        top, glob = await asyncio.gather(
+        answers = await asyncio.gather(
             self.public.fapiDataGetTopLongShortPositionRatio(args),
             self.public.fapiDataGetGlobalLongShortAccountRatio(args),
             return_exceptions=True)
+        top, glob = answers   # a separate unpack: unpacked in place, a gather of Any calls is untyped (has-type)
         pick = lambda r: float(r[-1]["longShortRatio"]) if isinstance(r, list) and r else None  # noqa: E731
         return {"top_trader_position_ls": pick(top), "global_account_ls": pick(glob)}
 

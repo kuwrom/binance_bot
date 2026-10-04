@@ -84,7 +84,8 @@ async def user_stream(p: Probe) -> dict[str, Any]:
     lk = await p.need("POST /fapi/v1/listenKey (never deleted: one key per account)", p.t.fapiPrivatePostListenKey,
                       secret=("listenKey",))
     key = str(lk["listenKey"])
-    done, sent, settled, where = asyncio.Event(), [], set(), urls(key)
+    settled: set[str] = set()   # the URL names whose connect attempt ended (listen)
+    done, sent, where = asyncio.Event(), [], urls(key)
     task = asyncio.create_task(listen(where, done, settled))
     try:
         waited = 0.0

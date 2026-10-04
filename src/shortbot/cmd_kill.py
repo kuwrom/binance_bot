@@ -32,7 +32,7 @@ async def kill_switch(state: str | None = None, reason: str | None = None) -> di
     resting entries (#70)."""
     if not state:
         return await trading_state()
-    if not (reason or "").strip():
+    if not reason or not reason.strip():
         return {"ok": False, "error": "--reason is required to trip the kill switch"}
     return await killswitch_ops.halt(get_app().trader, state, killswitch_ops.CLI_BY, reason)
 

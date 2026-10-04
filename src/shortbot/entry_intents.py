@@ -212,7 +212,7 @@ async def _sweep(desk) -> list[dict[str, Any]]:
     by_cid = {r["client_id"]: r for r in rows if r["client_id"]}
     orders = await desk.tr.t.fapiPrivateGetOpenOrders()
     await _externals_left(desk, rows, {str(o["orderId"]) for o in orders})
-    events = []
+    events: list[dict[str, Any] | None] = []   # None: a late order that needed no event
     for o in orders:
         oid, cid, sym = str(o["orderId"]), o.get("clientOrderId"), to_symbol(o["symbol"])
         if targets.is_target(cid) or str(cid or "").startswith(f"{clientid.PREFIX}-{clientid.KINDS['probe']}"):

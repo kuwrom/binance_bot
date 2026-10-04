@@ -71,7 +71,7 @@ async def registry(action: str, arg: str | None = None, status: str | None = Non
         from .registry_seed import feed_candidates, seed_all
         return {**seed_all(j, bt_dir, patterns_data.load(j)), "scan_episodes": feed_candidates(j)}
     if action == "card":
-        return R.card(j.db, arg) or {"error": "unknown pattern"}
+        return (R.card(j.db, arg) if arg is not None else None) or {"error": "unknown pattern"}
     if action == "search":   # learnings in full: the `learnings` command
         from .learnings_view import text
         return {"patterns": R.search(j.db, arg or "", 10),

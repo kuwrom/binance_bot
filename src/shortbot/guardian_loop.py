@@ -147,7 +147,7 @@ class Lane:
             self.last[job.name] = self.started[job.name] = time.time()
             ran = True
             cause = self.pending.pop(job.name, None)
-            self.running = (job.name, bool(cause) and cause.sched > self.last[job.name])
+            self.running = (job.name, cause is not None and cause.sched > self.last[job.name])
             try:
                 if cause:
                     self._served(job.name, cause)

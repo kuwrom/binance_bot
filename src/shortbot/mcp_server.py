@@ -66,6 +66,8 @@ def tool(cmd: Command):
     """Register a command as an MCP tool; exceptions reach Claude as readable ToolErrors (a CommandError keeps its
     message). The wrapper carries the body's signature minus CLI-only args: the SDK builds the input and output
     schemas from it (a list / str return is wrapped as {"result": ...}, which stale_guard.annotate relies on)."""
+    if cmd.name is None:   # registered below only when it has one
+        raise ValueError(f"{cmd.cli}: a CLI-only command (mcp=False) is not an MCP tool")
     f, name, sig = cmd.body, cmd.name, cmd.mcp_signature()
 
     async def run(coro):
@@ -92,7 +94,7 @@ def tool(cmd: Command):
                 if isinstance(e, ToolError):
                     raise
                 raise ToolError(f"{type(e).__name__}: {e}") from e
-    wrapper.__signature__ = sig
+    wrapper.__signature__ = sig   # type: ignore[attr-defined]  # the SDK reads it; typeshed has no such attr
     TOOLS[name] = mcp.tool(name=name)(wrapper)
     return wrapper
 

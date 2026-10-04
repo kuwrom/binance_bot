@@ -227,16 +227,17 @@ def refusals(op: str) -> Callable:
         async def inner(self, *args: Any, **kwargs: Any) -> Any:
             box = [0]
             tok = _scope.set(box)
+            scoped = True   # reset once: in the except (before the refusal row is written), else in the finally
             try:
                 res = await f(self, *args, **kwargs)
             except Exception as e:
                 _scope.reset(tok)
-                tok = None
+                scoped = False
                 if not box[0]:
                     _refusal(self, op, bound_args(sig, (self, *args), kwargs), error=e)
                 raise
             finally:
-                if tok is not None:
+                if scoped:
                     _scope.reset(tok)
             if isinstance(res, dict) and res.get("ok") is False and not res.get("noop") and not box[0]:
                 _refusal(self, op, bound_args(sig, (self, *args), kwargs), res)

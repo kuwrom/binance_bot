@@ -34,7 +34,7 @@ class Notifier:
 
     def _cooling(self, key: str, cooldown_s: float) -> bool:
         last = self.j.get(f"alert_ts:{key}")
-        return bool(last) and time.time() - float(last) < cooldown_s
+        return time.time() - float(last) < cooldown_s if last else False
 
     async def send(self, kind: str, message: str, symbol: str | None = None,
                    cooldown_s: float = 3600, urgent: bool = False) -> bool:

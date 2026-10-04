@@ -19,9 +19,12 @@ waits) or posts bookkeeping (nothing waits); a wait past STALL_ALERT_S is alerte
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import signal
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from . import audit, procs
 from .app import FLUSH_S, close_app, get_app
@@ -203,8 +206,9 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
     async def run(self) -> None:
         await self._startup()
         self.lanes = self._lanes()
-        runs = {name: (lambda ln=ln, d=RESEARCH_START_DELAY_S if name in DELAYED_LANES else 0.0: ln.run(d))
-                for name, ln in self.lanes.items()}
+        runs: dict[str, Callable[[], Awaitable[Any]]] = {
+            name: functools.partial(ln.run, RESEARCH_START_DELAY_S if name in DELAYED_LANES else 0.0)
+            for name, ln in self.lanes.items()}
         # continuous liquidation recording (websocket; the only source of Binance liquidation data)
         runs["liquidations"] = LiquidationRecorder(self.liq_store).run
         if self.streams_db:   # tier 0: market streams into the local store, on its own thread (stream_task.py)

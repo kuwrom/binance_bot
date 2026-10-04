@@ -231,6 +231,7 @@ class PositionOps:
         if res.get("closed") or not res.get("ok"):
             tr.j.log_decision("widen_stop_failed", reason, symbol, snapshot={**snap, "cut": 0, "result": res})
             return {**res, "size_cut": 0}
+        left: float | None   # None: the cut's outcome unread
         left = qty
         if cut > 0:
             await targets_sync.pull_safe(tr, symbol, "widen: before its size cut")   # #65: none fills with the cut
@@ -291,7 +292,8 @@ class PositionOps:
         r1 = _r_initial(trade)
         cur = min((s["trigger"] for s in await tr.stop_orders(symbol, close_position_only=True)), default=None)
         tighten = cur is None or new_stop < cur * 0.9999   # tighten first; an already-fitting stop stays
-        if refused := await self._refusals(trade, pos, add_qty, new_stop, new_stop if tighten else cur, worst):
+        stop_after = new_stop if tighten or cur is None else cur   # (no stop: tighten)
+        if refused := await self._refusals(trade, pos, add_qty, new_stop, stop_after, worst):
             tr.j.log_decision("add_rejected", "; ".join(refused), symbol, snapshot={
                 "trade_id": trade["id"], "add_qty": add_qty, "price": mark, "new_stop": new_stop, "worst_case": worst})
             return {"ok": False, "error": "; ".join(refused), "rejected_by_risk": refused,

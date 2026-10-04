@@ -107,7 +107,7 @@ async def _landed(tr, row: dict, o: dict, why: str | None = None) -> None:
         await targets.note_fill(tr, row, o, final=False)
         return
     await targets.note_fill(tr, row, o, final=True)
-    new = FINAL.get(st, "gone")
+    new = FINAL.get(st or "", "gone")
     await targets.move(tr.j, row, new, why or f"left the book: {st}", ex=st,
                        order_id=str(o.get("id") or row.get("order_id")))
     if why is None and new in ("cancelled", "expired"):   # Binance took it away: the drill wants to see each one

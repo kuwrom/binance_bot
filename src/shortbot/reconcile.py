@@ -76,7 +76,8 @@ async def income_since(t, start_ms: int, symbol: str | None = None) -> list[dict
     second (module doc), so a full page can end inside one: the next page starts AT that second and skips the rows of
     it already read."""
     out: list[dict[str, Any]] = []
-    cursor, seen = start_ms, Counter()
+    cursor = start_ms
+    seen: Counter[tuple] = Counter()   # row key -> rows of the cursor's second already read
     for _ in range(10):
         req: dict[str, Any] = {"startTime": cursor, "limit": 1000}
         if symbol:
@@ -103,7 +104,7 @@ async def income_since(t, start_ms: int, symbol: str | None = None) -> list[dict
 def summarize_income(rows: list[dict[str, Any]]) -> dict[str, float]:
     s = {"gross": 0.0, "fees": 0.0, "funding": 0.0, "liq_fee": 0.0}
     for r in rows:
-        key = PNL_TYPES.get(r.get("incomeType"))
+        key = PNL_TYPES.get(r.get("incomeType") or "")
         if key:
             s[key] += float(r.get("income") or 0)
     s["net"] = s["gross"] + s["fees"] + s["funding"] + s["liq_fee"]
@@ -163,7 +164,7 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
         reason = f"LIQUIDATED ({reason})"
     await j.write(_close_row, trade["id"], exit_px, inc, reason, lesson,
                   ms_to_iso(episode["closed_ms"]) if episode else None)
-    if given:   # rebuilt here: the desk's close, whose fills it benchmarks live (#35)
+    if given and episode is not None:   # rebuilt here: the desk's close, whose fills it benchmarks live (#35)
         fill_quality.record_episode(trader, trade, episode,   # mainnet refs for its fills not yet referenced (#35)
                                     targets.order_kinds(j, trade["id"]))   # its resting targets' fills say so
     j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,

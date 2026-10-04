@@ -106,7 +106,7 @@ async def cancel_finished(p: Probe) -> dict[str, Any]:
         if status and status not in ("NEW", "TRIGGERING"):
             break
     triggered = status in ("TRIGGERED", "FINISHED")
-    if triggered:
+    if triggered and near:   # (a status is only read for a near stop)
         cancels["finished"] = {**await p.cancel(f"cancel the {status} near stop", near), "status_before": status}
     elif near:
         cancels["canceled_first"] = await p.cancel("cancel the resting near stop", near)

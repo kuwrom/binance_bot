@@ -146,9 +146,10 @@ def resized(j, rows: list[dict[str, Any]], ladder_of, now: float | None = None) 
     v = _verdict(j, now)
     old = [e for e in rows if v and _placed_s(e) + 1 <= float(v["ts"])]
     why = "; ".join((v or {}).get("reasons") or [])
-    for e in old:
-        if _shrunk(e, "m_gov", v.get("m_gov")):
-            out[e["id"]] = f"governor resized: size x{v['m_gov']:g} now, placed at x{e['m_gov']:g} ({why})"
+    if v:   # (without a verdict no row is old)
+        for e in old:
+            if _shrunk(e, "m_gov", v.get("m_gov")):
+                out[e["id"]] = f"governor resized: size x{v['m_gov']:g} now, placed at x{e['m_gov']:g} ({why})"
     if v and v.get("room_usd") is not None and v.get("open_risk_usd") is not None:
         room, held = float(v["room_usd"]), float(v["open_risk_usd"])
         units: dict[str, list[dict[str, Any]]] = {}   # a split entry's legs can all fill: one budget, one unit

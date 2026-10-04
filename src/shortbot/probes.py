@@ -219,7 +219,7 @@ async def _cleanup(p: kit.Probe) -> dict[str, Any]:
             left = await _left(p)
     except Exception as e:  # noqa: BLE001 (incl. the timeout)
         errors.append(f"re-read: {type(e).__name__}: {e}"[:300])
-    clean = bool(left) and not (left["position"] or left["orders"] or left["conditional"]) and not p.countdown
+    clean = bool(left and not (left["position"] or left["orders"] or left["conditional"])) and not p.countdown
     if not clean:
         await p.tr.alert("probe_cleanup_incomplete", f"probe {p.name} on {p.sym} left {left or 'an unreadable state'}"
                          f"{' (countdownCancelAll still armed)' if p.countdown else ''}; errors: {errors}. Check "

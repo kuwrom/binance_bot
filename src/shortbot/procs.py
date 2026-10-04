@@ -220,9 +220,9 @@ def audit(rows: dict[int, dict], live: dict[int, Proc], disk: dict[str, str | No
     registered from another mount namespace is unknown here, never stale (unknown_here)."""
     ns, mnt = NS if ns is None else ns, MNT if mnt is None else mnt
     dead = []
-    for pid, r in rows.items():
-        started = float(r.get("started") or 0)
-        if r.get("ns", "") != ns or started > now - GRACE_S:
+    for pid, row in rows.items():
+        started = float(row.get("started") or 0)
+        if row.get("ns", "") != ns or started > now - GRACE_S:
             continue
         p = live.get(pid)
         if p is None or abs(now - p.age_s - started) > GRACE_S:
@@ -235,7 +235,8 @@ def audit(rows: dict[int, dict], live: dict[int, Proc], disk: dict[str, str | No
         if r and r.get("ns", "") == ns and pid not in dead:
             if _elsewhere(r, mnt):
                 continue
-            now_code = disk.get(r.get("pkg"))
+            pkg = r.get("pkg")
+            now_code = disk.get(pkg) if pkg is not None else None   # disk is keyed by the rows' pkg values
             if now_code is not None and now_code == r.get("code"):
                 continue
             why, detail = "stale", (f"its code directory {r.get('pkg')} is gone" if now_code is None else

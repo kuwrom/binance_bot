@@ -53,10 +53,10 @@ def parse_adl(resp: Any) -> tuple[dict[str, int], list[str]]:
             bad.append(f"row without symbol / adlQuantile: {str(r)[:200]}")
         elif "HEDGE" in q:
             bad.append(f"{sym}: HEDGE (crossed Hedge Mode): {q}")
-        elif _quantile(q.get("BOTH", q.get("SHORT"))) is None:
+        elif (quantile := _quantile(q.get("BOTH", q.get("SHORT")))) is None:
             bad.append(f"{sym}: no quantile 0-4 in {q}")
         else:
-            got[sym] = _quantile(q.get("BOTH", q.get("SHORT")))
+            got[sym] = quantile
             if "BOTH" not in q:
                 bad.append(f"{sym}: no BOTH (One-way Mode answers it), SHORT used: {q}")
     return got, bad

@@ -10,7 +10,7 @@ import gzip
 import os
 import re
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 STAMP = "%Y%m%dT%H%M%SZ"
@@ -38,7 +38,9 @@ def keep_set(stamps: list[datetime], keep_daily: int, keep_weekly: int) -> set[d
     """Newest copy of each of the last keep_daily UTC days and of the last keep_weekly ISO weeks that have one
     (restic's --keep-daily/--keep-weekly). The newest copy is always kept, even with 0/0."""
     newest_first = sorted(stamps, reverse=True)
-    keep, days, weeks = set(newest_first[:1]), set(), set()
+    keep = set(newest_first[:1])
+    days: set[date] = set()
+    weeks: set[tuple[int, int]] = set()   # (ISO year, ISO week)
     for t in newest_first:
         day, week = t.date(), t.isocalendar()[:2]
         if day not in days and len(days) < keep_daily:

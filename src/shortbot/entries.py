@@ -159,7 +159,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         Sends of unknown outcome are polled too, by client id (_poll_unknown)."""
         events: list[dict[str, Any]] = []
         now_ms = int(time.time() * 1000)
-        tried, failed, last = 0, 0, None
+        tried, failed = 0, 0
+        last: Exception | None = None   # the last entry's failure
         for e in self._rows(POLLED):
             now = self._rows(f"id=? AND ({POLLED})", (e["id"],))
             if not now:
@@ -178,7 +179,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             self._poll_fails.pop(e["id"], None)
             if ev:
                 events.append(ev)
-        if tried and failed == tried:
+        if tried and failed == tried and last is not None:   # (a failure sets last)
             raise last
         return events
 

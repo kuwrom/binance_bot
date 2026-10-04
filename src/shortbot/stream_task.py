@@ -19,10 +19,11 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import functools
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,7 @@ class ThreadLoop:
     """One coroutine on its own event loop in a daemon thread. `done` (a concurrent future) resolves when it ends,
     with its exception if it failed; `stop()` cancels it from any thread and never waits."""
 
-    def __init__(self, name: str, factory: Callable[[], Awaitable[Any]]):
+    def __init__(self, name: str, factory: Callable[[], Coroutine[Any, Any, Any]]):
         self.done: concurrent.futures.Future = concurrent.futures.Future()
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -59,7 +60,7 @@ class ThreadLoop:
         self.thread = threading.Thread(target=self._main, args=(factory,), name=name, daemon=True)
         self.thread.start()
 
-    def _main(self, factory: Callable[[], Awaitable[Any]]) -> None:
+    def _main(self, factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
         loop = asyncio.new_event_loop()
         try:
             with self._lock:
@@ -114,7 +115,7 @@ class StreamTask:
         self.symbols = await self._first_universe()
         while True:
             log.info("stream collector: %d coins", len(self.symbols))
-            th = ThreadLoop("streams", lambda syms=list(self.symbols): self._collect(syms, main))
+            th = ThreadLoop("streams", functools.partial(self._collect, list(self.symbols), main))
             done = asyncio.wrap_future(th.done)
             try:
                 while True:
