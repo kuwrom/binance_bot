@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -258,7 +258,7 @@ def test_research_shows_the_latest_scan_a_coins_standing_and_the_books_odds(web)
     assert c.get("/api/research/candidates?hours=x").status_code == 400
 
     state = lambda s: c.get("/api/research/coin", params={"symbol": s}).json()["standing"]["state"]  # noqa: E731
-    listed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    listed_at = datetime.now(UTC).isoformat(timespec="seconds")
     j.db.executemany("INSERT INTO metrics (ts, symbol, price, quote_volume_24h) VALUES (?, ?, 1.0, 9e6)",
                      [(listed_at, "QQQ/USDT:USDT"), (listed_at, "币安/USDT:USDT")])
     j.db.commit()

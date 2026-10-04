@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .. import coin_memory
@@ -64,7 +64,7 @@ def _scan_predictions(j: Any, since_ms: int, symbol: str | None = None) -> dict[
 
 def _since(now_ms: int) -> str:
     """UNIVERSE_DAYS ago, as the metrics log writes time (its key starts with ts: a bounded read stays an index range)."""
-    return datetime.fromtimestamp(now_ms / 1000 - UNIVERSE_DAYS * 86400, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(now_ms / 1000 - UNIVERSE_DAYS * 86400, UTC).isoformat(timespec="seconds")
 
 
 def _market(j: Any, symbol: str, now_ms: int) -> dict[str, Any] | None:
