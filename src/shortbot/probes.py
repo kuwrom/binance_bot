@@ -133,39 +133,48 @@ async def _active(j, symbol: str, on: bool) -> AsyncIterator[None]:
         j.db.commit()
 
 
-# ------------------------------------------------------------ refusals
-async def _outside(tr, sym: str, name: str) -> str | None:
+# ------------------------------------------------------------ refusals (the drills' too: drill.py, what="drill")
+def demo_refusal(tr, what: str = "probe") -> str | None:
+    """Why this process can't act on the demo account: another mode, no keys, or a trade client off demo-fapi."""
     s, t = tr.ex.settings, tr.ex.trade
     if s.mode != "demo" or s.is_live:
-        return f"probes run in demo only (mode {s.mode})"
+        return f"{what}s run in demo only (mode {s.mode})"
     if t is None:
         return "no demo trading keys"
     host = str(((getattr(t, "urls", None) or {}).get("api") or {}).get("fapiPrivate") or "")
     if "demo-fapi" not in host:
-        return f"the trade client is not on the demo host ({host or 'unknown'}): probes run in demo only"
+        return f"the trade client is not on the demo host ({host or 'unknown'}): {what}s run in demo only"
+    return None
+
+
+async def _outside(tr, sym: str, name: str, what: str = "probe") -> str | None:
+    if why := demo_refusal(tr, what):
+        return why
+    t = tr.ex.trade
     await tr.ex.trade_markets(sym)
     if sym not in (t.markets or {}):
         return f"{sym} is not listed on the demo account"
-    no = await ks.gate(tr, f"probe {name}")
+    no = await ks.gate(tr, f"{what} {name}")
     return no["error"] if no else None
 
 
-async def _inside(tr, sym: str, name: str) -> str | None:
-    """Under the symbol's lock: the state again, the journal, then the exchange."""
+async def _inside(tr, sym: str, name: str, what: str = "probe") -> str | None:
+    """Under the symbol's lock (a drill: before its steps, each of which takes it): the state again, the journal, then
+    the exchange."""
     from .entries import EntryDesk
     from .entry_intents import ON_BOOK
-    if no := ks.state_refusal(tr.j, f"probe {name}"):
+    if no := ks.state_refusal(tr.j, f"{what} {name}"):
         return no["error"]
     if tr.j.active_trade(sym):
-        return f"{sym} has an open journal trade: probes never touch a symbol the desk uses"
+        return f"{sym} has an open journal trade: {what}s never touch a symbol the desk uses"
     if EntryDesk(tr)._rows(f"{ON_BOOK} AND symbol=?", (sym,)):
-        return f"{sym} has resting entries (or sends of unknown outcome) in the journal: probes need a clean symbol"
+        return f"{sym} has resting entries (or sends of unknown outcome) in the journal: {what}s need a clean symbol"
     if pos := await tr.position(sym):
-        return f"{sym} has a position on the exchange ({pos.get('contracts')}): probes need a clean symbol"
+        return f"{sym} has a position on the exchange ({pos.get('contracts')}): {what}s need a clean symbol"
     reg = await tr.t.fetch_open_orders(sym)
     alg = await tr.t.fetch_open_orders(sym, params=kit.TRIG)
     if reg or alg:
-        return f"{sym} has {len(reg)} open order(s) and {len(alg)} conditional order(s): probes need a clean symbol"
+        return f"{sym} has {len(reg)} open order(s) and {len(alg)} conditional order(s): {what}s need a clean symbol"
     return None
 
 

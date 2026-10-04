@@ -2,13 +2,13 @@
 label, time, the raw answer (a ccxt order or position keeps its unified essentials and Binance's own `info`), or the
 error class and Binance code. Orders carry probe client ids (sb-x<number><base>-<nonce>, clientid.KINDS) and are
 remembered, so the cleanup cancels what the probe placed. Sizes are the symbol's minimum: MIN_NOTIONAL x 1.05 at the
-last price on the step grid (reduce-only orders are exempt from MIN_NOTIONAL, so a stop for the position fits too)."""
+last price on the step grid (steps.min_size; reduce-only orders are exempt from MIN_NOTIONAL, so a stop for the position
+fits too)."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +16,7 @@ from typing import Any
 from . import clientid, errors
 from . import killswitch as ks
 from .exchange import to_raw
+from .steps import min_size
 from .stops import is_close_position
 
 LEVERAGE = 2
@@ -111,12 +112,8 @@ class Probe:
     # ------------------------------------------------------------ sizes and prices
     async def setup(self) -> None:
         tk = await self.need("ticker", self.t.fetch_ticker, self.sym)
-        m = self.t.market(self.sym)
-        self.price, self.tick = float(tk["last"]), float(m["precision"]["price"])
-        step = float(m["precision"]["amount"])
-        min_cost = float(((m.get("limits") or {}).get("cost") or {}).get("min") or 5.0)
-        steps = math.ceil(round(min_cost * 1.05 / self.price / step, 6))
-        self.qty = float(self.t.amount_to_precision(self.sym, steps * step))
+        self.price, self.tick = float(tk["last"]), float(self.t.market(self.sym)["precision"]["price"])
+        self.qty = min_size(self.t, self.sym, self.price)
 
     def px(self, pct: float) -> float:
         return float(self.t.price_to_precision(self.sym, self.price * (1 + pct / 100)))

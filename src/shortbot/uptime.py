@@ -108,8 +108,8 @@ def uptime_since(j: Any) -> str | None:
 
 
 def gaps(j: Any, since: str | None = None) -> list[dict[str, Any]]:
-    """This mode's gaps that end after `since` (ISO UTC; None: all), oldest first."""
-    rows: list[dict[str, Any]] = j._rows("SELECT * FROM guardian_gaps WHERE mode=? AND end_at > ? ORDER BY end_at",
+    """This mode's gaps that end at or after `since` (ISO UTC, to the second; None: all), oldest first."""
+    rows: list[dict[str, Any]] = j._rows("SELECT * FROM guardian_gaps WHERE mode=? AND end_at >= ? ORDER BY end_at",
                                          (j.mode, since or ""))
     return rows
 

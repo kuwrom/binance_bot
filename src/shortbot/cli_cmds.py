@@ -1,12 +1,12 @@
 """CLI-only commands (commands.py declarations, no MCP tool): the session brief, studies, the pattern registry, the
-macro calendar, exchange probes, the audit view, backups and the SessionStart hook."""
+macro calendar, exchange probes, plumbing drills, the audit view, backups and the SessionStart hook."""
 
 from __future__ import annotations
 
 import sys
 from typing import Any
 
-from . import audit_view, backup, probes
+from . import audit_view, backup, drill_log, probes
 from .app import get_app
 from .cli_brief import brief as session_brief
 from .commands import Arg, command
@@ -121,6 +121,27 @@ async def probe(name: str | None = None, symbol: str = probes.DEFAULT_SYMBOL, al
     if not name:
         return {"ok": False, "error": f"name a probe ({', '.join(probes.ORDER)}) or pass --all"}
     return await probes.run(tr, name, symbol)
+
+
+@command(mcp=False, cli="drill", weight=PROTECTIVE, help="DEMO only: a plumbing drill through the desk's real "
+         "commands, journalled (drill_result): kill-switch [--verify] | restart --phase before|after (the guardian "
+         "is stopped >= 11 min, the watchdog run and the guardian started BY HAND between them: deploy/DEPLOY.md §7a) "
+         "| attest backup-offbox --evidence TEXT | status", args=(
+    Arg("name", choices=("kill-switch", "restart", "attest", "status")),
+    Arg("what", nargs="?", choices=drill_log.ATTESTS, help="attest: the drill the owner ran off the desk"),
+    Arg("phase", "--phase", "restart: before, then after", choices=("before", "after")),
+    Arg("verify", "--verify", "kill-switch: after the owner's shortbot-admin clear, record the pass"),
+    Arg("symbol", "--symbol", "the drill short's perp (clean: no trade, entry, position or order)"),
+    Arg("second", "--second", "the far resting entry's perp (clean)"),
+    Arg("evidence", "--evidence", "attest: what was restored, from where, what was checked"),
+    Arg("wait_min", "--wait-min", "restart after: wait at most this long for the guardian (<= 15)")))
+async def drill(name: str, what: str | None = None, phase: str | None = None, verify: bool = False,
+                symbol: str = "XRPUSDT", second: str = "ADAUSDT", evidence: str | None = None,
+                wait_min: float = 15.0) -> dict[str, Any]:
+    """Not an intent: each step submits the real command's intent itself (an intent never submits another), actor
+    cli:drill:<name>, through the gateway when SHORTBOT_GATEWAY is on (drill.py)."""
+    from . import drill as drills
+    return await drills.run(get_app(), name, what, phase, verify, symbol, second, evidence, wait_min)
 
 
 @command(mcp=False, cli="audit", help="who did what: decisions and tool/CLI calls with actor, Claude session, code",
