@@ -45,6 +45,9 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | 8 | hack_exploit_short | short | NY Fed: -27% 24h CAR |
 | 9 | premium_index_reversion, funding_interval_switch | both | same code path as premium_hi / squeeze_exhaustion |
 | 10 | oi_price_funding_regime | both | **tested**: long-trap short has a relative edge (+0.10R vs placebo, t 1.7); squeeze-fuel long +0.34R (n 49): shadow-log both. ls_ratio_taker_contrarian and crowded_long_unwind_short failed |
+| 11 | vpin_toxicity_squeeze_veto, sadf_lppls_bubble_short | short vetoes | repo study 2026-10-04: aimed straight at the measured squeeze tail (pump shorts win at the median, lose on re-pumps); test as vetoes on pump_fade vs a same-rate random veto |
+| 12 | alt_index_trend_ewmac | gate / both | repo study (Carver): a continuous market-trend forecast to replace the binary BTC 60-day gate, shared by both sleeves |
+| 13 | xs_low_vol_perps, skew_premium_xs, smooth_momentum_rsqr | neutral factors | repo study: feature-level evidence only (low-vol IC -0.04 on 19 perps; equities papers); cheap from stored klines, but the ML4T crypto case study failed its holdout: pre-register at 24h+ |
 
 ## New evidence for existing setups
 - **listing_fade / exchange_listing_pump:** 2025 listings held from day-1 close to 11-Mar-2026 lost about 70% (Binance n=92 -71.7%, Upbit n=59 -69.5%, Bithumb n=144 -69.1%). H2-2025 cohorts decayed less (https://www.odaily.news/en/post/5209720). Listing-day abnormal return was +5.7% across 327 listings, +17.5% on Binance (BRL 2019). The cause is that MM inventory hedges, discount buyers and unlocks all sit on the sell side (supply_overhang_short).
@@ -68,9 +71,13 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | carry_momo_breakout_blend | both | cross-sectional | Practitioner-data | Med | trend_factors.md |
 | cs_momentum_large_caps | both | cross-sectional | Peer-reviewed | Med | trend_factors.md |
 | daily_reversal_illiquid_momentum_liquid | both | cross-sectional | Peer-reviewed | High | trend_factors.md |
+| pv_corr_reversal | both | cross-sectional | Working-paper | Med | trend_factors.md |
+| smooth_momentum_rsqr | both | cross-sectional | Peer-reviewed | Med | trend_factors.md |
+| xs_low_vol_perps | both | cross-sectional | Single-source | Med | trend_factors.md |
 | forced_flow_crowding_sizing | both | event/supply | Practitioner-data | Med | short_and_overlays.md |
 | venue_dislocation_fade | both | event/supply | Practitioner-data | Low | carry_neutral.md |
 | dislocation_capture | both | microstructure | Practitioner-data | Med | long_side.md |
+| dollar_bar_hurst_vpin_trend | both | microstructure | Anecdote | Low | short_and_overlays.md |
 | funding_settlement_drift | both | microstructure | Single-source | Med | short_and_overlays.md |
 | liquidation_magnet | both | microstructure | Anecdote | Low | short_and_overlays.md |
 | liquidation_wick_harvest | both | microstructure | Practitioner-data | High | short_and_overlays.md |
@@ -78,11 +85,15 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | oi_price_funding_regime | both | microstructure | Practitioner-data | Med | short_and_overlays.md |
 | orderbook_imbalance_l2 | both | microstructure | Working-paper | Low | short_and_overlays.md |
 | reversal_15m_flow_execution | both | microstructure | Working-paper | Med | short_and_overlays.md |
+| vpin_toxicity_squeeze_veto | both | microstructure | Single-source | High | short_and_overlays.md |
 | cme_gap_fill | both | other | Anecdote | Low | short_and_overlays.md |
 | intraday_hour_seasonality | both | other | Practitioner-data | Low | short_and_overlays.md |
 | llm_discretionary_perps | both | other | Practitioner-data | Low | short_and_overlays.md |
+| ewmac_wings_fade | both | stat-arb | Anecdote | Low | short_and_overlays.md |
 | premium_index_reversion | both | stat-arb | Working-paper | Med | long_side.md |
+| alt_index_trend_ewmac | both | trend | Single-source | High | trend_factors.md |
 | alt_momentum_burst | both | trend | Single-source | Med | trend_factors.md |
+| ewmac_acceleration | both | trend | Single-source | Med | trend_factors.md |
 | intraday_tsmom_btc | both | trend | Peer-reviewed | Low | trend_factors.md |
 | tsmom_trend_following | both | trend | Peer-reviewed | High | trend_factors.md |
 | investor_base_vol_sizing | both | volatility | Working-paper | Low | short_and_overlays.md |
@@ -103,6 +114,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | breakout_20d_overlay | long | trend | Practitioner-data | Med | trend_factors.md |
 | ctrend_technical_aggregate | long | trend | Peer-reviewed | Low | trend_factors.md |
 | high_funding_trend_confirm | long | trend | Practitioner-data | High | long_side.md |
+| squeeze_convexity_trend_hedge | long | trend | Single-source | Med | trend_factors.md |
 | oversold_bounce_majors | long | volatility | Anecdote | High | long_side.md |
 | coinm_usdm_funding_spread | neutral | carry | Single-source | Low | carry_neutral.md |
 | funding_cash_carry | neutral | carry | Practitioner-data | Med | carry_neutral.md |
@@ -112,6 +124,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | xs_funding_carry_basket | neutral | carry | Practitioner-data | Med | carry_neutral.md |
 | beta_hedged_rs_pair | neutral | cross-sectional | Working-paper | Med | trend_factors.md |
 | dollar_neutral_factor_book | neutral | cross-sectional | Practitioner-data | Med | trend_factors.md |
+| skew_premium_xs | neutral | cross-sectional | Single-source | Med | trend_factors.md |
 | listing_basis_arb | neutral | event/supply | Single-source | Med | carry_neutral.md |
 | market_making_rebates | neutral | market-making | Practitioner-data | Low | carry_neutral.md |
 | range_grid_neutral | neutral | market-making | Anecdote | Low | carry_neutral.md |
@@ -120,6 +133,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | adr_local_perp_triangle | neutral | stat-arb | Anecdote | Low | carry_neutral.md |
 | cross_venue_spread_arb | neutral | stat-arb | Single-source | Low | carry_neutral.md |
 | pairs_copula_cointegration | neutral | stat-arb | Working-paper | Med | carry_neutral.md |
+| peer_divergence_reversal | neutral | stat-arb | Peer-reviewed | Med | carry_neutral.md |
 | perp_spot_basis_convergence | neutral | stat-arb | Working-paper | Med | carry_neutral.md |
 | short_vol_options | neutral | volatility | Single-source | Low | carry_neutral.md |
 | high_funding_squeeze_veto | short | carry | Practitioner-data | Low | short_and_overlays.md |
@@ -131,4 +145,5 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 | supply_overhang_short | short | event/supply | Practitioner-data | High | short_and_overlays.md |
 | upbit_warning_short | short | event/supply | Anecdote | Med | short_and_overlays.md |
 | crowded_long_unwind_short | short | microstructure | Practitioner-data | Low | short_and_overlays.md |
+| sadf_lppls_bubble_short | short | other | Single-source | High | short_and_overlays.md |
 | cross_exchange_premium_sentiment | short | stat-arb | Peer-reviewed | Med | short_and_overlays.md |

@@ -80,7 +80,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: over-levered longs pay funding and sit on liquidation clusters; a shock forces sales that feed on themselves (10 Oct: 87% of $19.3bn liquidated were longs, $7bn in < 1h)
 - rules: *(proposed)* funding > 0.05%/8h for >= 3 prints AND OI +20% in 7d AND price stalls (4h lower high); enter on a break of the 4h swing low; stop above the swing high; target the prior volume node; time stop 3 days; bank 50% on the first > 2 ATR move (ADL risk)
 - data needed: funding, OI hist, long/short ratios, taker ratio: Binance public (archive via data.binance.vision metrics)
-- evidence: 10-Oct structure (https://insights4vc.substack.com/p/inside-the-19b-flash-crash). own 60-day backtest 2026-07-27 to 09-29 (`run --days60 --flow`, docs/BACKTEST.md "Positioning cards"): last 3 prints >= 0.05%/8h, OI +20% / +40% over 7 days, 4h lower high, break of the 4-bar low: 87 / 63 trades, -0.20 / -0.24R, paired -0.04 / -0.28 (t -0.2 / -1.8), stress -0.24 / -0.27. Fails. With the regime studies (high funding is trend-on, a coin's own funding has no edge), crowded longs in this form are not a short signal
+- evidence: 10-Oct structure (https://insights4vc.substack.com/p/inside-the-19b-flash-crash). own 60-day backtest 2026-07-27 to 09-29 (`run --days60 --flow`, docs/BACKTEST.md "Positioning cards"): last 3 prints >= 0.05%/8h, OI +20% / +40% over 7 days, 4h lower high, break of the 4-bar low: 87 / 63 trades, -0.20 / -0.24R, paired -0.04 / -0.28 (t -0.2 / -1.8), stress -0.24 / -0.27. Fails. With the regime studies (high funding is trend-on, a coin's own funding has no edge), crowded longs in this form are not a short signal **Repo study 2026-10-04 (negative, out of sample):** Jansen's Binance-perps case study ranked 19 perps every 8h on premium, funding and volatility. The chosen setup (1 of 2,807 candidates) had a validation Sharpe of 1.67 (PSR p 0.005), but a Deflated Sharpe below 0 under every trial count, then a 2024-25 holdout Sharpe of -0.83 (CAGR -45%, max DD -82%); execution costs ran more than 4x the funding earned (learning-repos/machine-learning-for-trading/case_studies/crypto_perps_funding (Jansen, MIT)).
 - grade: Practitioner-data
 - risks: crowded longs stay crowded for weeks; squeezes on low float; the winning short gets ADL'd in the very cascade it predicted
 - fit: Low — tested and failed (above); keep only as context in plans
@@ -91,7 +91,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: index adds/deletes, delistings, listings and unlocks force trades on known dates; pods and MMs harvest them, so the edge is real but crowded
 - rules: keep using the delisting/listing/unlock playbooks; enter after the announcement shock fades, exit before the forced date; cap per-event risk below normal
 - data needed: exchangeInfo deliveryDate/onboardDate, announcements, unlock calendars
-- evidence: Millennium lost ~$900m on index add/delete bets in Feb-2025 (-1.3%, its worst month in 6+ years) despite best-in-class risk limits (https://www.hedgeweek.com/millennium-posts-rare-monthly-loss-amid-index-rebalancing-trades/)
+- evidence: Millennium lost ~$900m on index add/delete bets in Feb-2025 (-1.3%, its worst month in 6+ years) despite best-in-class risk limits (https://www.hedgeweek.com/millennium-posts-rare-monthly-loss-amid-index-rebalancing-trades/) **Repo study 2026-10-04:** sizing choice alone moved crypto Sharpe by 0.908 across six allocators in Jansen's case studies: count sizing variants as trials.
 - grade: Practitioner-data
 - risks: everyone sees the same calendar; squeezes into delivery
 - fit: Med — a sizing rule for setups we already run
@@ -104,7 +104,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: small trend-chasers bid for leveraged longs while arbitrage capital is scarce; extreme carry marks crowded, fragile longs, and crashes follow
 - rules: daily OI-weighted annualised funding/basis on BTC+ETH (and an alt aggregate); top decile (funding > 0.03%/8h for days, or quarterly basis > 20-25% ann.) -> allow larger short exposure on high-beta alts and cut longs; low or negative carry -> cut new shorts, long bias. Use for sizing and stops, not timing
 - data needed: funding, premiumIndex, delivery prices: Binance public
-- evidence: BTC/ETH futures carry averages > 10% a year and peaks near 60%; high carry predicts future crashes, more negative skew and costlier crash insurance; a $1 rise in basis predicts ~$5 lower spot to maturity; +10% carry predicts +44% (of OI) more sell-side liquidations next month (Schmeling-Schrimpf-Todorov, BIS WP 1087, https://www.bis.org/publ/work1087.htm). **REFUTED on Binance perps 2020-07 to 2026-08 (own study, docs/REGIME_STUDIES.md, task #12):** with BTC/ETH carry in its top quintile, the alt basket short over 7 days did 4.4% WORSE than other days (Newey-West t -3.1, same sign in 4 of 5 years), 30-day alt crashes (basket <= -25%) were LESS frequent (12.5% vs 24.0%, t -1.9), and top-gainer fades showed no regime effect (|t| < 1.3). High carry is trend-on here, not crash risk; see high_funding_trend_confirm
+- evidence: BTC/ETH futures carry averages > 10% a year and peaks near 60%; high carry predicts future crashes, more negative skew and costlier crash insurance; a $1 rise in basis predicts ~$5 lower spot to maturity; +10% carry predicts +44% (of OI) more sell-side liquidations next month (Schmeling-Schrimpf-Todorov, BIS WP 1087, https://www.bis.org/publ/work1087.htm). **REFUTED on Binance perps 2020-07 to 2026-08 (own study, docs/REGIME_STUDIES.md, task #12):** with BTC/ETH carry in its top quintile, the alt basket short over 7 days did 4.4% WORSE than other days (Newey-West t -3.1, same sign in 4 of 5 years), 30-day alt crashes (basket <= -25%) were LESS frequent (12.5% vs 24.0%, t -1.9), and top-gainer fades showed no regime effect (|t| < 1.3). High carry is trend-on here, not crash risk; see high_funding_trend_confirm **Repo study 2026-10-04:** the same panel's regime split: premium effect ~10x larger in high volatility, t -1.56, not significant (learning-repos/machine-learning-for-trading/case_studies/crypto_perps_funding (Jansen, MIT)).
 - grade: Working-paper
 - risks: carry stays high for months in bull runs; monthly horizon; Ethena-scale capital may cap future extremes
 - fit: Low — retired as stated (the opposite holds on our venue); the evidence moved to high_funding_trend_confirm
@@ -115,7 +115,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: rising carry predicts more short-side liquidations and higher volatility before any crash
 - rules: if a coin's funding or basis is top-decile AND rising over 24-72h, halve size or require a confirmed lower high, and widen stops
 - data needed: funding, OI, klines: Binance public
-- evidence: BIS WP 1087 (above); retail crypto traders chase momentum (Kogan et al. JFE 2024, https://doi.org/10.1016/j.jfineco.2024.103897). Own study (task #13, 21k events, 2020-2026): a coin's funding >= 0.05% or 0.10% per 8h has NO short edge against same-class peers over the same window, in any class (majors, pumped alts, other alts), raw or after a breakdown, at 1/3/7 days: 36 cells, none 'avoid', best |t| 2.24 (chance level for 36 trials)
+- evidence: BIS WP 1087 (above); retail crypto traders chase momentum (Kogan et al. JFE 2024, https://doi.org/10.1016/j.jfineco.2024.103897). Own study (task #13, 21k events, 2020-2026): a coin's funding >= 0.05% or 0.10% per 8h has NO short edge against same-class peers over the same window, in any class (majors, pumped alts, other alts), raw or after a breakdown, at 1/3/7 days: 36 cells, none 'avoid', best |t| 2.24 (chance level for 36 trials) **Repo study 2026-10-04:** in Jansen's Binance-perps panel the premium effect was ~10x larger in high-volatility regimes (-0.0024 vs +0.0002 per z-unit) but not significant (t -1.56) (learning-repos/machine-learning-for-trading/case_studies/crypto_perps_funding (Jansen, MIT), 04_dml_crypto_regime).
 - grade: Practitioner-data
 - risks: may veto the best crash shorts; the market-level effect is the aggregate-carry regime, not the coin's own funding
 - fit: Low — no coin-level evidence; keep coin funding as a flag (funding budget, tailwind), use the aggregate-carry rule in high_funding_trend_confirm for sizing
@@ -222,7 +222,7 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: new, less-informed holders trade noisily
 - rules: if a coin's community/follower growth spikes, cut size or widen stops in proportion to expected vol
 - data needed: Reddit/X follower counts: not Binance
-- evidence: 355 coins Jan-2014 to Jul-2022: subreddit follower growth significantly raises idiosyncratic vol (https://arxiv.org/abs/2211.13274)
+- evidence: 355 coins Jan-2014 to Jul-2022: subreddit follower growth significantly raises idiosyncratic vol (https://arxiv.org/abs/2211.13274) **Repo study 2026-10-04:** in Jansen's nine case studies, crypto had the largest spread between allocators: 0.908 Sharpe between the best and worst of six sizing methods. Sizing choices are trials too and must count toward N.
 - grade: Working-paper
 - risks: vol, not direction; social data access
 - fit: Low — marginal over realised-vol sizing
@@ -257,7 +257,51 @@ Most are features or vetoes for existing setups rather than new setups.
 - mechanism: none identified: no price-insensitive counterparty, and LLMs are weak on numeric time series
 - rules: Nof1 Alpha Arena: $10k per model, Hyperliquid perps, identical prompts and data, autonomous decisions
 - data needed: n/a
-- evidence: Season 1 (Oct-Nov 2025): 2 of 6 models positive (+22%, +5%), 4 lost 31-63%; Season 1.5: 6 of 32 accounts positive, -35% overall, and the S1 winner lost in all 4 runs; the S1 winner made ~43 trades (< 3/day) (https://www.iweaver.ai/blog/alpha-arena-ai-trading-season-1-results/, https://github.com/josejuarez96/tradepartner/pull/233)
+- evidence: Season 1 (Oct-Nov 2025): 2 of 6 models positive (+22%, +5%), 4 lost 31-63%; Season 1.5: 6 of 32 accounts positive, -35% overall, and the S1 winner lost in all 4 runs; the S1 winner made ~43 trades (< 3/day) (https://www.iweaver.ai/blog/alpha-arena-ai-trading-season-1-results/, https://github.com/josejuarez96/tradepartner/pull/233) **Repo study 2026-10-04:** Microsoft's RD-Agent(Q) (an LLM factor/model research loop, NeurIPS 2025) claims ~2x annualised return over factor libraries for under $10; those are the authors' numbers on CSI300 over one fixed test window, accepted by LLM judgement without significance tests (learning-repos/RD-Agent).
 - grade: Practitioner-data
 - risks: overtrading, fees, rank instability
 - fit: Low — evidence against AI judgement as the alpha source. Keep the LLM on research, ops and executing explicit rule-based signals (this argues for rules, not for approval gates)
+
+### sadf_lppls_bubble_short — Short after the explosive regime ends (SADF timing)
+- direction: short
+- family: other
+- mechanism: a pump is an explosive price path; shorting while it is still explosive is where squeezes happen. A supremum ADF (SADF) test flags the explosive root while it is live; shorting the first breakdown after SADF falls back under its critical value targets the decay and skips the squeeze tail our pump shorts suffer
+- rules: 1h log closes; SADF on a rolling 30-day window (min window 48 bars, 1 lag), critical values simulated per coin under a random-walk null; bubble = SADF above the 95% critical value for >= 6h; short at the first 1h close where SADF is back below it AND the close is under the prior 6h low; stop at the bubble high + 0.5 ATR(1h); exit at a 50% retrace of the bubble leg or 72h. Variant: also require the LPPLS critical time within +-12h. Placebo: same-hour pump_fade entries without the SADF condition
+- data needed: 1h klines: Binance public (data.binance.vision, our stream store)
+- evidence: method only, no crypto result. SADF from López de Prado, AFML ch. 17 (mlfinlab's API lists it: learning-repos/mlfinlab), Phillips-Shi-Yu explosive-root tests; LPPLS from Sornette's bubble work (the lppls package in awesome-quant). Unverified on crypto (repo study 2026-10-04, docs/QUANT_METHODS.md 'What the repos taught')
+- grade: Single-source
+- risks: critical values are sensitive to window and fat tails; re-ignition (a re-pump is the tail itself); LPPLS is over-parameterised; compute per coin-hour
+- fit: High — free data, aimed straight at the measured squeeze tail; runs as a pump_fade timing veto in the existing card harness
+
+### vpin_toxicity_squeeze_veto — Order-flow toxicity veto for pump shorts
+- direction: both
+- family: microstructure
+- mechanism: persistently one-sided aggressive buying (informed or forced short-covering) keeps pushing price and shows as high VPIN and a rising Kyle's lambda (impact per signed volume); fading it is where squeezes come from. Toxicity falling off a peak marks exhaustion
+- rules: volume buckets = 1/50 of the coin's daily volume from 1m taker-buy volume (Binance gives the true aggressor side); VPIN = mean |buy - sell| / bucket volume over 50 buckets; lambda = slope of 5m returns on signed taker volume over 24h. On pump_fade candidates: veto while VPIN is above the coin's own 30-day 0.9 quantile and lambda is rising; allow entry only after VPIN falls below the 0.7 quantile from a peak above 0.9. Compare vetoed vs allowed R against a random veto at the same rate, a plain volume-surge veto and an |return| veto
+- data needed: 1m klines with taker-buy volume (our stream store); aggTrades for exact buckets: Binance public
+- evidence: method only, no crypto result: VPIN from Easley, López de Prado and O'Hara (2012); its predictive power is disputed (Andersen and Bondarenko 2014). Implementations: mlfinlab's API (get_vpin; AFML ch. 19), orderflow-metrics (awesome-quant), a NautilusTrader example (hurst_vpin_directional). ML4T ch. 3/8 has Kyle's lambda and Roll / Corwin-Schultz spreads (repo study 2026-10-04, docs/QUANT_METHODS.md 'What the repos taught')
+- grade: Single-source
+- risks: VPIN may only proxy volume and volatility, so it must beat those controls; the veto may shrink the sample without moving the mean
+- fit: High — the data is already streamed and it attacks squeezes directly
+
+### dollar_bar_hurst_vpin_trend — Hurst trending regime plus VPIN flow on dollar bars
+- direction: both
+- family: microstructure
+- mechanism: informed order flow is persistent: when the rescaled-range Hurst exponent of dollar-bar returns says trending and VPIN says aggressor flow is one-sided, price continues in the flow's direction
+- rules: dollar bars of fixed notional; Hurst = R/S over 128 bars at lags 4/8/16/32; VPIN over 50 buckets, threshold 0.30; enter IOC in the direction of the signed imbalance when Hurst > 0.55 and VPIN >= 0.30 with a consistent sign; exit when Hurst < 0.50 or after 3,600 s
+- data needed: aggTrades with isBuyerMaker (Binance public) to build dollar bars
+- evidence: none: a template in NautilusTrader (crates/trading/src/examples/strategies/hurst_vpin_directional, LGPL-3), no backtest results. Our own hourly triggers failed against placebos, and this is faster still (repo study 2026-10-04, docs/QUANT_METHODS.md 'What the repos taught')
+- grade: Anecdote
+- risks: intraday trigger plus taker fees on every entry; VPIN correlates mechanically with volume and volatility; R/S Hurst on 128 points is noisy
+- fit: Low as a strategy; its two measures are better used as squeeze-risk features (vpin_toxicity_squeeze_veto)
+
+### ewmac_wings_fade — Fade 3-sigma fast trends
+- direction: both
+- family: stat-arb
+- mechanism: extreme short-horizon moves overshoot and then mean-revert
+- rules: E = EWMAC(4, 16) on 4h bars; s = expanding std of E (>= 500 observations); F = -E where |E| > 3s, else 0; time stop 3 days
+- data needed: klines: Binance public
+- evidence: Carver's mr_wings rule (rules/mr_wings.py); shipped but not in his live configuration, no statistics (learning-repos/pysystemtrade (Carver, GPL-3: formulas reimplemented, never copied), repo study 2026-10-04)
+- grade: Anecdote
+- risks: a systematic pump fade, so squeezes are its tail (which our shorts already suffer); fat tails make 3 sigma common
+- fit: Low — only as a sizing input to pump_fade, not a standalone sleeve

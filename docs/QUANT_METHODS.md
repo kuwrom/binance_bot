@@ -95,7 +95,7 @@ Status: ✅ have · ◐ partial · ✗ missing. Fit: how much it would help this
 |---|---|---|
 | An LLM-driven research loop: propose a factor/model, implement, evaluate, keep or discard (RD-Agent(Q), NeurIPS 2025; its returns claims are the authors' own) | ◐ That is what this desk does, by hand-run sessions | Medium: RD-Agent's evaluate-and-archive loop is a pattern to borrow, with our trial register as the evaluator |
 
-## What to adopt, in order
+## What to adopt, in order (first pass; superseded by "Updated adoption order" below)
 Ordered by fit to what our own studies found, and by cost:
 1. **PBO via CSCV, plus SPA/StepM** on the trial register. It reuses the daily series already stored, and turns "nothing survives" into a measured overfitting probability. Implementation to learn from: arch's `SPA` / `StepM` / `MCS`; CSCV is in the paper above.
 2. **Transition matrices on our states, then an HMM market regime.** Estimate P(re-pump | post-pump state, timeframe states) from candidates and `mtf.db`. It attacks the short book's tail directly.
@@ -108,3 +108,109 @@ Ordered by fit to what our own studies found, and by cost:
 **Not for now:** deep learning, RL, options and volatility surfaces (no options venue), HFT market making, causal ML. Each would need data, infrastructure or a venue we don't have, and none addresses our measured problems.
 
 All of the above runs on the desk server's data (the guardian and journal moved to EC2 on 2026-10-03), so the studies belong in sessions there.
+
+## What the repos taught (study of 2026-10-04)
+Six agents read the cloned repos (`learning-repos/`, Mac only). The full reports, with file paths, are in `learning-repos/_study-2026-10-04/`. This section keeps what changes our plans. The 12 strategy cards it produced, and evidence for 15 existing cards, are in docs/strategies (see "Repo study 2026-10-04").
+
+### The cautionary tale: ML4T's own Binance-perps case study
+Jansen's `case_studies/crypto_perps_funding` ranked 19 perps every 8h on premium, funding and volatility. Of 2,807 candidates, the chosen setup had a validation Sharpe of 1.67 (PSR p 0.005, bootstrap CI excluding 0). Corrected for the 2,807 trials, its Deflated Sharpe was below 0. On the 2024-25 holdout: Sharpe −0.83, CAGR −45%, max drawdown −82%, with execution costs above 4× the funding earned. The trial register exists to catch exactly this.
+
+### Process and architecture to adopt
+1. **A forecast layer (Carver).**
+   - Today `signals/` add points into a 0-100 score. Signals on different scales dominate, correlated ones double-count, and nothing maps score to size.
+   - Instead, each plug-in also emits a signed raw forecast. Scale it to an average |F| of 10 and cap at ±20.
+   - Combine the forecasts with cluster weights (pump/froth, funding/OI, flow, lifecycle) times a forecast diversification multiplier.
+   - Size each plan's R by clip(F_c/10, 0, 2), and skip trades with small |F_c|.
+   - Adopt only if F_c deciles are monotone in realised R.
+2. **An LLM research loop with a deterministic gate** (RD-Agent's loop, not its acceptance rule).
+   - RD-Agent runs propose → implement → run → feedback → archive, keeping (experiment, feedback) pairs and an accepted-factor library.
+   - It accepts on an LLM's judgement of one fixed test window ("any small improvement should be considered"), with no significance or multiple-testing control.
+   - Ours: a hypotheses table in `trials.db`, a trace brief at session start, a novelty check on score correlation (~0.7), judgement by increment over the accepted set, and acceptance only through the register's statistics (DSR at effective N, clustered t, placebo rank).
+3. **A factor expression engine** (Qlib `data/ops.py`, MIT).
+   - Factors written as strings hash straight into the trial spec, so duplicates are caught exactly, and the agent proposes text rather than code.
+   - Each operator declares how far forward it reads, so look-ahead is rejected at parse time.
+4. **Count every sweep and deduplicate** (ML4T).
+   - Overlay, sizing and exit variants are trials too. Sizing alone moved crypto Sharpe by 0.908 across six allocators.
+   - Drop trials with identical return series before deflating (`uncertainty.py::_distinct_trials`).
+5. **A bias-check harness** (the idea of freqtrade's lookahead and recursive analysis, reimplemented since freqtrade is GPL-3).
+   - Recompute every feature on data truncated at each event and compare.
+   - Vary the warm-up length and compare the last row.
+   - Run it in CI over `signals/` and `mtf.py`.
+6. **Backtest realism.**
+   - Stop first when stop and target hit in the same bar (hummingbot does the opposite).
+   - Impact cost growing with (order size / bar volume)², plus volume caps and can't-trade masks (Qlib `backtest/exchange.py`).
+   - A fill model calibrated from our own fills.
+   - Purge horizon + 1 bars before each test window in rolling refits.
+7. **Per-coin protections** (freqtrade). The governor is account-level. Add a per-coin cooldown after a stop-out and a per-coin stop-loss guard (N stop-outs in a window lock the coin); a low-profit lock is optional.
+8. **Production habits.**
+   - Half-open circuit breakers: after a halt, let one observation through before resuming (ML4T ch. 26).
+   - Go-live thresholds declared in advance.
+   - Funding P&L reported apart from price P&L.
+   - Carver's 4-measure portfolio risk overlay above the governor. Each measure has a limit: EW-covariance σ ≤ 1.75τ; σ with every vol at its 99th percentile ≤ 4τ; Σ|w|σ ≤ 4τ; gross leverage ≤ 20. The shocked-vol measure prices the squeeze regime.
+
+### Formulas to reimplement (Carver; never copied, pysystemtrade is GPL)
+- **Forecast scalar:** k = 10 / mean_t(median_i |F_raw|), pooled and expanding, at least 500 observations; F = clip(k·F_raw, ±20).
+- **Combination:** F_c = clip(FDM · Σ w_j F_j, ±20). FDM = min(1/√(wᵀHw), 2.5), where H is the correlation of the forecasts (weekly, negatives floored at 0), smoothed by an EWMA of span 125.
+- **Vol target:** N = (capital·τ/√365) / (price·σ_daily) · F_c/10. Half compounding shrinks capital with losses but never grows it with gains.
+- **Portfolio:** P = N · w · IDM · risk_scalar. IDM uses the same formula as the FDM, on the correlation of subsystem returns.
+- **Buffer:** B = 10% of the position at F = 10. Trade only when the position leaves [P − B, P + B], and then only to the edge.
+- **Speed limit:** a rule's cost in SR units = turnover × cost per trade + holding cost (for us, funding). Drop rules above 0.13 SR/yr. Carver's own Bitcoin weights zero out every fast rule for this reason.
+- **Long sleeve:** F = mean(continuous 20-day breakout, RS-vs-BTC relmomentum) × alt_index_trend_ewmac, with w = 1/n and IDM from 60-day coin correlations. Stop-R from `risk_budget.py` stays a hard cap. Backtest it against fixed-R sizing on the same trades.
+
+### Validation traps found by reading the code
+- **arch SPA/StepM/MCS** (`arch/bootstrap/multiple_comparison.py`) take losses, so pass −returns. `studentize` only changes a label: `SPA.compute()` never divides by the standard deviations, so the most volatile strategy dominates. Feed unit-volatility series or write our own studentized version.
+- **skfolio CombinatorialPurgedCV** purges a fixed number of rows. Our variable-horizon triple-barrier labels need purging by each label's end time, which we write ourselves.
+- **hmmlearn `predict_proba`** returns smoothed probabilities that use future bars. Use statsmodels' Markov-switching filtered probabilities, or an expanding refit taking the last row.
+- **Machine-Learning-for-Asset-Managers** has bugs (`getTheta` divides by .4; `DataFrame.append`). Reference only.
+- **FreqAI's walk-forward** has no purge or embargo.
+- **The PBO recipe** (Bailey et al. 2015, verified in the paper):
+  1. Form a T × N matrix of daily P&L.
+  2. Split its rows into S blocks; S = 12 gives 924 splits.
+  3. For each half-split, take the in-sample best and its out-of-sample relative rank ω, and compute λ = ln(ω/(1 − ω)).
+  4. PBO = P(λ ≤ 0).
+  5. Also report the λ histogram, the IS-OOS degradation slope and P(OOS loss).
+
+### Licenses: what we may copy
+| repo | license | use |
+|---|---|---|
+| Qlib, RD-Agent, ML4T | MIT | copy with notice |
+| skfolio, Riskfolio-Lib, hmmlearn, ArbitrageLab | BSD-3 | copy with notice |
+| arch | NCSA | copy with notice |
+| alphalens, MLfAM, hummingbot | Apache-2.0 | copy with notice |
+| vectorbt | Apache-2.0 + Commons Clause | learn only (no selling) |
+| nautilus_trader | LGPL-3 | learn / reimplement |
+| freqtrade, pysystemtrade | GPL-3 (examples GPL-2) | learn / reimplement only |
+| mlfinlab | proprietary (public repo has no code) | method list only |
+
+**Dependency decision:**
+- Add `arch` as a research-only optional extra, never in the guardian image. It brings statsmodels, whose Markov-switching model gives forward-only regime probabilities.
+- Skip hmmlearn (limited maintenance), skfolio and Riskfolio.
+- Reimplement in numpy: PBO, BH-FDR, minimum backtest length, uniqueness weights, HAR, Ledoit-Wolf, denoising, HRP, ERC and CDaR (each under ~40 lines).
+
+### For the gateway (the gateway owner's area)
+From pysystemtrade's production layer and NautilusTrader's risk engine, ordered by value:
+1. A per-sleeve position table (short book, long sleeve) with an internal and an external position-break check. An external break locks the symbol until fixed, and the lock clears itself.
+2. A reference price and time on every intent. That makes TCA nearly free, split into delay, bid-ask and execution.
+3. Trade limits per N days, as a runaway-loop guard.
+4. Override algebra: no-trade > close > reduce-only > a product of scale factors.
+5. Typed pre-trade checks:
+   - a reduce-only order must not flip the position;
+   - margin is checked summed across tranches;
+   - order-count throttle.
+6. Handle triggered conditional orders explicitly.
+7. Treat a missing position report as unknown, not flat.
+
+One claim to verify before acting: the engines report says the user-data listenKey needs a keepalive every 30 min, while GATEWAY.md says 60. Check Binance's current futures docs.
+
+### Updated adoption order
+1. **PBO + SPA/StepM + BH-FDR + minimum backtest length**, plus deduplication of identical trials, on the register (#43).
+2. **Re-pump hazard and market regime** (#44):
+   - transitions of `tape_math.pump_state` recomputed hourly per coin (no look-ahead);
+   - statsmodels Markov-switching for the market regime;
+   - `alt_index_trend_ewmac` as the continuous gate.
+3. **Squeeze vetoes on pump_fade:** VPIN / Kyle's λ and SADF timing, each against a random veto at the same rate (cards vpin_toxicity_squeeze_veto, sadf_lppls_bubble_short).
+4. **The forecast layer and Carver sizing:** combination for the short book; vol targeting for the long sleeve.
+5. **Meta-labeling** with label-end-time purging and uniqueness weights (#45).
+6. **Bias-check harness and backtest realism** (same-bar stop first, impact, volume caps).
+7. **Per-coin cooldown and stop-loss guard.**
+8. **The research loop's deterministic gate and the expression engine.**
