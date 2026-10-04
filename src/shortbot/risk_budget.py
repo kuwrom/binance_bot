@@ -24,7 +24,7 @@ import statistics
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .book import book_guard, diversity_mult, measured_corr, n_eff, pending_book, slot_cap
 from .config import RiskLimits
@@ -32,6 +32,10 @@ from .entry_intents import external_orders
 from .governor import REGIME_MULT, GovInputs, govern
 from .signals.core import MAJORS
 from .tilts import cell_mult, conviction_mult, regime_cell
+
+if TYPE_CHECKING:
+    from .journal import Journal
+    from .trading import Trader
 
 _vol_cache: tuple[float, float, float, list[float]] | None = None  # (ts, vol_now, vol_target, btc daily closes)
 _dup_cache: dict[str, tuple[float, dict[str, float]]] = {}       # setup -> (ts, registry overlaps), 1h
@@ -72,11 +76,11 @@ def clip(x: float, lo: float, hi: float) -> float:
 def room_left_today(inp: BudgetInputs) -> float:
     """Today's daily-loss room once every open stop hits (open risk would hit the same daily cap): what a new trade's
     budget is capped at, and what a voluntary widen must fit (#74)."""
-    room = ((inp.gov or {}).get("daily") or {}).get("room_usd", float("inf"))   # no governor read: no daily cap
+    room: float = ((inp.gov or {}).get("daily") or {}).get("room_usd", float("inf"))   # no governor read: no cap
     return room - sum(inp.open_risks.values())
 
 
-async def room_today(trader, regime: str) -> dict[str, Any]:
+async def room_today(trader: Trader, regime: str) -> dict[str, Any]:
     """room_left_today from live inputs, with its parts and the governor's halt."""
     inp = await gather_inputs(trader, regime)
     open_risk = sum(inp.open_risks.values())
@@ -179,11 +183,11 @@ def btc_vol_now_and_target(daily_closes: list[float]) -> tuple[float | None, flo
     if len(daily_closes) < 60:
         return realized_vol(daily_closes[-31:]), None
     window = [realized_vol(daily_closes[i - 30:i + 1]) for i in range(30, len(daily_closes))]
-    window = [w for w in window[-365:] if w]
-    return window[-1], statistics.median(window)
+    vols = [w for w in window[-365:] if w]
+    return vols[-1], statistics.median(vols)
 
 
-def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> float:
+def track_day_peak(journal: Journal, day_pnl: float, now: datetime | None = None) -> float:
     """Highest day P&L seen today (the guardian calls this every minute; arms the give-back stop)."""
     key = journal.mode_key(f"day_peak:{(now or datetime.now(UTC)).date().isoformat()}")
     peak = max(float(journal.get(key) or 0.0), float(journal.pending(key) or 0.0), day_pnl)   # its own, queued (#82)
@@ -191,7 +195,7 @@ def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> floa
     return peak
 
 
-def _raise_day_peak(journal, key: str, day_pnl: float) -> None:
+def _raise_day_peak(journal: Journal, key: str, day_pnl: float) -> None:
     journal.set(key, str(max(float(journal.get(key) or 0.0), day_pnl)))
 
 
@@ -200,7 +204,7 @@ def quarter_start(now: datetime) -> str:
                        microsecond=0).isoformat()
 
 
-async def gather_inputs(trader, regime: str, positions: list[dict] | None = None,
+async def gather_inputs(trader: Trader, regime: str, positions: list[dict[str, Any]] | None = None,
                         setup: str | None = None, symbol: str | None = None,
                         limits: RiskLimits | None = None) -> BudgetInputs:
     """Live inputs: equity + tracked peak, BTC vol + regime cell (cached 1h), open risk per position at its
@@ -240,7 +244,10 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     qs = quarter_start(now)
     from .market.market_map import cached
     m = cached(trader.j, 900) or {}
-    sector_of = lambda s: ((m.get("coins") or {}).get(s) or {}).get("sector")  # noqa: E731
+
+    def sector_of(s: str) -> str | None:
+        return ((m.get("coins") or {}).get(s) or {}).get("sector")
+
     pend, pbook = pending_book(trader.j.db, symbol or "", getattr(trader.j, "mode", None))
     book = [{"symbol": p["symbol"], "setup": p.get("setup"), "kind": "open"} for p in pos] + pbook
     for b in book:
@@ -256,7 +263,7 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
                         list((m.get("vetoes") or {}).get("pause") or []), rho, ladder)
 
 
-def _ladder(journal, setup: str | None) -> dict[str, Any] | None:
+def _ladder(journal: Journal, setup: str | None) -> dict[str, Any] | None:
     """The setup's ladder, with its epoch = the setup's current registry version and the registry's >= 70% episode
     overlaps as roll-up candidates. A failure is reported, never silently treated as NORMAL."""
     if not setup:
@@ -276,7 +283,7 @@ def _ladder(journal, setup: str | None) -> dict[str, Any] | None:
         return _ladder_fallback(journal, setup, e)
 
 
-def _ladder_fallback(journal, setup: str, err: Exception) -> dict[str, Any]:
+def _ladder_fallback(journal: Journal, setup: str, err: Exception) -> dict[str, Any]:
     """The ladder could not be replayed: use the stop record frozen in kv. An unreleased stop -> 0 (SHADOW);
     otherwise 0.5, half size until the ladder reads again. Never full size on an unknown state."""
     try:
@@ -291,7 +298,7 @@ def _ladder_fallback(journal, setup: str, err: Exception) -> dict[str, Any]:
             "reasons": [f"setup ladder unavailable ({type(err).__name__}): {'stopped -> 0' if stopped else 'half size'}"]}
 
 
-async def governor_status(trader, regime: str, limits: RiskLimits | None = None) -> dict[str, Any]:
+async def governor_status(trader: Trader, regime: str, limits: RiskLimits | None = None) -> dict[str, Any]:
     """Account breakers + the evidence behind the tilts (streak test over all closed R), and `ladders`: each setup the
     setup ladder sizes down (HALF, SHADOW, UNKNOWN) with its multiplier and reasons (setup_ladder_view, cached)."""
     from .tilts import streak_test

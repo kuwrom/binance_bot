@@ -90,14 +90,17 @@ warn_unused_ignores = true
 module = ["ccxt", "ccxt.*", "feedparser", "mplfinance"]
 ignore_missing_imports = true
 
-# Strict tier: the safety-critical modules. `strict` is global-only, so these are its flags (`mypy --help`, 2.4).
-# Widen by adding a module here once it passes (next: clientid, order_ids, stops, killswitch*, risk*, entries_*).
+# Strict tier: the safety-critical modules, the order path among them. `strict` is global-only, so these are its
+# flags (`mypy --help`, 2.4). Widen by adding a module here once it passes.
 [[tool.mypy.overrides]]
 module = [
     "shortbot.errors", "shortbot.commands", "shortbot.weight", "shortbot.symlock", "shortbot.exposure",
     "shortbot.steps", "shortbot.trading_orders", "shortbot.stale_guard", "shortbot.journal_writer",
     "shortbot.wal_holder", "shortbot.results", "shortbot.gateway_wire", "shortbot.gateway_server",
-    "shortbot.gateway_client", "shortbot.gateway_health",
+    "shortbot.gateway_client", "shortbot.gateway_health", "shortbot.gateway", "shortbot.intents", "shortbot.resolver",
+    "shortbot.clientid", "shortbot.order_ids", "shortbot.stops", "shortbot.risk", "shortbot.risk_budget",
+    "shortbot.killswitch", "shortbot.killswitch_ops", "shortbot.killswitch_rearm", "shortbot.entries_place",
+    "shortbot.entries_amend", "shortbot.entries_cancel", "shortbot.entries_fills", "shortbot.entries_acts",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
@@ -111,8 +114,8 @@ no_implicit_reexport = true
 strict_equality = true
 extra_checks = true
 
-# Every other module is the lenient tier (mypy's defaults), except this debt list: the 106 modules with errors on
-# 0f0f45d (724 errors; 400 are mixins reading their host's attributes: declare them as trading_orders.OrderFlow does).
+# Every other module is the lenient tier (mypy's defaults), except this debt list: the modules with errors, 106 on
+# 0f0f45d (724 errors), 90 after #83 (276; a mixin declares its host's attributes, as trading_orders.OrderFlow does).
 # Remove a module once `mypy` passes without it; never add one.
 [[tool.mypy.overrides]]
 module = [
@@ -129,17 +132,15 @@ module = [
     "shortbot.cadence_shadow", "shortbot.charts", "shortbot.cli_cmds", "shortbot.cmd_kill", "shortbot.entries",
     "shortbot.entry_gates", "shortbot.entry_intents", "shortbot.exchange", "shortbot.fill_quality",
     "shortbot.fill_report", "shortbot.guardian", "shortbot.guardian_loop", "shortbot.histdaily", "shortbot.histdata",
-    "shortbot.histdata_rest", "shortbot.histdata_vision", "shortbot.killswitch", "shortbot.killswitch_ops",
-    "shortbot.killswitch_rearm", "shortbot.ladder", "shortbot.lifecycle_data", "shortbot.lifecycle_report",
-    "shortbot.lifecycle_study", "shortbot.margin", "shortbot.market.events", "shortbot.market.market_map",
-    "shortbot.market.regime", "shortbot.mcp_server", "shortbot.mtf", "shortbot.mtf_live", "shortbot.news",
-    "shortbot.notify", "shortbot.patterns_data", "shortbot.patterns_detect", "shortbot.positioning",
+    "shortbot.histdata_rest", "shortbot.histdata_vision", "shortbot.ladder", "shortbot.lifecycle_data",
+    "shortbot.lifecycle_report", "shortbot.lifecycle_study", "shortbot.margin", "shortbot.market.events",
+    "shortbot.market.market_map", "shortbot.market.regime", "shortbot.mcp_server", "shortbot.mtf", "shortbot.mtf_live",
+    "shortbot.news", "shortbot.notify", "shortbot.patterns_data", "shortbot.patterns_detect", "shortbot.positioning",
     "shortbot.probability.evaluate", "shortbot.probability.montecarlo", "shortbot.probe_stream",
     "shortbot.probe_trades", "shortbot.probes", "shortbot.procs", "shortbot.profile", "shortbot.read",
     "shortbot.reconcile", "shortbot.refresh", "shortbot.registry_forward", "shortbot.registry_seed",
-    "shortbot.research", "shortbot.research_stats", "shortbot.risk_budget", "shortbot.scan_tiered", "shortbot.scanner",
-    "shortbot.setup_ladder", "shortbot.setup_ladder_view", "shortbot.shadow_eval", "shortbot.signals.social",
-    "shortbot.signals.tape", "shortbot.stops", "shortbot.stream_task", "shortbot.sweeps", "shortbot.targets_sync",
-    "shortbot.trial_register", "shortbot.warmup"
+    "shortbot.research", "shortbot.research_stats", "shortbot.scan_tiered", "shortbot.scanner", "shortbot.setup_ladder",
+    "shortbot.setup_ladder_view", "shortbot.shadow_eval", "shortbot.signals.social", "shortbot.signals.tape",
+    "shortbot.stream_task", "shortbot.sweeps", "shortbot.targets_sync", "shortbot.trial_register", "shortbot.warmup"
 ]
 ignore_errors = true

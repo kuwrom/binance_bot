@@ -21,11 +21,16 @@ the guardian's restore or a full close."""
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, Protocol
 
 import ccxt.async_support as ccxt
 
 from . import clientid, errors
+
+if TYPE_CHECKING:
+    from .exchange import Exchanges
+    from .trading_orders import Order
 
 TRIG = {"trigger": True}
 STOP_TYPES = {"stop_market", "stop"}
@@ -33,7 +38,33 @@ BRIDGE = f"{clientid.PREFIX}-{clientid.KINDS['bridge']}"   # client id prefix of
 SETTLE_S = 20.0   # an interrupted swap gets this long to end with a closePosition stop
 
 
-def is_protective_stop(o: dict) -> bool:
+class StopDesk(Protocol):
+    """What these steps use of Trader (or of its flow that calls them: ManageFlow, OpenFlow)."""
+
+    @property
+    def ex(self) -> Exchanges: ...
+
+    @property
+    def t(self) -> Any: ...   # ccxt.binanceusdm: Any to mypy (ccxt ships no type information)
+
+    async def alert(self, kind: str, msg: str, symbol: str | None = None, urgent: bool = False) -> None: ...
+
+    async def position(self, symbol: str) -> dict[str, Any] | None: ...
+
+    async def find_stop(self, symbol: str, cid: str) -> dict[str, Any] | None: ...
+
+    async def place_close_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict[str, Any]: ...
+
+    async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> Order: ...
+
+    async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order: ...
+
+    async def close_market(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> Order: ...
+
+    async def flat_now(self, symbol: str) -> bool: ...
+
+
+def is_protective_stop(o: dict[str, Any]) -> bool:
     """Buy-side stop that closes/reduces the short. Take-profit orders don't count as protection."""
     info = o.get("info", {}) or {}
     # ccxt reports algo STOP_MARKET orders as type 'market' + triggerPrice; the real type is info.orderType
@@ -42,28 +73,28 @@ def is_protective_stop(o: dict) -> bool:
     return o.get("side") == "buy" and otype in STOP_TYPES and closes
 
 
-def is_close_position(o: dict) -> bool:
+def is_close_position(o: dict[str, Any]) -> bool:
     return str((o.get("info") or {}).get("closePosition", "")).lower() == "true"
 
 
-def is_bridge(o: dict) -> bool:
+def is_bridge(o: dict[str, Any]) -> bool:
     return str(o.get("clientOrderId") or "").startswith(BRIDGE)
 
 
-def trigger_of(o: dict) -> float:
+def trigger_of(o: dict[str, Any]) -> float:
     try:
-        return float(o.get("triggerPrice") or o.get("stopPrice") or (o.get("info") or {}).get("triggerPrice"))
+        return float(o.get("triggerPrice") or o.get("stopPrice") or (o.get("info") or {}).get("triggerPrice") or 0)
     except (TypeError, ValueError):
         return 0.0
 
 
-async def listed(tr, symbol: str) -> tuple[list[dict], list[dict]]:
+async def listed(tr: StopDesk, symbol: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(closePosition stops, bridges) resting on the symbol now."""
     orders = await tr.t.fetch_open_orders(symbol, params=TRIG)
     return [o for o in orders if is_close_position(o)], [o for o in orders if is_bridge(o)]
 
 
-async def _cancel(tr, symbol: str, ids) -> set[str]:
+async def _cancel(tr: StopDesk, symbol: str, ids: Iterable[str]) -> set[str]:
     """Cancel these conditional orders; returns the ids whose cancel is in doubt (a refusal, -1021, a timeout...).
     -2011 (OrderNotFound) means gone: triggered or cancelled already."""
     doubt = set()
@@ -80,7 +111,7 @@ async def _cancel(tr, symbol: str, ids) -> set[str]:
     return doubt
 
 
-async def _bridge(tr, symbol: str, stop: float, contracts: float) -> dict:
+async def _bridge(tr: StopDesk, symbol: str, stop: float, contracts: float) -> dict[str, Any]:
     """Step 1: a reduce-only STOP_MARKET for `contracts`, confirmed resting (its ack, or found by its client id after an
     ambiguous answer). Raises a refusal as is, or clientid.Unknown (a late landing is swept by the next change)."""
     from .trading import _sleep
@@ -102,7 +133,8 @@ async def _bridge(tr, symbol: str, stop: float, contracts: float) -> dict:
         raise clientid.Unknown(cid, e) from e
 
 
-async def set_stop(tr, symbol: str, new_stop: float, contracts: float, old: list[dict] | None = None) -> dict[str, Any]:
+async def set_stop(tr: StopDesk, symbol: str, new_stop: float, contracts: float,
+                   old: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Put this position's stop at new_stop. Run it inside tr.symbol_lock(symbol). `old`: the position's closePosition
     stops ({id, trigger}: Trader.stop_orders(close_position_only=True)); with none the stop is only placed (the
     guardian's restore, a first stop). Returns {"ok": True, "placed"}, {"ok": True, "closed": True} (price reached the
@@ -111,7 +143,8 @@ async def set_stop(tr, symbol: str, new_stop: float, contracts: float, old: list
     ids = {str(s["id"]) for s in old}
     cur = min((s["trigger"] for s in old), default=None)
     try:
-        res = await (_swap(tr, symbol, ids, cur, new_stop, contracts) if old else _first(tr, symbol, new_stop))
+        res = await (_swap(tr, symbol, ids, cur, new_stop, contracts) if cur is not None   # = old: triggers are floats
+                     else _first(tr, symbol, new_stop))
     except asyncio.CancelledError:   # a job timeout or shutdown mid-swap: end with a stop first
         try:
             async with asyncio.timeout(SETTLE_S):
@@ -122,7 +155,7 @@ async def set_stop(tr, symbol: str, new_stop: float, contracts: float, old: list
     return res if res.get("closed") else await _after(tr, symbol, res, ids)
 
 
-async def _first(tr, symbol: str, stop: float) -> dict[str, Any]:
+async def _first(tr: StopDesk, symbol: str, stop: float) -> dict[str, Any]:
     """No closePosition stop rests: place one, then sweep leftover bridges. A refusal is decided by the listing: a
     closePosition stop listed rests already (-4130, with or without its code)."""
     try:
@@ -142,7 +175,8 @@ async def _first(tr, symbol: str, stop: float) -> dict[str, Any]:
     return {"ok": True, "placed": placed}
 
 
-async def _swap(tr, symbol: str, ids: set[str], cur: float, new_stop: float, contracts: float) -> dict[str, Any]:
+async def _swap(tr: StopDesk, symbol: str, ids: set[str], cur: float, new_stop: float,
+                contracts: float) -> dict[str, Any]:
     _, leftover = await listed(tr, symbol)   # a dead swap's bridges: a closePosition stop rests, so they can go
     await _cancel(tr, symbol, [o["id"] for o in leftover])
     try:
@@ -179,8 +213,8 @@ async def _swap(tr, symbol: str, ids: set[str], cur: float, new_stop: float, con
     return {"ok": False, "error": f"stop move failed ({err}) and restoring {cur} failed: {kept}", "unprotected": True}
 
 
-async def _settle(tr, symbol: str, levels: list[float], stale: set[str], placed: bool, bridge: dict | None = None,
-                  contracts: float = 0.0) -> str:
+async def _settle(tr: StopDesk, symbol: str, levels: list[float], stale: set[str], placed: bool,
+                  bridge: dict[str, Any] | None = None, contracts: float = 0.0) -> str:
     """End state: a closePosition stop rests (`placed`, else one listed, else placed at the first of `levels` that
     works), one of them only (two, where Binance no longer refuses a second: the new one stays when it was placed, else
     the old `stale` one), and bridges go only once a closePosition stop rests.
@@ -207,7 +241,7 @@ async def _settle(tr, symbol: str, levels: list[float], stale: set[str], placed:
     return got
 
 
-async def drop_bridges(tr, symbol: str, bridges: list[dict]) -> None:
+async def drop_bridges(tr: StopDesk, symbol: str, bridges: list[dict[str, Any]]) -> None:
     """Cancel bridges once a closePosition stop rests. One left behind would buy back its size at its own level: before
     a widened stop, or on the next short once flat. A cancel in doubt is checked against the listing and sent again;
     one still resting after that is a human's to see (the guardian's pass sweeps it too)."""
@@ -224,7 +258,7 @@ async def drop_bridges(tr, symbol: str, bridges: list[dict]) -> None:
                        symbol, True)
 
 
-async def _naked(tr, symbol: str, bridges: list[dict], why: str, contracts: float) -> str:
+async def _naked(tr: StopDesk, symbol: str, bridges: list[dict[str, Any]], why: str, contracts: float) -> str:
     if bridges:
         await tr.alert("NAKED_POSITION", f"no closePosition stop ({why}): only the bridge stop at "
                        f"{min(trigger_of(b) for b in bridges):g} for {contracts:g} protects it (reduce-only: an add is "
@@ -237,7 +271,7 @@ async def _naked(tr, symbol: str, bridges: list[dict], why: str, contracts: floa
     raise RuntimeError(f"no stop rests on {symbol}: {why}")
 
 
-async def _crossed(tr, symbol: str, stop: float, stale: set[str]) -> dict[str, Any]:
+async def _crossed(tr: StopDesk, symbol: str, stop: float, stale: set[str]) -> dict[str, Any]:
     """Price is already at or past the stop being set: close now, as the stop would have."""
     pos = await tr.position(symbol)
     if pos:
@@ -247,7 +281,7 @@ async def _crossed(tr, symbol: str, stop: float, stale: set[str]) -> dict[str, A
     return {"ok": True, "closed": True, "reason": "price crossed the new stop while moving it"}
 
 
-async def strip_flat(tr, symbol: str) -> None:
+async def strip_flat(tr: StopDesk, symbol: str) -> None:
     """Flat: a closePosition stop or bridge left now would block (-4130) or cut the next short on the symbol. Resting
     entries' pre-arms stay: their limits may still fill. One that can't be listed or cancelled is told (the orphan
     sweep, orphans.py, cancels a bridge on a flat symbol; replace_stale swaps a stale closePosition stop)."""
@@ -262,7 +296,7 @@ async def strip_flat(tr, symbol: str) -> None:
                        False)
 
 
-async def _after(tr, symbol: str, res: dict[str, Any], stale: set[str]) -> dict[str, Any]:
+async def _after(tr: StopDesk, symbol: str, res: dict[str, Any], stale: set[str]) -> dict[str, Any]:
     """Re-read the position after a stop change: flat means a stop triggered meanwhile; LONG is a sign flip."""
     try:
         pos = await tr.position(symbol)
@@ -279,7 +313,7 @@ async def _after(tr, symbol: str, res: dict[str, Any], stale: set[str]) -> dict[
     return res
 
 
-async def replace_stale(tr, symbol: str, stop: float, contracts: float, e: Exception) -> dict:
+async def replace_stale(tr: StopDesk, symbol: str, stop: float, contracts: float, e: Exception) -> dict[str, Any]:
     """An entry's first stop was refused. The symbol was flat when the entry was sent (checked under the lock), so a
     closePosition stop listed now is stale, left by an earlier position, and a second is refused (-4130; the listing
     decides, not the code). It is swapped, make before break, to this entry's stop: one retry. Re-raises `e` when the
@@ -298,4 +332,5 @@ async def replace_stale(tr, symbol: str, stop: float, contracts: float, e: Excep
         raise RuntimeError(f"{e}; replacing the stale stop failed: {res.get('error') or res.get('reason')}") from e
     await tr.alert("stale_stop_replaced", f"a stale closePosition stop at {[trigger_of(o) for o in close]} refused "
                    f"this entry's stop ({e}): replaced by {px:g}", symbol, False)
-    return res["placed"]
+    placed: dict[str, Any] = res["placed"]   # set_stop's new closePosition stop
+    return placed

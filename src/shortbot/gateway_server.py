@@ -201,7 +201,7 @@ async def serve() -> int:
     from .app import close_app, get_app
     from .entries import EntryDesk
     app = get_app()
-    desk = EntryDesk(app.trader)  # type: ignore[no-untyped-call]  # entries.py is in the lenient tier
+    desk = EntryDesk(app.trader)
     srv = GatewayServer(app.journal, app.settings.mode, wire.socket_path(app.settings), desk)
     try:
         await srv.start()

@@ -46,6 +46,7 @@ from . import audit, clientid, errors
 from .procs import NS
 
 if TYPE_CHECKING:
+    from .journal import Journal
     from .results import Result
 
 OPEN = ("received", "running")
@@ -150,7 +151,8 @@ def dumps(obj: Any) -> str:
 
 
 # ------------------------------------------------------------ the row
-def receive(j, it: Intent, refused: Any = None, at: str | None = None, late: bool = False) -> dict[str, Any] | None:
+def receive(j: Journal, it: Intent, refused: Any = None, at: str | None = None,
+            late: bool = False) -> dict[str, Any] | None:
     """Journal `it` as received (or straight away as refused, with the caller's refusal as its result: nothing sent;
     or, late, as running since `at`: it ran without waiting for its row). None when it is new; the stored row when its
     id was journalled before (a resubmission: never run again)."""
@@ -169,7 +171,7 @@ def receive(j, it: Intent, refused: Any = None, at: str | None = None, late: boo
     return None if cur.rowcount == 1 else get(j, it.id)
 
 
-def start(j, intent_id: str, at: str | None = None) -> bool:
+def start(j: Journal, intent_id: str, at: str | None = None) -> bool:
     """received (or busy, run again) -> running. False: another caller started it first."""
     cur = j.db.execute("UPDATE intents SET status='running', started_at=? WHERE id=? AND status IN ('received','busy')",
                        (at or now_ms(), intent_id))
@@ -177,7 +179,7 @@ def start(j, intent_id: str, at: str | None = None) -> bool:
     return cur.rowcount == 1
 
 
-def finish(j, intent_id: str, r: Result, at: str | None = None) -> bool:
+def finish(j: Journal, intent_id: str, r: Result, at: str | None = None) -> bool:
     """running -> its result's status, with what was sent, today's result and the typed error. An intent the sweep
     ended while its owner was suspended takes the owner's answer: it is the truth."""
     tid = r.body.get("trade_id") if isinstance(r.body, dict) else None
@@ -191,7 +193,7 @@ def finish(j, intent_id: str, r: Result, at: str | None = None) -> bool:
     return cur.rowcount == 1
 
 
-def get(j, intent_id: str) -> dict[str, Any] | None:
+def get(j: Journal, intent_id: str) -> dict[str, Any] | None:
     row = j.db.execute("SELECT * FROM intents WHERE id=?", (intent_id,)).fetchone()
     if row is None:
         return None
@@ -237,7 +239,7 @@ def sent() -> None:
         led.sent = True
 
 
-def link(j, cid: str, symbol: str) -> None:
+def link(j: Journal, cid: str, symbol: str) -> None:
     """Called by a Trader primitive just before it sends an order under client id `cid`: the order belongs to the
     intent running in this task, if any, in doubt until `settle`. Bookkeeping only (the order's own row already carries
     `cid`): posted, so it never holds up the send, and a failure is logged."""
@@ -249,7 +251,7 @@ def link(j, cid: str, symbol: str) -> None:
         j.post(_link, cid, iid, symbol, now_ms())
 
 
-def settle(j, cid: str, outcome: str) -> None:
+def settle(j: Journal, cid: str, outcome: str) -> None:
     """What the order sent under `cid` did, once its primitive knows (clientid.outcome, or rejected): posted."""
     if (led := _ledger.get()) is not None and cid in led.orders:
         led.orders[cid] = outcome
@@ -257,7 +259,7 @@ def settle(j, cid: str, outcome: str) -> None:
         j.post(record, cid, outcome)
 
 
-async def send(j, cid: str, symbol: str, request: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+async def send(j: Journal, cid: str, symbol: str, request: Awaitable[dict[str, Any]]) -> dict[str, Any]:
     """One order sent under client id `cid`: linked, sent, its answer settled. A definite refusal is `rejected`; an
     answer that may have run leaves it in doubt (the caller looks it up, or the resolver does)."""
     link(j, cid, symbol)
@@ -271,32 +273,32 @@ async def send(j, cid: str, symbol: str, request: Awaitable[dict[str, Any]]) -> 
     return o
 
 
-def _link(j, cid: str, iid: str, symbol: str, at: str) -> None:
+def _link(j: Journal, cid: str, iid: str, symbol: str, at: str) -> None:
     j.db.execute("INSERT INTO intent_orders (client_id, intent_id, kind, symbol, at) VALUES (?,?,?,?,?)",
                  (cid, iid, clientid.kind_of(cid), symbol, at))
     j.db.commit()
 
 
-def record(j, cid: str, outcome: str) -> bool:
+def record(j: Journal, cid: str, outcome: str) -> bool:
     """An order's outcome, once (False: it had one)."""
     cur = j.db.execute("UPDATE intent_orders SET outcome=? WHERE client_id=? AND outcome IS NULL", (outcome, cid))
     j.db.commit()
     return cur.rowcount == 1
 
 
-def orders(j, intent_id: str) -> list[dict[str, Any]]:
+def orders(j: Journal, intent_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in j.db.execute("SELECT * FROM intent_orders WHERE intent_id=? ORDER BY at, rowid",
                                           (intent_id,))]
 
 
 # ------------------------------------------------------------ resolution (resolver.py)
-def unresolved(j) -> list[dict[str, Any]]:
+def unresolved(j: Journal) -> list[dict[str, Any]]:
     """This mode's unknown and interrupted intents that sent orders under client ids, oldest first."""
     return j._rows("SELECT * FROM intents WHERE status IN ('unknown', 'interrupted') AND mode=? AND EXISTS"
                    " (SELECT 1 FROM intent_orders o WHERE o.intent_id = intents.id) ORDER BY received_at", (j.mode,))
 
 
-def resolve(j, intent_id: str, was: str, status: str, at: str) -> bool:
+def resolve(j: Journal, intent_id: str, was: str, status: str, at: str) -> bool:
     """unknown (or interrupted) -> done | refused | partial, once."""
     cur = j.db.execute("UPDATE intents SET status=?, resolved_at=? WHERE id=? AND status=?",
                        (status, at, intent_id, was))
@@ -315,7 +317,7 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def sweep(j, now: float | None = None, alive: Callable[[int], bool] | None = None) -> list[dict[str, Any]]:
+def sweep(j: Journal, now: float | None = None, alive: Callable[[int], bool] | None = None) -> list[dict[str, Any]]:
     """End this mode's open intents whose process is gone (one desk host, D2) or that have been open longer than
     MAX_OPEN_S: received -> expired (nothing ran), running -> interrupted (it may have sent: the resolver settles its
     orders). Returns them, each with its client ids. A pid is judged only in this process's pid namespace: a row

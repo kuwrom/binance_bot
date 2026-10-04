@@ -35,7 +35,8 @@ import json
 import logging
 import sqlite3
 import time
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
@@ -53,6 +54,9 @@ from .entry_intents import HINTS, ON_BOOK, resolve
 from .gateway import LocalGateway
 from .intents import Intent
 from .symlock import SymbolBusy
+
+if TYPE_CHECKING:
+    from .trading import Trader
 
 log = logging.getLogger("shortbot.entries")
 
@@ -72,7 +76,7 @@ POLLED = "status='pending' OR (status='unknown' AND client_id IS NOT NULL)"
 
 
 class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
-    def __init__(self, trader, regime_fn=None):
+    def __init__(self, trader: Trader, regime_fn: Callable[[], Awaitable[str]] | None = None) -> None:
         self.tr = trader
         self.j = trader.j
         self.j.db.executescript(SCHEMA)

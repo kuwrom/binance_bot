@@ -51,10 +51,10 @@ LATE_OK: set[str] = set()
 CLAIM_WAIT_S = 2.0          # how long a late_ok intent waits for its row first
 
 
-def handler(kind: str, late_ok: bool = False) -> Callable[[Callable], Callable]:
+def handler[F: Callable[..., Awaitable[Any]]](kind: str, late_ok: bool = False) -> Callable[[F], F]:
     """Register the function that runs intents of `kind`: fn(ctx, **args). late_ok: see the module doc; only for a
     protective guardian action whose sends are idempotent."""
-    def register(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+    def register(fn: F) -> F:
         if kind in HANDLERS:
             raise ValueError(f"two handlers for intent kind {kind}")
         HANDLERS[kind] = fn

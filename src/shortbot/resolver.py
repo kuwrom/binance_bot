@@ -16,16 +16,19 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import clientid, errors, intents
 from .entry_intents import GRACE_S
+
+if TYPE_CHECKING:
+    from .trading import Trader
 
 log = logging.getLogger("shortbot.resolver")
 CONDITIONAL = ("stop", "bridge", "prearm")   # sent to the Algo service: looked up with trigger=True
 
 
-async def resolve(tr, now: float | None = None) -> list[dict[str, Any]]:
+async def resolve(tr: Trader, now: float | None = None) -> list[dict[str, Any]]:
     """Every unknown or interrupted intent of this mode, oldest first; one that can't be settled yet waits for the next
     run. Returns the resolutions."""
     out = []
@@ -43,7 +46,7 @@ async def resolve(tr, now: float | None = None) -> list[dict[str, Any]]:
     return out
 
 
-async def _one(tr, row: dict[str, Any], now: float) -> dict[str, Any] | None:
+async def _one(tr: Trader, row: dict[str, Any], now: float) -> dict[str, Any] | None:
     j = tr.j
     orders = intents.orders(j, row["id"])
     doubted = {o["client_id"] for o in orders if o["outcome"] is None} or {o["client_id"] for o in orders}
@@ -66,7 +69,7 @@ async def _one(tr, row: dict[str, Any], now: float) -> dict[str, Any] | None:
     return {"intent_id": row["id"], "kind": row["kind"], "was": row["status"], "status": status, "orders": got}
 
 
-async def _settle(tr, o: dict[str, Any], now: float) -> str | None:
+async def _settle(tr: Trader, o: dict[str, Any], now: float) -> str | None:
     """The order's outcome by its client id; None while Binance doesn't know it yet. A lookup error raises: in doubt."""
     trig = o["kind"] in CONDITIONAL
     found = await clientid.lookup(tr.t, o["symbol"], o["client_id"], trigger=trig)

@@ -5,7 +5,7 @@ flatten_all tools and the `shortbot kill-switch` / `shortbot flatten` subcommand
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import audit, gateway_client
 from . import killswitch as ks
@@ -14,10 +14,13 @@ from .entries_cancel import cancel_resting
 from .intents import Intent
 from .killswitch import HALTED
 
+if TYPE_CHECKING:
+    from .trading import Trader
+
 CLI_BY = "shortbot CLI (agent or human)"   # the allowlisted CLI can't tell who typed it; shortbot-admin can
 
 
-async def halt(tr, state: str, by: str, reason: str, evidence: dict | None = None,
+async def halt(tr: Trader, state: str, by: str, reason: str, evidence: dict[str, Any] | None = None,
                cause: str = "manual") -> dict[str, Any]:
     """Trip to `state`; when the desk is (now) HALTED, withdraw the resting entries right away."""
     res = await ks.trip(tr.j, tr.ex.settings, state, by, reason, evidence, cause)
@@ -31,7 +34,7 @@ async def halt(tr, state: str, by: str, reason: str, evidence: dict | None = Non
     return res
 
 
-async def withdraw_resting(desk, reason: str) -> dict[str, list[int]]:
+async def withdraw_resting(desk: EntryDesk, reason: str) -> dict[str, list[int]]:
     """Every resting entry withdrawn (cancel_resting): inside the running intent (a command's: halt_trading,
     flatten_all, kill-switch; an opening gate's watchdog), else as a withdraw_entries intent of its own (the watchdog
     from a read: trading_state, the brief), actor the reader's (#36 step 2b), sent to the gateway when a session's
@@ -39,17 +42,19 @@ async def withdraw_resting(desk, reason: str) -> dict[str, list[int]]:
     if audit.intent_id() is not None:
         return await cancel_resting(desk, reason)
     gw = gateway_client.for_session(lambda: desk.j, lambda: desk.tr.ex.settings, ctx=desk)
-    return await gw.submit(Intent("withdraw_entries", {"reason": reason}))
+    done: dict[str, list[int]] = await gw.submit(Intent("withdraw_entries", {"reason": reason}))   # cancel_resting's
+    return done
 
 
-async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:
+async def flatten(tr: Trader, by: str, reason: str, lesson: str = "") -> dict[str, Any]:
     """Flatten all: HALTED first (nothing new opens meanwhile), resting entries withdrawn, then every short closed
     through Trader.close (reduce-only market buy, journal + exchange-truth PnL). The state stays HALTED."""
     if not (reason or "").strip():
         raise ValueError("flatten needs a reason")
     why = f"flatten all: {reason.strip()}"
     st = await halt(tr, HALTED, by, why, cause="flatten")
-    closed, failed = [], []
+    closed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     for p in await tr.raw_positions():
         sym = p["symbol"]
         if p.get("side") != "short":

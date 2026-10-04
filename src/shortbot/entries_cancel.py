@@ -17,7 +17,10 @@ from .entry_intents import GRACE_S, located
 from .symlock import SymbolBusy
 
 if TYPE_CHECKING:
-    from .trading import Trader
+    from collections.abc import Callable
+
+    from .entries import EntryDesk
+    from .trading import Alert, Trader
 
 log = logging.getLogger("shortbot.entries")
 
@@ -25,7 +28,8 @@ CANCEL_FAILS_ALERT = 3   # sibling-retry cancels failed in a row before a human 
 LIVE = ("pending", "placing", "unknown")   # the desk's rows that are or may be on the book (RESTING)
 
 
-async def drop_prearm(tr, symbol: str, prearm_id: Any, alert=None, why: str = "") -> bool:
+async def drop_prearm(tr: Trader, symbol: str, prearm_id: Any, alert: Alert | None = None,
+                      why: str = "") -> bool:
     """Cancel an entry's pre-armed stop. True when it is off the book: cancelled now, or Gone (-2011: triggered or
     cancelled before). Anything else leaves it maybe resting, a reduce-only BUY stop that would cut the next short on
     the symbol: told (`alert`: Trader.alert's shape), and the orphan sweep (orphans.py) cancels it once its entry is
@@ -44,7 +48,7 @@ async def drop_prearm(tr, symbol: str, prearm_id: Any, alert=None, why: str = ""
         return False
 
 
-async def withdraw(tr, e: dict[str, Any], alert=None) -> str:
+async def withdraw(tr: Trader, e: dict[str, Any], alert: Alert | None = None) -> str:
     """Cancel a pending entry's limit FIRST, then decide from what actually filled:
     - "unfilled": the limit is dead with nothing filled, so its pre-armed stop is cancelled too
     - "filled": it (partly) filled before the cancel landed: the stop and the pending row stay, the poll adopts it
@@ -76,7 +80,8 @@ async def withdraw(tr, e: dict[str, Any], alert=None) -> str:
     return "unfilled"
 
 
-async def cancel_resting(desk, reason: str, keep=None) -> dict[str, list[int]]:
+async def cancel_resting(desk: EntryDesk, reason: str,
+                         keep: Callable[[dict[str, Any]], bool] | None = None) -> dict[str, list[int]]:
     """HALTED: withdraw every resting limit entry (the guardian repeats this every cycle while HALTED; entry_gates
     reuses it for a governor halt or a market pause, keeping the rows `keep(row)` spares). Only an
     "unfilled" withdraw (limit dead, nothing filled, pre-armed stop gone with it) closes the row; "filled" and
@@ -104,11 +109,11 @@ class EntryCancel:
     if TYPE_CHECKING:   # EntryDesk's
         async def act(self, kind: str, e: dict[str, Any], **args: Any) -> Any: ...
 
-        def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]: ...
+        def _rows(self, where: str = "1=1", args: tuple[Any, ...] = ()) -> list[dict[str, Any]]: ...
 
         async def _settle(self, eid: int, frm: str, **f: Any) -> bool: ...
 
-    async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:
+    async def _cancel_entry(self, e: dict[str, Any], status: str, reason: str) -> str:
         """Withdraw one live row; returns withdraw's outcome. The row is re-read inside the symbol lock: one resolved
         meanwhile is left as it is ("filled" if it filled, else "unfilled"). A send of unknown outcome is first found by
         its client id; not on the book GRACE_S after the send, it is 'rejected', as the reconciler would label it. Only
@@ -133,7 +138,7 @@ class EntryCancel:
                 await self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
         return got
 
-    def _filled_sibling(self, e: dict) -> int | None:
+    def _filled_sibling(self, e: dict[str, Any]) -> int | None:
         """Another order of this OCO group that already filled ('error' = a fill was reported); a split entry's own
         legs don't count, they are one unit."""
         rows = self._rows("group_id=? AND id!=? AND status IN ('filled','error')"
@@ -158,11 +163,11 @@ class EntryCancel:
         return {"ok": not got["unknown"], "cancelled": len(got["unfilled"]), "filled_first": got["filled"],
                 "cancel_failed": got["unknown"]}
 
-    async def _cancel_by_rule(self, e: dict, why: str) -> str:
+    async def _cancel_by_rule(self, e: dict[str, Any], why: str) -> str:
         """A cancel rule fired. When the OCO retry keeps failing, a second order stays live in a group that already
         filled: tell a human once per streak of CANCEL_FAILS_ALERT failures in a row. The guardian's poll decides it,
         the cancel is an intent of its job (entries_acts.cancel_entry)."""
-        got = await self.act("cancel_entry", e, status="cancelled", reason=why)
+        got: str = await self.act("cancel_entry", e, status="cancelled", reason=why)   # cancel_entry's answer
         if got != "unknown" or not why.startswith("sibling #"):
             self._cancel_fails.pop(e["id"], None)
             return got

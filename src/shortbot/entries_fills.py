@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import fill_quality, reconcile
 from .entries_cancel import drop_prearm
@@ -33,6 +33,11 @@ from .episodes import vwap as _vwap
 from .episodes import walk  # the one flat-to-flat walk: reconcile matches journal trades with it too
 from .market.market_map import cached
 from .sessions import session_bucket
+
+if TYPE_CHECKING:
+    from .entries import EntryDesk
+    from .journal import Journal
+    from .trading_orders import Client
 
 log = logging.getLogger("shortbot.entries")
 WEEK_MS = 7 * 86_400_000
@@ -60,7 +65,7 @@ def _num(x: Any) -> int:
         return 0
 
 
-def own(trades: list[dict], order_id: Any) -> list[dict]:
+def own(trades: list[dict[str, Any]], order_id: Any) -> list[dict[str, Any]]:
     return [x for x in trades if str(x.get("order")) == str(order_id)]
 
 
@@ -70,7 +75,7 @@ def late_note(others: dict[str, Any]) -> str:
                    [f"; #{i} cancel failed (retried next poll)" for i in others["cancel_failed"]])
 
 
-async def history(t, e: dict[str, Any], o: dict[str, Any]) -> list[dict[str, Any]]:
+async def history(t: Client, e: dict[str, Any], o: dict[str, Any]) -> list[dict[str, Any]]:
     """The symbol's trades since this order was created (exchange clock), oldest first; [] if unreadable. Never
     older than ccxt's 7-day window allows (it would silently cut the query to the order's first week)."""
     since = max(int(o.get("timestamp") or 0), int(time.time() * 1000) - WEEK_MS + 60_000)
@@ -82,13 +87,13 @@ async def history(t, e: dict[str, Any], o: dict[str, Any]) -> list[dict[str, Any
     return sorted(rows, key=lambda x: (int(x["timestamp"]), _num(x.get("id"))))
 
 
-def first_fill_ms(trades: list[dict], e: dict[str, Any], o: dict[str, Any]) -> int | None:
+def first_fill_ms(trades: list[dict[str, Any]], e: dict[str, Any], o: dict[str, Any]) -> int | None:
     """When the order first filled: its earliest trade, else its last fill (lastTradeTimestamp), else None (now)."""
     mine = own(trades, e["order_id"])
     return int(mine[0]["timestamp"]) if mine else o.get("lastTradeTimestamp")
 
 
-async def plan_stop(desk, e: dict[str, Any], cps: list[dict]) -> None:
+async def plan_stop(desk: EntryDesk, e: dict[str, Any], cps: list[dict[str, Any]]) -> None:
     """A closePosition stop looser than the plan's (e.g. the guardian's +10% fallback stop landed first) is tightened
     to this entry's plan stop. A widened trade keeps its wider stop (its size was cut for it, #14)."""
     jt = desk.j.active_trade(e["symbol"]) or {}
@@ -98,8 +103,8 @@ async def plan_stop(desk, e: dict[str, Any], cps: list[dict]) -> None:
         await desk.tr.move_stop(e["symbol"], stop, f"entry #{e['id']} filled: plan stop")
 
 
-def adopt(desk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
-          trades: list[dict]) -> tuple[dict[str, Any], tuple[str, bool] | None]:
+def adopt(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
+          trades: list[dict[str, Any]]) -> tuple[dict[str, Any], tuple[str, bool] | None]:
     """A fill whose position is open, journalled (inside the symbol lock): an add to the open trade of its split entry
     or of a same-symbol sibling (tranches.join), else a new trade. Returns (event, (alert, urgent) or None) for
     announce(), which runs after the lock."""
@@ -124,7 +129,8 @@ def adopt(desk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
                        (head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed", bool(head))))
 
 
-def _referenced(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict], done: tuple) -> tuple:
+def _referenced(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], trades: list[dict[str, Any]],
+                done: tuple[Any, ...]) -> tuple[Any, ...]:
     """A journalled fill's mainnet reference at its own fills (fill_quality.py, #35): in the background, after the
     journal row, never in the way of the lock or the stop."""
     if done[0].get("trade_id"):
@@ -133,7 +139,8 @@ def _referenced(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict], 
     return done
 
 
-async def announce(desk, e: dict[str, Any], ev: dict[str, Any], alert: tuple[str, bool] | None) -> dict[str, Any]:
+async def announce(desk: EntryDesk, e: dict[str, Any], ev: dict[str, Any],
+                   alert: tuple[str, bool] | None) -> dict[str, Any]:
     """After the symbol lock: a new trade's OCO siblings are cancelled (they may rest on other symbols, and a task
     holds one symbol lock at a time), then the fill is alerted."""
     if alert is None:
@@ -147,7 +154,7 @@ async def announce(desk, e: dict[str, Any], ev: dict[str, Any], alert: tuple[str
     return ev
 
 
-def new_trade(desk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> int:
+def new_trade(desk: EntryDesk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> int:
     """The journal trade an entry fill opens, stamped at the fill (exchange clock), not at the poll, and attributed to
     the experiments and limits the entry was placed (sized) under: the guardian polling the fill has neither (#32)."""
     at = datetime.fromtimestamp(fill_ms / 1000, UTC) if fill_ms else datetime.now(UTC)
@@ -166,7 +173,7 @@ def new_trade(desk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> 
     return tid
 
 
-def _folded(j, symbol: str, order_id: Any) -> int | None:
+def _folded(j: Journal, symbol: str, order_id: Any) -> int | None:
     """The round-trip trade this order's fills were already journalled in (it filled with a sibling, before its row
     was pending: a send of unknown outcome that entry_intents adopted later)."""
     rows = j._rows("SELECT id FROM trades WHERE symbol=? AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid("
@@ -175,7 +182,8 @@ def _folded(j, symbol: str, order_id: Any) -> int | None:
     return rows[0]["id"] if rows else None
 
 
-async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict]) -> dict[str, Any]:
+async def round_trip(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any],
+                     trades: list[dict[str, Any]]) -> dict[str, Any]:
     """A fill with no position behind it: rebuild what happened from trade history and journal it (module doc)."""
     j, sym = desk.j, e["symbol"]
     active = j.active_trade(sym)
@@ -202,7 +210,9 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}
     res = None
     try:
-        res = await reconcile.finalize(desk.tr, j.get_trade(tid), reason, episode=rt)   # closed_at = its exit fill
+        if (trade := j.get_trade(tid)) is None:   # journalled just above
+            raise LookupError(f"trade #{tid} is not in the journal")
+        res = await reconcile.finalize(desk.tr, trade, reason, episode=rt)   # closed_at = its exit fill
     except Exception as x:  # noqa: BLE001 - the trade stays open with no position: reconcile closes it (60 s)
         log.warning("round trip #%s not finalized: %s: %s", tid, type(x).__name__, x)
     others = await desk.cancel_group(e["group_id"], f"sibling #{e['id']} filled", keep=e["id"],
@@ -217,7 +227,8 @@ async def round_trip(desk, e: dict[str, Any], o: dict[str, Any], trades: list[di
             "exit": rt["exit"], "net": res["net"] if res else None}
 
 
-def _journal_round_trip(desk, e: dict[str, Any], rt: dict[str, Any], stopped: bool, foreign: list[str]) -> int | None:
+def _journal_round_trip(desk: EntryDesk, e: dict[str, Any], rt: dict[str, Any], stopped: bool,
+                        foreign: list[str]) -> int | None:
     """The round trip's trade, one unit: opened, claimed by its entry (None: resolved elsewhere first) and by the
     same-symbol orders that filled into it too (one trade, not two)."""
     j, sym = desk.j, e["symbol"]
@@ -235,7 +246,8 @@ def _journal_round_trip(desk, e: dict[str, Any], rt: dict[str, Any], stopped: bo
     return tid
 
 
-def _claim(desk, e: dict[str, Any], mine: list[dict], tid: int, o: dict | None = None) -> bool:
+def _claim(desk: EntryDesk, e: dict[str, Any], mine: list[dict[str, Any]], tid: int,
+           o: dict[str, Any] | None = None) -> bool:
     """pending -> filled (compare-and-set), stamped with the order's own fills."""
     o = o or {}
     return desk._cas_row(e["id"], "pending", status="filled", trade_id=tid,
@@ -244,8 +256,8 @@ def _claim(desk, e: dict[str, Any], mine: list[dict], tid: int, o: dict | None =
                         filled_qty=_qty(mine) if mine else float(o.get("filled") or 0))
 
 
-async def _link(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict], tid: int, urgent: bool,
-                why: str) -> dict[str, Any]:
+async def _link(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], trades: list[dict[str, Any]], tid: int,
+                urgent: bool, why: str) -> dict[str, Any]:
     if not await desk.j.write(lambda _j: _claim(desk, e, own(trades, e["order_id"]), tid, o)):
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}
     await _drop_prearm(desk, e, [])
@@ -258,7 +270,7 @@ async def _link(desk, e: dict[str, Any], o: dict[str, Any], trades: list[dict], 
     return {"entry_id": e["id"], "event": "fill_linked", "trade_id": tid}
 
 
-async def _unresolved(desk, e: dict[str, Any], o: dict[str, Any]) -> dict[str, Any]:
+async def _unresolved(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> dict[str, Any]:
     """The fill is certain (the order says so) but history doesn't show the round trip yet: siblings go now, the row
     waits ROUND_TRIP_TRIES polls, then it is an 'error' a human journals."""
     await desk.cancel_group(e["group_id"], f"sibling #{e['id']} filled", keep=e["id"], keep_tranche=e.get("tranche"))
@@ -273,7 +285,7 @@ async def _unresolved(desk, e: dict[str, Any], o: dict[str, Any]) -> dict[str, A
     return {"entry_id": e["id"], "event": "error"}
 
 
-async def _drop_prearm(desk, e: dict[str, Any], exit_orders: list[str]) -> bool:
+async def _drop_prearm(desk: EntryDesk, e: dict[str, Any], exit_orders: list[str]) -> bool:
     """Whether this entry's pre-armed stop made the exit (its actualOrderId among the exit's orders). One still
     resting is cancelled: with no position it would cut the next short on the symbol. An unresolved one (prearm_cid
     only) is entry_intents' to find and cancel, now that the row is no longer pending."""

@@ -25,10 +25,14 @@ import json
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import killswitch_rearm as rearm
 from .journal import Journal
+
+if TYPE_CHECKING:
+    from .config import RiskLimits, Settings
+    from .trading import Trader
 
 log = logging.getLogger("shortbot.killswitch")
 ACTIVE, REDUCING, HALTED = "ACTIVE", "REDUCING", "HALTED"
@@ -63,7 +67,7 @@ def _unreadable(raw: Any, what: str = "state row") -> dict[str, Any]:
             "reason": f"{what} unreadable ({str(raw)[:60]!r}): failing closed"}
 
 
-def read(j) -> dict[str, Any]:
+def read(j: Journal) -> dict[str, Any]:
     """The current state; no row = ACTIVE. An unreadable row fails closed (REDUCING)."""
     raw = j.get(KV_KEY)
     st = _parse(raw)
@@ -74,7 +78,7 @@ def read(j) -> dict[str, Any]:
     return _unreadable(raw)
 
 
-def _cas(j, old: str | None, new: dict[str, Any], also: dict[str, str] | None = None) -> bool:
+def _cas(j: Journal, old: str | None, new: dict[str, Any], also: dict[str, str] | None = None) -> bool:
     """Write `new` only if the row still holds `old` (one statement: atomic across processes); `also` (kv rows) is
     written in the same transaction, and only when the swap happened. Run as a unit: await j.write(_cas, ...)."""
     if old is None:
@@ -87,12 +91,12 @@ def _cas(j, old: str | None, new: dict[str, Any], also: dict[str, str] | None = 
     return n > 0
 
 
-async def notify(j, settings, kind: str, msg: str, urgent: bool) -> None:
+async def notify(j: Journal, settings: Settings, kind: str, msg: str, urgent: bool) -> None:
     from .notify import Notifier  # Telegram when configured, always an alerts row
     await Notifier(settings, j).send(kind, msg, None, cooldown_s=0, urgent=urgent)
 
 
-async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | None = None,
+async def trip(j: Journal, settings: Settings, state: str, by: str, reason: str, evidence: dict[str, Any] | None = None,
                cause: str = "manual") -> dict[str, Any]:
     """Escalate to `state` (REDUCING or HALTED). Already there or tighter: a silent no-op that keeps the first
     cause, except during a stale-heartbeat halt, where the new cause is remembered so it outlives the auto-clear."""
@@ -130,7 +134,7 @@ async def trip(j, settings, state: str, by: str, reason: str, evidence: dict | N
     return {"ok": True, "changed": True, **new}
 
 
-async def clear(j, settings, state: str, by: str, reason: str, shown: str | None,
+async def clear(j: Journal, settings: Settings, state: str, by: str, reason: str, shown: str | None,
                 hold: dict[str, Any] | None = None) -> dict[str, Any]:
     """Loosen (or set) the state. Human-only: called by shortbot-admin after its terminal confirmation, never by an
     MCP tool or a `shortbot` subcommand (the agent's allowlist covers those). `shown` is the raw row the human
@@ -152,7 +156,7 @@ async def clear(j, settings, state: str, by: str, reason: str, shown: str | None
     return {"ok": True, **row, "rearm": json.loads(stored)}
 
 
-def _fresh_passes(j, now: float | None) -> int:
+def _fresh_passes(j: Journal, now: float | None) -> int:
     """Consecutive DISTINCT fresh heartbeats seen (each one = a guardian protective pass that worked); a stale or
     missing one resets the count. Re-reading the same heartbeat from another process doesn't count again."""
     hb, age = j.get(HEARTBEAT_KEY), heartbeat_age(j, now)
@@ -171,7 +175,7 @@ def _fresh_passes(j, now: float | None) -> int:
     return n
 
 
-async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, Any] | None:
+async def auto_clear_stale(j: Journal, settings: Settings, now: float | None = None) -> dict[str, Any] | None:
     """Lift a stale-heartbeat halt after AUTO_CLEAR_CHECKS distinct fresh heartbeats (guardian passes): back to the row
     it replaced, or to a sticky trip that landed meanwhile (the most severe, latest first). Withdrawn entries stay
     withdrawn."""
@@ -187,7 +191,7 @@ async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, A
             for r in (st.get("prev_row"), *(since if isinstance(since, list) else [since]))]
     back = max(reversed(rows), key=lambda r: LEVEL[r["state"]])
     if back["state"] == ACTIVE:
-        new = {"state": ACTIVE, "by": "guardian watchdog", "at": _now_iso(), "cause": "auto_clear",
+        new: dict[str, Any] = {"state": ACTIVE, "by": "guardian watchdog", "at": _now_iso(), "cause": "auto_clear",
                "reason": f"guardian heartbeat fresh again ({age:.0f} s) after the stale-heartbeat halt"}
     else:
         new = {**back, "restored_at": _now_iso()}
@@ -204,7 +208,7 @@ async def auto_clear_stale(j, settings, now: float | None = None) -> dict[str, A
 
 
 # ------------------------------------------------------------ guardian watchdog
-def heartbeat_age(j, now: float | None = None) -> float | None:
+def heartbeat_age(j: Journal, now: float | None = None) -> float | None:
     hb = j.get(HEARTBEAT_KEY)
     try:
         return (now or time.time()) - float(hb) if hb is not None else None
@@ -212,7 +216,7 @@ def heartbeat_age(j, now: float | None = None) -> float | None:
         return None
 
 
-async def watch_guardian(tr, now: float | None = None) -> str | None:
+async def watch_guardian(tr: Trader, now: float | None = None) -> str | None:
     """The guardian can't see its own death, so sessions check its heartbeat wherever they read the state (the
     opening gate, the brief, the status tool). Its age is how long protection has gone unverified (#61). Over
     VERIFIED_S: new risk is refused (the reason is returned; nothing is tripped, so it lifts with the next verified
@@ -243,7 +247,7 @@ def how_to_clear(st: dict[str, Any]) -> str | None:
             else f"{CLEAR_HINT} (not via Claude)")
 
 
-def state_refusal(j, action: str) -> dict[str, Any] | None:
+def state_refusal(j: Journal, action: str) -> dict[str, Any] | None:
     """The gate's re-check INSIDE a symbol lock: the persisted state only. No heartbeat watchdog (its halt cancels
     entries on every symbol, and a task holding one symbol lock never takes another)."""
     st = read(j)
@@ -256,7 +260,7 @@ def refusal(st: dict[str, Any], action: str) -> dict[str, Any]:
                      f"{action} refused. Allowed: {ALLOWED}. {how_to_clear(st)}"}
 
 
-async def gate(tr, action: str) -> dict[str, Any] | None:
+async def gate(tr: Trader, action: str) -> dict[str, Any] | None:
     """None when `action` (anything that opens or adds risk) may proceed; else the refusal the caller returns.
     Called at the top of each opening path and again right before its order is sent, so a trip from another
     process during the slow pre-checks still stops it. Exits and stop tightening never call this."""
@@ -270,7 +274,7 @@ async def gate(tr, action: str) -> dict[str, Any] | None:
 
 
 # ------------------------------------------------------------ auto-trips (guardian)
-def effective_limits(settings, j):
+def effective_limits(settings: Settings, j: Journal) -> tuple[RiskLimits, str]:
     """(limits, source): the research override when one is active, else the .env baseline. The guardian runs
     without research params, but its kill-switch thresholds follow the experiment (BOUND_* caps it)."""
     from .params import ResearchParams
@@ -279,8 +283,8 @@ def effective_limits(settings, j):
     return p.effective(), src
 
 
-async def _loss_trip(j, settings, cond: str, loss_pct: float, limit: float, src: str, why: str, evidence: dict,
-                     now: datetime | None) -> dict[str, Any] | None:
+async def _loss_trip(j: Journal, settings: Settings, cond: str, loss_pct: float, limit: float, src: str, why: str,
+                     evidence: dict[str, Any], now: datetime | None) -> dict[str, Any] | None:
     """Trip REDUCING once `loss_pct` reaches the limit, or while a human clear holds `cond`, its re-arm point."""
     loss_pct = round(loss_pct, 4)
     try:
@@ -298,8 +302,8 @@ async def _loss_trip(j, settings, cond: str, loss_pct: float, limit: float, src:
                       "rearm": hold}, cause=cond)
 
 
-async def trip_on_daily_loss(j, settings, equity: float, day_pnl: float, marks: dict | None = None,
-                             now: datetime | None = None) -> dict[str, Any] | None:
+async def trip_on_daily_loss(j: Journal, settings: Settings, equity: float, day_pnl: float,
+                             marks: dict[str, Any] | None = None, now: datetime | None = None) -> dict[str, Any] | None:
     """Day P&L against START-of-day equity, as governor.daily_cap. The guardian passes the equity-mark day P&L
     (equity_marks.py: a loss carried over midnight isn't today's; a late or degraded mark keeps the old, worse one);
     `marks` is recorded as evidence."""
@@ -313,7 +317,7 @@ async def trip_on_daily_loss(j, settings, equity: float, day_pnl: float, marks: 
                             {"equity": equity, "day_pnl": day_pnl, **(marks or {})}, now)
 
 
-async def trip_on_drawdown(j, settings, drawdown_pct: float | None,
+async def trip_on_drawdown(j: Journal, settings: Settings, drawdown_pct: float | None,
                            now: datetime | None = None) -> dict[str, Any] | None:
     """The governor's dd_stop ('halt until a human review') made sticky: the clear is the review. Drawdown is from
     the transfer-adjusted peak (equity_marks.py; `shortbot-admin equity-peak reset` moves it to today's equity)."""
@@ -326,7 +330,7 @@ async def trip_on_drawdown(j, settings, drawdown_pct: float | None,
 
 
 # ------------------------------------------------------------ visibility
-def status(j, now: float | None = None) -> dict[str, Any]:
+def status(j: Journal, now: float | None = None) -> dict[str, Any]:
     st = read(j)
     age = heartbeat_age(j, now)
     return {**{k: v for k, v in st.items() if k != "prev_row"},
@@ -337,7 +341,7 @@ def status(j, now: float | None = None) -> dict[str, Any]:
             "clear": how_to_clear(st), "rearm": rearm.holding(j)}
 
 
-def brief_line(j, now: float | None = None) -> str:
+def brief_line(j: Journal, now: float | None = None) -> str:
     s = status(j, now)
     age = s["guardian_heartbeat_age_s"]
     hb = "never seen" if age is None else f"{age} s ago" + (

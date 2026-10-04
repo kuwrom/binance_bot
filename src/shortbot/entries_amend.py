@@ -32,7 +32,7 @@ class EntryAmend:
     if TYPE_CHECKING:   # EntryDesk's
         async def _regime(self) -> str: ...
 
-        def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]: ...
+        def _rows(self, where: str = "1=1", args: tuple[Any, ...] = ()) -> list[dict[str, Any]]: ...
 
         async def _update(self, eid: int, **f: Any) -> None: ...
 
@@ -80,7 +80,8 @@ class EntryAmend:
         self.j.log_decision("amend_entry", reason, sym, snapshot=snap)
         return {"ok": True, "entry_id": entry_id, "new_limit": px, "risk_usdt": snap["risk_usdt"]}
 
-    async def _amend_risk(self, e: dict, px: float, risk: float) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    async def _amend_risk(self, e: dict[str, Any], px: float,
+                          risk: float) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """(refusal or None, what the check saw). The risk budget for this symbol now, then the per-order caps. An
         amend changes no portfolio count (open symbols, total notional only shrinks), so those aren't re-checked."""
         tr, sym = self.tr, e["symbol"]

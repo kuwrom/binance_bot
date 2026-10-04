@@ -40,7 +40,7 @@ def _obj(raw: str | None) -> dict[str, Any] | None:
         return None
 
 
-def observe(j, cond: str, loss_pct: float, limit_pct: float, now: datetime | None = None) -> None:
+def observe(j: Journal, cond: str, loss_pct: float, limit_pct: float, now: datetime | None = None) -> None:
     """Posted (#79): the guardian's pass never waits for it."""
     now = _now(now)
     j.post(Journal.set, j.mode_key(KV_OBS + cond), json.dumps({"loss_pct": loss_pct, "limit_pct": limit_pct,
@@ -48,14 +48,14 @@ def observe(j, cond: str, loss_pct: float, limit_pct: float, now: datetime | Non
                                                                "at": now.isoformat(timespec="seconds")}))
 
 
-def preview(j, margin_pp: float = REARM_MARGIN_PP, now: datetime | None = None) -> dict[str, Any]:
+def preview(j: Journal, margin_pp: float = REARM_MARGIN_PP, now: datetime | None = None) -> dict[str, Any]:
     """The hold a clear would store now (shown to the human before they type the code, then stored as shown)."""
     if not 0 <= margin_pp <= MAX_MARGIN_PP:
         raise ValueError(f"re-arm margin {margin_pp} pp: must be 0..{MAX_MARGIN_PP} percentage points")
     now = _now(now)
     out: dict[str, Any] = {"margin_pp": margin_pp, "held": {}, "not_held": {}}
     for cond in (DAILY, DRAWDOWN):
-        o = _obj(j.get(j.mode_key(KV_OBS + cond)))
+        o = _obj(j.get(j.mode_key(KV_OBS + cond))) or {}   # none yet: KeyError below, as None's TypeError was
         try:
             loss, limit, age = float(o["loss_pct"]), float(o["limit_pct"]), now.timestamp() - float(o["ts"])
         except (TypeError, KeyError, ValueError):
@@ -84,20 +84,22 @@ def encode(p: dict[str, Any] | None, by: str, at: str) -> str:
                        "by": by, "at": at})
 
 
-def holding(j) -> dict[str, Any] | None:
+def holding(j: Journal) -> dict[str, Any] | None:
     """The live hold per condition, for status(); None when nothing is held."""
     held = (_obj(j.get(j.mode_key(KV_HOLD))) or {}).get("held")
     return held if isinstance(held, dict) and held else None
 
 
-def trip_at(j, cond: str, loss_pct: float, limit_pct: float, now: datetime | None = None
+def trip_at(j: Journal, cond: str, loss_pct: float, limit_pct: float, now: datetime | None = None
             ) -> tuple[float, dict[str, Any] | None]:
     """(the loss % at which `cond` trips now, the hold behind it or None). Drops a hold that lapsed."""
     key = j.mode_key(KV_HOLD)
     raw = j.get(key)
-    hold = _obj(raw)
-    h = (hold or {}).get("held")
-    h = h.get(cond) if isinstance(h, dict) else None
+    hold = _obj(raw) or {}
+    held = hold.get("held")
+    h = held.get(cond) if isinstance(held, dict) else None
+    if not isinstance(h, dict):
+        return limit_pct, None
     try:
         margin, rearm, period = float(hold["margin_pp"]), float(h["rearm_at_pct"]), str(h["period"])
         baseline = float(h["baseline_pct"])
@@ -118,7 +120,7 @@ def trip_at(j, cond: str, loss_pct: float, limit_pct: float, now: datetime | Non
     return limit_pct, None
 
 
-def _drop(j, key: str, raw: str, new: str, why: str, snapshot: dict[str, Any]) -> None:
+def _drop(j: Journal, key: str, raw: str, new: str, why: str, snapshot: dict[str, Any]) -> None:
     """A lapsed hold goes (posted: the pass that saw it lapse never waits); a clear that landed meanwhile wins."""
     if j.db.execute("UPDATE kv SET v=? WHERE k=? AND v=?", (new, key, raw)).rowcount:
         j.log_decision("kill_switch_rearmed", why, None, snapshot=snapshot)

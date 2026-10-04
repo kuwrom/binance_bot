@@ -10,7 +10,7 @@ fill they make), a dead entry's pre-arm, and orphaned stops (orphans.py)."""
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import entries_fills as fills
 from . import errors, targets_sync
@@ -18,23 +18,26 @@ from .entries_cancel import CANCEL_FAILS_ALERT, cancel_resting, drop_prearm, wit
 from .entry_intents import unit
 from .gateway import handler
 
+if TYPE_CHECKING:
+    from .entries import EntryDesk
+
 log = logging.getLogger("shortbot.entries")
 
 
-def _row(desk, entry_id: int) -> dict[str, Any]:
+def _row(desk: EntryDesk, entry_id: int) -> dict[str, Any]:
     return desk._rows("id=?", (entry_id,))[0]
 
 
 # ------------------------------------------------------------ the fill poll
 @handler("protect_fill", late_ok=True)
-async def protect_fill(desk, entry_id: int, order: dict[str, Any]) -> dict[str, Any]:
+async def protect_fill(desk: EntryDesk, entry_id: int, order: dict[str, Any]) -> dict[str, Any]:
     """ProtectFill: the fill the poll found (`order`, as it fetched it) protected and journalled, then its OCO siblings
     cancelled (fills.announce and the round-trip paths: one symbol lock at a time)."""
     rows = desk._rows("id=?", (entry_id,))
     return await on_fill(desk, rows[0], order) if rows else {"entry_id": entry_id, "event": "resolved_elsewhere"}
 
 
-async def on_fill(desk, e: dict, o: dict) -> dict[str, Any]:
+async def on_fill(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> dict[str, Any]:
     """Protect, then journal, both inside the symbol lock: a session's close() between the two would find no trade,
     strip the new stop and finalize nothing, and the fill would then be journalled as an open trade on a flat
     symbol (#60). The row is re-read inside the lock. The remainder of a partial fill is pulled first (withdraw:
@@ -70,7 +73,7 @@ async def on_fill(desk, e: dict, o: dict) -> dict[str, Any]:
     return await fills.announce(desk, e, *done)
 
 
-async def _protect(desk, e: dict) -> list[dict]:
+async def _protect(desk: EntryDesk, e: dict[str, Any]) -> list[dict[str, Any]]:
     """The whole-position stop (a pre-armed reduce-only stop of another leg or order is NOT that), then this
     entry's pre-arm goes. Returns the closePosition stops that already rested."""
     tr, sym = desk.tr, e["symbol"]
@@ -85,7 +88,7 @@ async def _protect(desk, e: dict) -> list[dict]:
     return cps
 
 
-async def _rest_unknown(desk, e: dict) -> dict[str, Any]:
+async def _rest_unknown(desk: EntryDesk, e: dict[str, Any]) -> dict[str, Any]:
     """The fill is protected but its remainder's cancel failed: it may still rest and fill more, so the row stays
     pending (the next pass retries the cancel, then journals all that filled). A streak alerts once."""
     n = desk._cancel_fails[e["id"]] = desk._cancel_fails.get(e["id"], 0) + 1
@@ -96,7 +99,7 @@ async def _rest_unknown(desk, e: dict) -> dict[str, Any]:
 
 
 @handler("forget_entry")
-async def forget_entry(desk, entry_id: int) -> dict[str, Any] | None:
+async def forget_entry(desk: EntryDesk, entry_id: int) -> dict[str, Any] | None:
     """Not found past its GTD: Binance forgets an unfilled CANCELED/EXPIRED order 3 days after its creation and
     keeps any order with a fill for 90 days (Query-Order doc), so it expired unfilled. Its pre-armed stop goes."""
     e = _row(desk, entry_id)
@@ -110,21 +113,24 @@ async def forget_entry(desk, entry_id: int) -> dict[str, Any] | None:
 
 
 @handler("cancel_entry", late_ok=True)
-async def cancel_entry(desk, entry_id: int, status: str, reason: str) -> str:
+async def cancel_entry(desk: EntryDesk, entry_id: int, status: str, reason: str) -> str:
     """One live row withdrawn (EntryCancel._cancel_entry: re-read under the lock, compare-and-set): expiry, a cancel
     rule, the OCO sibling retry, a closed split's leg. Returns withdraw's outcome."""
     return await desk._cancel_entry(_row(desk, entry_id), status, reason)
 
 
 @handler("withdraw_entries", late_ok=True)
-async def withdraw_entries(desk, reason: str, ids: list[int] | None = None) -> dict[str, list[int]]:
+async def withdraw_entries(desk: EntryDesk, reason: str, ids: list[int] | None = None) -> dict[str, list[int]]:
     """CancelEntries: the resting rows `ids` (None: every one resting now) withdrawn (entries_cancel.cancel_resting)."""
-    return await cancel_resting(desk, reason, None if ids is None else (lambda e, keep=set(ids): e["id"] not in keep))
+    if ids is None:
+        return await cancel_resting(desk, reason)
+    listed = set(ids)
+    return await cancel_resting(desk, reason, lambda e: e["id"] not in listed)   # the rest are kept
 
 
 # ------------------------------------------------------------ the entry reconciler (entry_intents.py)
 @handler("withdraw_order")
-async def withdraw_order(desk, entry_id: int, order_id: str) -> str:
+async def withdraw_order(desk: EntryDesk, entry_id: int, order_id: str) -> str:
     """An order of row `entry_id` found resting although nobody tracks it there (an abandoned send, a late order of
     a dead row): cancelled first, what filled believed (withdraw). The reconciler journals the outcome."""
     r = _row(desk, entry_id)
@@ -133,7 +139,7 @@ async def withdraw_order(desk, entry_id: int, order_id: str) -> str:
 
 
 @handler("rollback_split")
-async def rollback_split(desk, entry_id: int, tranche: str) -> None:
+async def rollback_split(desk: EntryDesk, entry_id: int, tranche: str) -> None:
     """A dead call's split (row `entry_id` was placing past GRACE_S): one unit, so its acked, never-pinned legs go."""
     legs = desk._rows("tranche=? AND status='pending'", (tranche,))
     async with desk.tr.symbol_lock(_row(desk, entry_id)["symbol"], f"entry #{entry_id}: roll back a dead call's split"):
@@ -141,7 +147,7 @@ async def rollback_split(desk, entry_id: int, tranche: str) -> None:
 
 
 @handler("cancel_prearm")
-async def cancel_prearm(desk, entry_id: int, order_id: str) -> None:
+async def cancel_prearm(desk: EntryDesk, entry_id: int, order_id: str) -> None:
     """A dead entry's pre-armed stop, matched by client id among the open stops: cancelled (Gone: off the book)."""
     sym = _row(desk, entry_id)["symbol"]
     try:

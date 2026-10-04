@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import re
 import secrets
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
 from . import errors
+
+if TYPE_CHECKING:
+    from .trading_orders import Client
 
 PREFIX = "sb"
 KINDS = {"entry": "e", "prearm": "p", "open": "o", "close": "c", "stop": "s", "add": "a",   # one letter each in the id
@@ -86,7 +89,7 @@ def outcome(cid: str, o: dict[str, Any]) -> str:
     return "acked"
 
 
-async def lookup(t, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:
+async def lookup(t: Client, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:
     """The order behind a client id (trigger: a conditional order, by clientAlgoId), or None if Binance doesn't know it
     (-2013). Other errors propagate: the outcome stays unknown. A conditional order's not-found answer is unverified
     (demo probe #55): callers also check the open conditional orders."""

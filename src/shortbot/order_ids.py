@@ -21,15 +21,18 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .fill_quality import DOC
+
+if TYPE_CHECKING:
+    from .journal import Journal
 
 log = logging.getLogger("shortbot.order_ids")
 LEGS = ("entry", "exit")
 
 
-def note(j, symbol: str, leg: str, order: Any) -> None:
+def note(j: Journal, symbol: str, leg: str, order: Any) -> None:
     """Journal one market order (a ccxt order: its id and clientOrderId) on the symbol's journal trade. Nothing without
     an order id or a trade. Never raises: the order has run, its id is research data."""
     try:
@@ -46,7 +49,7 @@ def note(j, symbol: str, leg: str, order: Any) -> None:
         log.warning("%s order id of %s not journalled: %s: %s", leg, symbol, type(e).__name__, e)
 
 
-def read(j, trade_id: int) -> dict[str, dict[str, str | None]]:
+def read(j: Journal, trade_id: int) -> dict[str, dict[str, str | None]]:
     """{"entry": {order id: client id}, "exit": {...}} as journalled now (empty for a trade from before #76)."""
     out: dict[str, dict[str, str | None]] = {leg: {} for leg in LEGS}
     rows = j._rows("SELECT CASE WHEN json_valid(fill_refs) THEN json_extract(fill_refs, '$.orders') END AS o "

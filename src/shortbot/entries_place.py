@@ -50,13 +50,13 @@ class EntryPlacement:
     if TYPE_CHECKING:   # EntryDesk's and EntryCancel's
         async def _regime(self) -> str: ...
 
-        def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]: ...
+        def _rows(self, where: str = "1=1", args: tuple[Any, ...] = ()) -> list[dict[str, Any]]: ...
 
         async def _update(self, eid: int, **f: Any) -> None: ...
 
         async def _settle(self, eid: int, frm: str, **f: Any) -> bool: ...
 
-        async def _cancel_entry(self, e: dict, status: str, reason: str) -> str: ...
+        async def _cancel_entry(self, e: dict[str, Any], status: str, reason: str) -> str: ...
 
     @refusals("propose_group")
     async def propose_group(self, proposals: list[dict[str, Any]], ttl_hours: float = 6.0,
@@ -91,7 +91,7 @@ class EntryPlacement:
                         _, legs = tranches.expand(p)
                         # far leg first: the near leg can fill the moment it is placed (MOVR 2026-10-01)
                         legs = sorted(legs, key=lambda leg: -float(leg["limit_price"]))
-                        got: list[dict] = []
+                        got: list[dict[str, Any]] = []
                         try:
                             for leg in legs:
                                 got.append(await self._place_one(gid, leg, regime, expires_ms, prearm_stop))
@@ -132,7 +132,8 @@ class EntryPlacement:
         return {"ok": bool(placed), "group_id": gid, "placed": placed, "rejected": rejected, "unknown": unknown,
                 **({"warnings": warnings} if warnings else {})}
 
-    async def _place_one(self, gid: str, p: dict, regime: str, expires_ms: int, prearm: bool) -> dict[str, Any]:
+    async def _place_one(self, gid: str, p: dict[str, Any], regime: str, expires_ms: int,
+                         prearm: bool) -> dict[str, Any]:
         tr = self.tr
         sym = to_symbol(p["symbol"])
         if sym not in tr.t.markets:
@@ -291,7 +292,7 @@ class EntryPlacement:
             pass   # the row keeps prearm_cid: entry_intents finds the stop by it
         return (o or {}).get("id")
 
-    async def _rollback(self, got: list[dict]) -> None:
+    async def _rollback(self, got: list[dict[str, Any]]) -> None:
         """Undo a split entry's placed legs after a later leg failed. Cancel each limit FIRST: only a leg cancelled
         unfilled loses its pre-armed stop. A leg that (partly) filled keeps its stop and stays pending, pinned to its
         own size, so the poll adopts and protects it (MOVR 2026-10-01: a stripped stop left a naked short)."""

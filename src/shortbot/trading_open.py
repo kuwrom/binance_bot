@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import clientid, errors, exposure, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
 from .audit import refusals
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from .exchange import Exchanges
     from .journal import Journal
     from .risk import AccountState
-    from .trading import Prechecks
+    from .trading import Prechecks, Trader
     from .trading_orders import Order
 
 
@@ -110,6 +110,14 @@ class OpenFlow:
 
         async def place_close_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict: ...
 
+        async def find_stop(self, symbol: str, cid: str) -> dict[str, Any] | None: ...
+
+        async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> Order: ...
+
+        async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order: ...
+
+        async def flat_now(self, symbol: str) -> bool: ...
+
         async def open_market(self, symbol: str, amount: float, cid: str, lookups: int = 3) -> Order: ...
 
         async def close_market(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> Order: ...
@@ -127,7 +135,7 @@ class OpenFlow:
         symbol = to_symbol(symbol)
         st = resolve(setup)
         async with self.account_lock(f"open short {symbol} ({setup})"):   # the caps through the send, across processes
-            if blocked := await killswitch.gate(self, "open_short"):
+            if blocked := await killswitch.gate(cast("Trader", self), "open_short"):   # OpenFlow is Trader's
                 return blocked
             await self.ex.trade_markets()
             if symbol not in self.t.markets:
@@ -188,7 +196,7 @@ class OpenFlow:
             amount = floor_amount(self.t, symbol, notional / price if price else 0)
             if small := too_small(self.t, symbol, amount, price):   # nothing sent (#71)
                 return {"ok": False, "error": small}
-            if blocked := await killswitch.gate(self, "open_short"):   # again: a trip during the checks above
+            if blocked := await killswitch.gate(cast("Trader", self), "open_short"):   # again: tripped meanwhile?
                 return blocked
             async with self.symbol_lock(symbol, f"open short ({setup})"):
                 if blocked := killswitch.state_refusal(self.j, "open_short"):   # tripped while we waited for it

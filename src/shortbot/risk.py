@@ -7,6 +7,7 @@ The limits passed in are the EFFECTIVE limits: the .env baseline plus any AI res
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .config import RiskLimits
 
@@ -62,7 +63,7 @@ def stop_distance_pct(entry: float, stop: float) -> float:
     return (stop - entry) / entry * 100
 
 
-def bracket_for(brackets: list[dict], notional: float) -> tuple[float, float]:
+def bracket_for(brackets: list[dict[str, Any]], notional: float) -> tuple[float, float]:
     """(maintenance margin rate, maintenance amount `cum`) of the leverage bracket holding this notional: the last one
     whose notionalFloor <= notional (GET /fapi/v1/leverageBracket rows; ccxt parse_position_risk picks the same)."""
     rows = sorted(brackets, key=lambda b: float(b["notionalFloor"]))
