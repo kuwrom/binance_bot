@@ -59,6 +59,7 @@
 
 ## Kill switch (research 2026-10-01; `killswitch.py`)
 - **Evidence:** FIA 2024 *Automated Trading Risk Controls*: a kill switch blocks new orders, cancels working orders and may allow risk-reducing ones. MiFID II RTS 6 wants the off switch tested. NautilusTrader's trading states are ACTIVE / REDUCING / HALTED.
+- **Tested:** `.venv/bin/shortbot drill kill-switch` (demo, #46; deploy/DEPLOY.md §7a) runs REDUCING, HALTED and flatten through the desk's real command path on a drill short and a far entry, and the owner's clear plus `--verify` records the pass. The go-live gate wants a pass from the last 30 days (docs/GO_LIVE.md).
 - **States** (one journal kv row, `trading_state`, with who, why, when and the cause):
   - REDUCING: only closes, partial closes, stop tightening and cancelling entries. No new entries, adds, risk-raising amends, stop widening or ladder opt-ins. Resting entries stay; a fill is protected, journalled and alerted, never auto-closed.
   - HALTED: REDUCING + every resting limit entry is withdrawn. A pre-armed stop goes only with a limit confirmed unfilled. Protective stops on open positions are never cancelled: for a short book a generic cancel-all strips them.

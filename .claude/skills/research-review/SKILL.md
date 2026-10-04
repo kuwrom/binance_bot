@@ -27,6 +27,7 @@ The desk learns from three data streams:
    - `similar` (returned by `add_learning`): when two learnings say the same thing, keep one and supersede the other.
    - Supersede instead of rewriting: a changed claim is a new learning plus `superseded_by` on the old one. The statement never changes.
    - Set `valid_until` on regime- or one-coin claims (a day's tell, a coin's current behaviour).
+5. `golive_report` (`.venv/bin/shortbot golive --text`): the go-live gate on the demo evidence (docs/GO_LIVE.md). Each blocker names the evidence that is missing: forward tests, independent trades, expectancy at mainnet prices, drawdown, uptime, incidents, slippage calibration, plumbing drills. Report it to the owner. READY never means "switch": only the owner edits `.env` or goes live.
 
 ## Ad-hoc questions: code mode
 Use `shortbot.lab` through Bash and print only the conclusion:
