@@ -109,13 +109,22 @@ def status_unknown():
                                             "execution status unknown."))
 
 
-def unavailable(path: str, executed: bool):
+def unavailable(path: str, executed: bool, method: str = "POST"):
     """HTTP 503 (general-info doc). 'Unknown error...' = execution status UNKNOWN (it may have run); 'Service
     Unavailable.' = a failure. ccxt: a body without "code" falls through handle_errors to httpExceptions['503'] ->
-    ExchangeNotAvailable, message `id method url status reason body`. Inferred: the real body's shape is
-    undocumented; one that carries a code would map by that code instead."""
+    ExchangeNotAvailable, message `id method url status reason body` (`method`: POST a send, DELETE a cancel, GET a
+    query). Inferred: the real body's shape is undocumented; one that carries a code would map by that code instead."""
     msg = "Unknown error, please check your request or try again later." if executed else "Service Unavailable."
-    return ccxt.ExchangeNotAvailable(f'binanceusdm POST {DEMO_FAPI}/{path} 503 Service Unavailable {{"msg":"{msg}"}}')
+    return ccxt.ExchangeNotAvailable(f'binanceusdm {method} {DEMO_FAPI}/{path} 503 Service Unavailable '
+                                     f'{{"msg":"{msg}"}}')
+
+
+def throttled():
+    # -1008 at HTTP 503 (general-info doc, case C: "100% failure", nothing ran; reduce-only and close-position orders
+    # are exempt). The body carries the code, so ccxt's handle_errors maps it by the linear map -> OperationFailed
+    # before the 503 fallback (ccxt binance.py ~2127). The desk treats it as unknown on purpose (errors.py)
+    return ccxt.OperationFailed(_body(-1008, "Request throttled by system-level protection. Reduce-only/close-position "
+                                             "orders are exempt. Please try again."))
 
 
 def no_api_key():   # ccxt check_required_credentials() on the keyless prod client

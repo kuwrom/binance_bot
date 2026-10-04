@@ -58,14 +58,14 @@ CODES = [
 ]
 
 
-def ccxt_raises(status: int, body: str, url: str = URL) -> Exception:
+def ccxt_raises(status: int, body: str, url: str = URL, method: str = "POST", reason: str = "Bad Request") -> Exception:
     """What ccxt 4.5.84's binanceusdm raises for this HTTP answer (handle_errors, then the HTTP-status fallback)."""
     x = ccxt.binanceusdm()
     x.options["hasAlreadyAuthenticatedSuccessfully"] = True
     try:
         parsed = json.loads(body) if body.startswith("{") else None
-        x.handle_errors(status, "Bad Request", url, "POST", {}, body, parsed, None, None)
-        x.handle_http_status_code(status, "Bad Request", url, "POST", body)
+        x.handle_errors(status, reason, url, method, {}, body, parsed, None, None)
+        x.handle_http_status_code(status, reason, url, method, body)
     except Exception as e:  # noqa: BLE001 - the answer under test
         return e
     raise AssertionError(f"ccxt raised nothing for {status} {body}")
@@ -100,6 +100,18 @@ def test_the_fakes_errors_are_what_ccxt_raises(name, e):
     status = 429 if " 429 " in str(e) else 400
     body = str(e)[str(e).index("{"):]
     assert type(ccxt_raises(status, body)) is type(e)
+
+
+@pytest.mark.parametrize("method, path", [("POST", "order"), ("DELETE", "algoOrder"), ("GET", "order")])
+def test_the_503_answers_are_what_ccxt_raises_at_http_503(method, path):
+    """General-info doc, HTTP 503: 'Unknown error' (it may have run), 'Service Unavailable.' and -1008 (both failures).
+    The desk can't tell the last two from the first by its type and treats all three as unknown (never re-sent)."""
+    url = f"{err.DEMO_FAPI}/{path}"
+    for e in (err.unavailable(path, True, method), err.unavailable(path, False, method), err.throttled()):
+        body = str(e)[str(e).index("{"):]
+        got = ccxt_raises(503, body, url, method, "Service Unavailable")
+        assert (type(got), str(got)) == (type(e), str(e)) and E.classify(e) is E.OutcomeUnknown
+    assert E.code(err.throttled()) == -1008
 
 
 @pytest.mark.parametrize("e, kind", [
