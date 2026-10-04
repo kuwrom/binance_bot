@@ -4,8 +4,8 @@ from shortbot.journal import Journal
 from shortbot.research import outcome_from_candles, report
 
 
-def c(o, h, l, cl):
-    return [0, o, h, l, cl, 1]
+def c(o, h, lo, cl):
+    return [0, o, h, lo, cl, 1]
 
 
 def test_outcome_short_positive_when_price_falls():

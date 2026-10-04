@@ -4,8 +4,8 @@ from shortbot.probability.labels import label_bracket, label_touch
 from shortbot.research_stats import wilson
 
 
-def c(h, l, close=None):
-    return [0, 0, h, l, close if close is not None else (h + l) / 2, 1]
+def c(h, lo, close=None):
+    return [0, 0, h, lo, close if close is not None else (h + lo) / 2, 1]
 
 
 def test_label_bracket_order_and_conservative_same_bar():

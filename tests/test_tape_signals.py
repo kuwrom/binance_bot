@@ -5,8 +5,8 @@ from shortbot.tape import classify
 from tests.test_signals import FakeCtx
 
 
-def b(o, h, l, c, v=100.0, buy=50.0):
-    return [0, o, h, l, c, v, buy]
+def b(o, h, lo, c, v=100.0, buy=50.0):
+    return [0, o, h, lo, c, v, buy]
 
 
 class TapeCtx(FakeCtx):

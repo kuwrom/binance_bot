@@ -7,8 +7,8 @@ from shortbot.backtest.sim import COSTS, FREE, Plan, simulate
 H = 3_600_000
 
 
-def bar(k, o, h, l, c, qv=2e7):
-    return {"ts": k * H, "o": o, "h": h, "l": l, "c": c, "qv": qv}
+def bar(k, o, h, lo, c, qv=2e7):
+    return {"ts": k * H, "o": o, "h": h, "l": lo, "c": c, "qv": qv}
 
 
 def flat(n=30, px=100.0):
@@ -30,8 +30,8 @@ def test_a_long_is_the_mirror_image_of_a_short_without_costs():
         for k in range(50):
             o = px
             c = o * (1 + rnd.gauss(0, 0.02))
-            h, l = max(o, c) * (1 + abs(rnd.gauss(0, 0.01))), min(o, c) * (1 - abs(rnd.gauss(0, 0.01)))
-            rows.append(bar(k, o, h, l, c))
+            h, lo = max(o, c) * (1 + abs(rnd.gauss(0, 0.01))), min(o, c) * (1 - abs(rnd.gauss(0, 0.01)))
+            rows.append(bar(k, o, h, lo, c))
             px = c
         i = rnd.randint(20, 40)
         c = rows[i]["c"]

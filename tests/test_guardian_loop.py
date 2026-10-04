@@ -246,7 +246,7 @@ async def test_lane_logs_when_the_event_loop_was_blocked(monkeypatch, caplog):
     ln = lane_with(Job("entries", noop, 0, 5))
     task = asyncio.create_task(ln.run())
     await asyncio.sleep(0.005)
-    time.sleep(0.06)   # noqa: ASYNC251 - synchronous work elsewhere in the process, on purpose
+    time.sleep(0.06)   # synchronous work elsewhere in the process, on purpose
     await asyncio.sleep(0.02)
     task.cancel()
     assert "blocked the event loop" in caplog.text

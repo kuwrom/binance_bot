@@ -19,15 +19,18 @@ def main() -> None:
         b = a[:, 0] // M15
         keys, idx = np.unique(b, return_index=True)
         last = np.r_[idx[1:] - 1, len(a) - 1]
-        c = a[last, 1]; v = np.add.reduceat(a[:, 2], idx)
+        c = a[last, 1]
+        v = np.add.reduceat(a[:, 2], idx)
         full = np.diff(np.r_[idx, len(a)]) == 3
         per[s] = (keys[full], c[full], v[full])
     print("symbols", len(per), "of", len(syms))
     counts = {k: {} for k in ("z1h_2", "z4h_2", "z1h_3", "z4h_3", "vol_2", "vol_3", "any_2", "any_3")}
     persist = {"z4h_2": [0, 0], "z1h_2": [0, 0]}
     for s, (k, c, v) in per.items():
-        if len(c) < 130: continue
-        r = np.diff(np.log(c)); kk = k[1:]
+        if len(c) < 130:
+            continue
+        r = np.diff(np.log(c))
+        kk = k[1:]
         out = {}
         for name, h in (("z1h", 4), ("z4h", 16)):
             move = sw(r, h).sum(1)                       # move ending at i+h-1
@@ -42,22 +45,29 @@ def main() -> None:
         # z of hour ending at t vs prior 29 hours ending t-4, t-8, ...
         t = np.arange(3 + 4 * 29, len(v))
         prior = np.stack([hs[t - 3 - 4 * j] for j in range(1, 30)], 1)
-        med = np.median(prior, 1); mad = np.median(np.abs(prior - med[:, None]), 1) * 1.4826
-        mad = np.where(mad > 0, mad, prior.std(1)); vz = (hs[t - 3] - med) / np.where(mad > 0, mad, 1)
+        med = np.median(prior, 1)
+        mad = np.median(np.abs(prior - med[:, None]), 1) * 1.4826
+        mad = np.where(mad > 0, mad, prior.std(1))
+        vz = (hs[t - 3] - med) / np.where(mad > 0, mad, 1)
         out["vol"] = (k[t], vz)
         for thr in (2, 3):
             hit_any = set()
             for name in ("z1h", "z4h", "vol"):
                 ts, z = out[name]
                 hit = ts[(np.abs(z) if name != "vol" else z) >= thr]
-                for x in hit: counts[f"{name}_{thr}"][x] = counts[f"{name}_{thr}"].get(x, 0) + 1
+                for x in hit:
+                    counts[f"{name}_{thr}"][x] = counts[f"{name}_{thr}"].get(x, 0) + 1
                 hit_any |= set(hit.tolist())
-            for x in hit_any: counts[f"any_{thr}"][x] = counts[f"any_{thr}"].get(x, 0) + 1
+            for x in hit_any:
+                counts[f"any_{thr}"][x] = counts[f"any_{thr}"].get(x, 0) + 1
         for name in ("z1h", "z4h"):
-            ts, z = out[name]; h = np.abs(z) >= 2
-            persist[f"{name}_2"][0] += int((h[1:] & h[:-1]).sum()); persist[f"{name}_2"][1] += int(h[1:].sum())
+            ts, z = out[name]
+            h = np.abs(z) >= 2
+            persist[f"{name}_2"][0] += int((h[1:] & h[:-1]).sum())
+            persist[f"{name}_2"][1] += int(h[1:].sum())
     allw = sorted(set().union(*[set(d) for d in counts.values()]))
-    lo, hi = allw[0], allw[-1]; W = np.arange(lo, hi + 1)
+    lo, hi = allw[0], allw[-1]
+    W = np.arange(lo, hi + 1)
     print("windows", len(W), "days", round(len(W) / 96, 1))
     for name, d in counts.items():
         x = np.array([d.get(w, 0) for w in W])

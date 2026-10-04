@@ -49,7 +49,7 @@ def test_two_way_se_matches_theory_where_the_naive_se_is_far_too_small():
 
 def _cgm_matrix(y, g, h):
     """Reference: CGM (2011) eq. 2.14-2.15 for a regression on a constant, with N x N selection matrices and the
-    Stata-style factors c1 = G/(G-1), c2 = H/(H-1), c3 = I/(I-1) ((N-1)/(N-K) = 1 for K = 1)."""
+    Stata-style factors c1 = G/(G-1), c2 = H/(H-1), c3 = GH/(GH-1) ((N-1)/(N-K) = 1 for K = 1)."""
     y = np.asarray(y, float)
     u = y - y.mean()
     n = len(y)
@@ -59,9 +59,9 @@ def _cgm_matrix(y, g, h):
     sgh = sg * sh
     uu = np.outer(u, u)
     G, H = len(set(g.tolist())), len(set(h.tolist()))
-    I = len(set(zip(g.tolist(), h.tolist())))
+    GH = len(set(zip(g.tolist(), h.tolist())))
     part = lambda s, k: k / (k - 1) * (uu * s).sum() / n ** 2  # noqa: E731
-    return part(sg, G) + part(sh, H) - part(sgh, I), part(sg, G), part(sh, H)
+    return part(sg, G) + part(sh, H) - part(sgh, GH), part(sg, G), part(sh, H)
 
 
 def test_two_way_components_equal_the_selection_matrix_formula():

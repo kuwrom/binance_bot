@@ -34,11 +34,11 @@ def touch_down(p0: float, level: float, sigma: float, t: float, nu: float = 0.0)
 def race_up_first(p0: float, upper: float, lower: float, sigma: float, nu: float = 0.0) -> float:
     """P(hit upper before lower) with no time limit (scale function / gambler's ruin).
     ν = 0: ln(P0/L) / ln(U/L). This is the optional-stopping result: no drift ⇒ no edge from R:R."""
-    u, l = math.log(upper / p0), math.log(lower / p0)
+    u, lo = math.log(upper / p0), math.log(lower / p0)
     if abs(nu) < 1e-12 or sigma <= 0:
-        return -l / (u - l)
+        return -lo / (u - lo)
     k = 2 * nu / sigma**2
-    return (1 - math.exp(-k * l)) / (math.exp(-k * u) - math.exp(-k * l))
+    return (1 - math.exp(-k * lo)) / (math.exp(-k * u) - math.exp(-k * lo))
 
 
 def three_way(p0: float, upper: float, lower: float, sigma: float, t: float, nu: float = 0.0,
@@ -47,8 +47,8 @@ def three_way(p0: float, upper: float, lower: float, sigma: float, t: float, nu:
     Verified vs Monte Carlo: σ=100%/yr, T=4h, +3%/-2% -> (0.1655, 0.3442, 0.4902)."""
     if sigma <= 0 or t <= 0:
         return {"up": 0.0, "down": 0.0, "time": 1.0}
-    u, l = math.log(upper / p0), math.log(lower / p0)
-    w, y = u - l, -l
+    u, lo = math.log(upper / p0), math.log(lower / p0)
+    w, y = u - lo, -lo
     s2 = sigma**2
     p_up_inf = race_up_first(p0, upper, lower, sigma, nu)
     c = math.pi * s2 / w**2

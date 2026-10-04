@@ -29,9 +29,9 @@ def rsi(values: list[float], period: int = 14) -> float | None:
     losses = [max(values[i - 1] - values[i], 0) for i in range(1, len(values))]
     avg_g = sum(gains[:period]) / period
     avg_l = sum(losses[:period]) / period
-    for g, l in zip(gains[period:], losses[period:]):
+    for g, loss in zip(gains[period:], losses[period:]):
         avg_g = (avg_g * (period - 1) + g) / period
-        avg_l = (avg_l * (period - 1) + l) / period
+        avg_l = (avg_l * (period - 1) + loss) / period
     if avg_l == 0:
         return 50.0 if avg_g == 0 else 100.0  # flat series: neutral, not overbought
     return 100 - 100 / (1 + avg_g / avg_l)

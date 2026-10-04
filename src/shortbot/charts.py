@@ -15,13 +15,13 @@ from typing import Any
 import matplotlib
 
 matplotlib.use("Agg")
-import mplfinance as mpf  # noqa: E402
-import pandas as pd  # noqa: E402
+import mplfinance as mpf
+import pandas as pd
 
-from . import tape_math as tm  # noqa: E402
-from .market import DataHub  # noqa: E402
-from .signals import evaluate  # noqa: E402
-from .tape import classify  # noqa: E402
+from . import tape_math as tm
+from .market import DataHub
+from .signals import evaluate
+from .tape import classify
 
 TF_MS = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
 OI_PERIOD = {"5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h"}

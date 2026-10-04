@@ -55,7 +55,7 @@ def mark_gap_z(last_closes: list[float], mark_closes: list[float]) -> float | No
     n = min(len(last_closes), len(mark_closes))
     if n < 12:
         return None
-    gaps = [(l - m) / m for l, m in zip(last_closes[-n:], mark_closes[-n:]) if m]
+    gaps = [(last - m) / m for last, m in zip(last_closes[-n:], mark_closes[-n:]) if m]
     hist = gaps[:-1]
     sd = statistics.pstdev(hist)
     return (gaps[-1] - statistics.mean(hist)) / sd if sd else None

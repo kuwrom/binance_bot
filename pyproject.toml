@@ -63,6 +63,9 @@ select = [
     "G",        # logging calls format lazily
     "I",        # imports sorted (isort); `# noqa: I001` on a block's first line keeps an order that matters
     "UP",       # pyupgrade, for requires-python (datetime.UTC, collections.abc, builtin TimeoutError)
+    "E4",       # imports: one per line, at the top (ruff exempts sys.path, os.environ and matplotlib.use between them)
+    "E7",       # statements: one per line, no lambda assignment, no `l`/`O`/`I` names
+    "RUF100",   # every noqa suppresses something (BLE001 below is external, so its reasons stay)
 ]
 # zip() without strict= (69 sites): strict=True raises on a length mismatch, a behaviour change decided per site
 ignore = ["B905"]

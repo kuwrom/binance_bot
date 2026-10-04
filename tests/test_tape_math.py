@@ -3,8 +3,8 @@ import pytest
 from shortbot import tape_math as tm
 
 
-def bar(o, h, l, c, v=100.0, buy=50.0, ts=0):
-    return [ts, o, h, l, c, v, buy]
+def bar(o, h, lo, c, v=100.0, buy=50.0, ts=0):
+    return [ts, o, h, lo, c, v, buy]
 
 
 def test_taker_imbalance_and_cvd():

@@ -17,7 +17,7 @@ from bisect import bisect_left
 from collections.abc import Sequence
 
 MIN, HOUR, DAY = 60_000, 3_600_000, 86_400_000
-TS, O, H, L, C, V, QV, N, TBV, TBQ = range(10)
+TS, O, H, L, C, V, QV, N, TBV, TBQ = range(10)   # noqa: E741 - a kline's columns, O = open
 _TF = {"1m": MIN, "3m": 3 * MIN, "5m": 5 * MIN, "15m": 15 * MIN, "30m": 30 * MIN, "1h": HOUR, "2h": 2 * HOUR,
        "4h": 4 * HOUR, "6h": 6 * HOUR, "8h": 8 * HOUR, "12h": 12 * HOUR, "1d": DAY}
 Bar = tuple

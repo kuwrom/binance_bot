@@ -34,16 +34,15 @@ from typing import Any
 
 from .. import provenance as P
 from ..config import RiskLimits
-from .features import Market, features
-from .sim import COSTS, FREE, Costs, simulate
-
-STRESS = Costs(taker_bps=7.5, maker_bps=3.0, slip_k_bps=40.0, stop_overshoot=0.1)   # 1.5x fees, 2x slippage
 from . import strategies as S
+from .features import Market, features
 from .placebo import matched_signals
+from .sim import COSTS, FREE, Costs, simulate
 from .stats import day_of
 from .strategies import Trial, set_min_vol24, trials
 from .strategies_more import RANDOM, placebo_signals
 
+STRESS = Costs(taker_bps=7.5, maker_bps=3.0, slip_k_bps=40.0, stop_overshoot=0.1)   # 1.5x fees, 2x slippage
 H = 3_600_000
 OPEN_KEYED = ("premium",)                                          # keyed by the bar's open time, like the bars
 END_KEYED = ("oi", "ls_top", "ls_top_acct", "ls_global", "taker_ratio")   # keyed by the hour's END

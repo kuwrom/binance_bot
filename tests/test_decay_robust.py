@@ -4,8 +4,8 @@ from shortbot import decay
 from shortbot import robust_math as rm
 
 
-def b(o, h, l, c, v=100.0, buy=50.0):
-    return [0, o, h, l, c, v, buy]
+def b(o, h, lo, c, v=100.0, buy=50.0):
+    return [0, o, h, lo, c, v, buy]
 
 
 def test_weight_half_life_and_unknown_family():
