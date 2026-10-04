@@ -10,3 +10,6 @@ data/
 fx.json
 sx.json
 h.txt
+
+# third-party quant repos cloned for study (docs/QUANT_METHODS.md); never committed or synced
+learning-repos/
