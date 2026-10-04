@@ -57,4 +57,5 @@ def is_drill(setup: object) -> bool:
 
 COLUMNS: dict[str, dict[str, str]] = {
     "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL"},
+    "warmups": {"mode": "TEXT NOT NULL DEFAULT 'demo'"},   # a desk warms up its own account (DESKS.md)
 }

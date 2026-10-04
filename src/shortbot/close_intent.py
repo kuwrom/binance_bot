@@ -42,8 +42,8 @@ def recent_change(j, symbol: str, trade: dict | None, now: datetime | None = Non
     since = ((now or datetime.now(UTC)) - timedelta(seconds=RECENT_CHANGE_S)).isoformat(timespec="seconds")
     opened = (trade or {}).get("opened_at") or ""   # a previous trade's exits on this symbol are not this one's
     rows = j._rows(f"SELECT ts, action, reasoning, snapshot FROM decisions WHERE symbol=? AND ts > ? AND ts >= ? AND "
-                   f"action IN ({','.join('?' * len(SIZE_EVENTS))}) ORDER BY id DESC LIMIT 1",
-                   (symbol, since, opened, *SIZE_EVENTS))
+                   f"COALESCE(mode, 'demo') = ? AND action IN ({','.join('?' * len(SIZE_EVENTS))}) ORDER BY id DESC "
+                   "LIMIT 1", (symbol, since, opened, j.mode, *SIZE_EVENTS))
     return rows[0] if rows else None
 
 

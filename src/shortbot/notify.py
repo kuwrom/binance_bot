@@ -33,7 +33,7 @@ class Notifier:
         self.j = journal
 
     def _cooling(self, key: str, cooldown_s: float) -> bool:
-        last = self.j.get(f"alert_ts:{key}")
+        last = self.j.get(self.j.mode_key(f"alert_ts:{key}"))
         return time.time() - float(last) < cooldown_s if last else False
 
     async def send(self, kind: str, message: str, symbol: str | None = None,
@@ -45,14 +45,14 @@ class Notifier:
         message = redact(message)
         self.j.log_alert(kind, message, symbol)   # posted, like its cooldown stamp: a locked journal never holds it
         now = time.time()
-        self.j.mark(f"alert_ts:{key}", str(now))
+        self.j.mark(self.j.mode_key(f"alert_ts:{key}"), str(now))
         log.warning("ALERT %s %s: %s", kind, symbol or "", message)
         if not (self.s.telegram_token and self.s.telegram_chat_id):
             return True
         if await self._telegram(kind, message, symbol, urgent):
             return True
         if cooldown_s > TELEGRAM_RETRY_S:
-            self.j.mark(f"alert_ts:{key}", str(now - (cooldown_s - TELEGRAM_RETRY_S)))
+            self.j.mark(self.j.mode_key(f"alert_ts:{key}"), str(now - (cooldown_s - TELEGRAM_RETRY_S)))
         return False
 
     async def forward(self, kind: str, message: str, symbol: str | None = None, urgent: bool = False) -> bool:

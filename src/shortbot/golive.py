@@ -280,8 +280,8 @@ def _near(kind: str) -> bool:
 
 
 def incidents_crit(j: Any, start: str) -> dict[str, Any]:
-    rows = j._rows("SELECT id, ts, kind, symbol FROM alerts WHERE ts >= ? AND COALESCE(mode, ?) = ? ORDER BY id",
-                   (start, j.mode, j.mode))
+    rows = j._rows("SELECT id, ts, kind, symbol FROM alerts WHERE ts >= ? AND COALESCE(mode, 'demo') = ? ORDER BY id",
+                   (start, j.mode))
     inc = [r for r in rows if r["kind"] in INCIDENTS]
     near = dict(Counter(r["kind"] for r in rows if _near(r["kind"])))
     return crit(not inc, len(inc), f"0 alerts of {', '.join(INCIDENTS)}",

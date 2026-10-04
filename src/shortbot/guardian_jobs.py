@@ -60,17 +60,17 @@ class MarketJobs:
     # ------------------------------------------------------------ monitor lane
     async def check_announcements(self) -> None:
         items = await news.binance_announcements()
-        first_run = self.j.get("ann_initialised") is None
+        first_run = self.j.get(self.j.mode_key("ann_initialised")) is None
         for a in items:
             if a["catalog"] not in ("New Listing", "Delisting"):
                 continue
-            key = f"ann_seen:{a['url']}"
+            key = self.j.mode_key(f"ann_seen:{a['url']}")
             if self.j.get(key) is None:
                 self.j.mark(key, str(time.time()))
                 fresh = datetime.fromisoformat(a["time"]) > datetime.now(UTC) - timedelta(hours=24)
                 if not first_run and fresh:  # never alert on old items that merely re-appear in the list
                     await self._announce(a)
-        self.j.mark("ann_initialised", "1")
+        self.j.mark(self.j.mode_key("ann_initialised"), "1")
 
     async def _announce(self, a: dict) -> None:
         """A delisting naming a coin on our book (an open short, or an entry that is or may be resting) is urgent, per
@@ -82,7 +82,7 @@ class MarketJobs:
         for sym in hits:
             await self.n.send(kind, f"Delisting of a coin on our book: exit before settlement (delisting-short "
                               f"playbook).\n{text}", sym, urgent=True, cooldown_s=0)
-        if not hits:
+        if not hits and self.app.settings.guardian_market:   # the heads-up once, from the market guardian
             await self.n.send(kind, text, cooldown_s=0)
 
     async def check_governor(self) -> None:

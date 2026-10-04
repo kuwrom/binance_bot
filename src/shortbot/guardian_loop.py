@@ -103,7 +103,7 @@ class Lane:
         if job.every_s < PERSIST_EVERY_S:
             return 0.0
         try:
-            return min(float(self.j.get(KV_LAST_RUN + job.name) or 0), time.time())
+            return min(float(self.j.get(self.j.mode_key(KV_LAST_RUN + job.name)) or 0), time.time())
         except Exception:  # noqa: BLE001 - unknown: run it now
             log.exception("last run of %s unreadable", job.name)
             return 0.0
@@ -186,7 +186,8 @@ class Lane:
                 await send_safe(self.n, f"guardian_recovered:{job.name}", f"{job.name} OK again after {r[0]} "
                                 f"failures ({r[1] / 60:.0f} min)", cooldown_s=0)
             if job.every_s >= PERSIST_EVERY_S:   # successes only: a restart retries a failed daily job
-                self.j.post(lambda j, k=KV_LAST_RUN + job.name, v=str(self.last[job.name]): j.set(k, v))
+                key = self.j.mode_key(KV_LAST_RUN + job.name)   # per desk: each guardian keeps its own schedule
+                self.j.post(lambda j, k=key, v=str(self.last[job.name]): j.set(k, v))
 
     async def _failed(self, job: Job, e: Exception) -> None:
         escalate = self.streak.fail(job.name)

@@ -385,9 +385,8 @@ class Journal(ResearchStore, LearningStore):
              st["intent_id"]))
 
     def alerts(self, limit: int = 30, since: str | None = None) -> list[dict[str, Any]]:
-        if since:
-            return self._rows("SELECT * FROM alerts WHERE ts > ? ORDER BY id DESC LIMIT ?", (since, limit))
-        return self._rows("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,))
+        sql = "SELECT * FROM alerts WHERE COALESCE(mode, 'demo') = ?" + (" AND ts > ?" if since else "")  # this desk's
+        return self._rows(sql + " ORDER BY id DESC LIMIT ?", (self.mode, *([since] if since else []), limit))
 
     def record_metrics(self, rows: list[tuple]) -> None:
         """rows: (ts, symbol, price, funding_rate, open_interest, quote_volume_24h)"""

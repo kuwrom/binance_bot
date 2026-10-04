@@ -40,12 +40,16 @@ def _rows(j, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
     return [dict(r) for r in j.db.execute(sql, args).fetchall()]
 
 
+MINE = "COALESCE(mode, 'demo') = ?"   # this desk's alerts (rows from before #32 have no mode: demo's)
+
+
 def ack_id(j) -> int:
-    """Newest acknowledged alert id. Before the first acknowledgement: the last alert the old brief showed."""
-    raw = j.get(ACK_KEY)
+    """Newest acknowledged alert id, per desk (Journal.mode_key). Before the first acknowledgement: the last alert the
+    old brief showed (demo only)."""
+    raw = j.get(j.mode_key(ACK_KEY))
     if raw is not None and raw.isdigit():
         return int(raw)
-    legacy = j.get(LEGACY_KEY)
+    legacy = j.get(LEGACY_KEY) if j.mode == "demo" else None
     if not legacy:
         return 0
     row = j.db.execute("SELECT MAX(id) FROM alerts WHERE ts <= ?", (legacy,)).fetchone()
@@ -64,16 +68,16 @@ def _line(a: dict[str, Any], mark: str = "", n: int = 1) -> str:
 
 def brief_lines(j) -> list[str]:
     after = ack_id(j)
-    counts = _rows(j, "SELECT kind, urgent(kind, symbol) AS u, COUNT(*) AS n FROM alerts WHERE id > ? "
-                      "GROUP BY kind, u ORDER BY n DESC, kind", (after,))
+    counts = _rows(j, f"SELECT kind, urgent(kind, symbol) AS u, COUNT(*) AS n FROM alerts WHERE id > ? AND {MINE} "
+                      "GROUP BY kind, u ORDER BY n DESC, kind", (after, j.mode))
     total = sum(r["n"] for r in counts)
     if not total:
         return [f"### alerts: none unacknowledged (through #{after})"]
     n_urgent = sum(r["n"] for r in counts if r["u"])
     out = [f"### alerts: {total} unacknowledged since #{after} ({n_urgent} urgent); start_session acknowledges them"]
     if n_urgent:
-        urgent = _rows(j, "SELECT * FROM alerts WHERE id > ? AND urgent(kind, symbol) ORDER BY id DESC LIMIT ?",
-                       (after, URGENT_CAP))
+        urgent = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND {MINE} AND urgent(kind, symbol) ORDER BY id DESC "
+                          "LIMIT ?", (after, j.mode, URGENT_CAP))
         out += [_line(a, "🚨 ") for a in urgent]
         if n_urgent > URGENT_CAP:
             out.append(f"- 🚨 {n_urgent - URGENT_CAP} more urgent: see the journal tool")
@@ -81,8 +85,9 @@ def brief_lines(j) -> list[str]:
     if routine:
         n = sum(r["n"] for r in routine)
         out.append(f"- routine ({n}): " + ", ".join(f"{r['kind']} {r['n']}" for r in routine))
-        groups = _rows(j, "SELECT MAX(id) AS id, COUNT(*) AS n FROM alerts WHERE id > ? AND NOT urgent(kind, symbol) "
-                          "GROUP BY kind, symbol ORDER BY MAX(id) DESC LIMIT ?", (after, ROUTINE_SHOWN))
+        groups = _rows(j, f"SELECT MAX(id) AS id, COUNT(*) AS n FROM alerts WHERE id > ? AND {MINE} AND NOT "
+                          "urgent(kind, symbol) GROUP BY kind, symbol ORDER BY MAX(id) DESC LIMIT ?",
+                       (after, j.mode, ROUTINE_SHOWN))
         rows = {r["id"]: r for r in _rows(j, f"SELECT * FROM alerts WHERE id IN ({','.join('?' * len(groups))})",
                                           tuple(g["id"] for g in groups))}
         out += [_line(rows[g["id"]], n=g["n"]) for g in groups]   # newest per (kind, symbol): a flood takes one line
@@ -90,14 +95,15 @@ def brief_lines(j) -> list[str]:
 
 
 def acknowledge(j) -> dict[str, Any]:
-    """Mark every alert up to the newest as seen and return what was acknowledged (so nothing is acked unseen)."""
+    """Mark every alert of this desk up to the newest as seen and return what was acknowledged (so nothing is acked
+    unseen). The other desk's alerts stay for its own session."""
     after = ack_id(j)
-    through = int(j.db.execute("SELECT MAX(id) FROM alerts").fetchone()[0] or after)
-    rows = _rows(j, "SELECT kind, COUNT(*) AS n FROM alerts WHERE id > ? AND id <= ? GROUP BY kind ORDER BY n DESC",
-                 (after, through))
-    items = _rows(j, "SELECT * FROM alerts WHERE id > ? AND id <= ? AND urgent(kind, symbol) ORDER BY id DESC LIMIT ?",
-                  (after, through, URGENT_CAP))
-    j.set(ACK_KEY, str(through))
+    through = int(j.db.execute(f"SELECT MAX(id) FROM alerts WHERE {MINE}", (j.mode,)).fetchone()[0] or after)
+    rows = _rows(j, f"SELECT kind, COUNT(*) AS n FROM alerts WHERE id > ? AND id <= ? AND {MINE} GROUP BY kind "
+                    "ORDER BY n DESC", (after, through, j.mode))
+    items = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND id <= ? AND {MINE} AND urgent(kind, symbol) "
+                     "ORDER BY id DESC LIMIT ?", (after, through, j.mode, URGENT_CAP))
+    j.set(j.mode_key(ACK_KEY), str(through))
     return {"through_id": through, "count": sum(r["n"] for r in rows), "by_kind": {r["kind"]: r["n"] for r in rows},
             "urgent": [for_agent(a) for a in items]}
 

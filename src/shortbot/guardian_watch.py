@@ -130,7 +130,7 @@ class WatchChecks:
         res = await news.news_for(sym.split("/")[0], max_items=5)
         for item in res["binance_announcements"] + res["headlines"]:
             url, title = item.get("url", ""), item.get("title", "")
-            key = f"news_seen:{url or title}"    # a link that failed safe_url() is "": the headline still alerts
+            key = self.j.mode_key(f"news_seen:{url or title}")    # a link that failed safe_url() is "": the headline still alerts
             if (url or title) and self.j.get(key) is None:
                 self.j.mark(key, str(time.time()))
                 await self.n.send("news_on_position", f"{title}\n{url}".strip(), sym, cooldown_s=0)

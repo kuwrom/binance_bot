@@ -30,9 +30,10 @@ def _ts(iso: str | None) -> datetime | None:
 
 
 def last_activity(j) -> datetime | None:
-    """Latest trade open/close or completed warm-up. A plumbing drill's trade is no activity (#46)."""
-    row = j.db.execute(f"SELECT MAX(COALESCE(closed_at, opened_at)) FROM trades WHERE {NOT_DRILL}").fetchone()
-    wu = j.db.execute("SELECT MAX(checked_at) FROM warmups WHERE status='done'").fetchone()
+    """Latest trade open/close or completed warm-up of this desk. A plumbing drill's trade is no activity (#46)."""
+    row = j.db.execute(f"SELECT MAX(COALESCE(closed_at, opened_at)) FROM trades WHERE {NOT_DRILL} AND mode=?",
+                       (j.mode,)).fetchone()
+    wu = j.db.execute("SELECT MAX(checked_at) FROM warmups WHERE status='done' AND mode=?", (j.mode,)).fetchone()
     stamps = [t for t in (_ts(row[0]), _ts(wu[0])) if t]
     return max(stamps) if stamps else None
 
@@ -132,7 +133,8 @@ class WarmUp:
         self.ex, self.j = ex, journal
 
     async def default_symbols(self) -> list[str]:
-        pending = [r[0] for r in self.j.db.execute("SELECT DISTINCT symbol FROM entries WHERE status='pending'")] \
+        pending = [r[0] for r in self.j.db.execute("SELECT DISTINCT symbol FROM entries WHERE status='pending' "
+                                                           "AND mode=?", (self.j.mode,))] \
             if self.j.db.execute("SELECT name FROM sqlite_master WHERE name='entries'").fetchone() else []
         perps = await self.ex.coin_perps()
         tickers = await self.ex.public.fetch_tickers()
@@ -146,9 +148,9 @@ class WarmUp:
         btc = await btc_15m_return(self.ex)
         now = datetime.now(UTC)
         cur = self.j.db.execute(
-            "INSERT INTO warmups (started_at, t0_ms, symbols, snap0, status) VALUES (?,?,?,?,?)",
+            "INSERT INTO warmups (started_at, t0_ms, symbols, snap0, status, mode) VALUES (?,?,?,?,?,?)",
             (now.isoformat(timespec="seconds"), int(now.timestamp() * 1000), json.dumps(syms),
-             json.dumps({"coins": snaps, "btc_ret_15m": btc}), "running"))
+             json.dumps({"coins": snaps, "btc_ret_15m": btc}), "running", self.j.mode))
         self.j.db.commit()
         note = "snapshot taken on a burst minute (:00-:01/:15/:30/:45); fine, but prefer :02-:13" \
             if now.minute % 15 < 2 else None
@@ -157,8 +159,9 @@ class WarmUp:
             "study": "read the tape meanwhile: regime, governor, clock/macro, charts of these coins"}
 
     async def check(self, warmup_id: int | None = None) -> dict[str, Any]:
-        row = self.j.db.execute("SELECT * FROM warmups WHERE status='running' " + (
-            "AND id=? " if warmup_id else "") + "ORDER BY id DESC LIMIT 1", (warmup_id,) if warmup_id else ()).fetchone()
+        row = self.j.db.execute("SELECT * FROM warmups WHERE status='running' AND mode=? " + (
+            "AND id=? " if warmup_id else "") + "ORDER BY id DESC LIMIT 1",
+            (self.j.mode, *((warmup_id,) if warmup_id else ()))).fetchone()
         if not row:
             return {"ok": False, "error": "no running warm-up; start one with `warmup start`"}
         waited = (time.time() * 1000 - row["t0_ms"]) / 60_000
@@ -191,7 +194,8 @@ def desk_clock(settings, j) -> dict[str, Any]:
     from .market.calendar import MacroCalendar, blocking
     from .sessions import clock
     events = MacroCalendar(settings.db_path).around(hours=24 * 7)
-    running = j.db.execute("SELECT id, started_at FROM warmups WHERE status='running' ORDER BY id DESC").fetchone()
+    running = j.db.execute("SELECT id, started_at FROM warmups WHERE status='running' AND mode=? ORDER BY id DESC",
+                           (j.mode,)).fetchone()
     return {"clock": clock(), "desk": desk_state(j), "macro_blocking_now": blocking(events),
             "macro_week": [{k: e[k] for k in ("utc", "name", "kind", "minutes_to")} for e in events],
             "warmup_running": dict(running) if running else None}

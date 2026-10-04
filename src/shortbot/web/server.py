@@ -138,8 +138,8 @@ class Web:
         except ValueError:
             return _err(400, "limit must be a number")
         j = get_app().journal
-        rows = [dict(r) for r in j.db.execute("SELECT id, ts, symbol, kind, message FROM alerts ORDER BY id DESC "
-                                              "LIMIT ?", (limit,)).fetchall()]
+        rows = [dict(r) for r in j.db.execute(f"SELECT id, ts, symbol, kind, message FROM alerts WHERE "
+                                              f"{alerts_view.MINE} ORDER BY id DESC LIMIT ?", (j.mode, limit)).fetchall()]
         ack = alerts_view.ack_id(j)
         for r in rows:
             r["urgent"], r["acked"] = alerts_view.is_urgent(r["kind"], r["symbol"]), r["id"] <= ack

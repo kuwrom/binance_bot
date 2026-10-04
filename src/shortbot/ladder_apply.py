@@ -43,7 +43,8 @@ def plan_add(entry: float, cur: float, mark: float, stop: float, add_qty: float,
 
 def _pending_legs(trader) -> list[dict[str, Any]]:
     try:
-        return trader.j._rows("SELECT symbol FROM entries WHERE status='pending' AND tranche IS NOT NULL")
+        return trader.j._rows("SELECT symbol FROM entries WHERE status='pending' AND tranche IS NOT NULL AND mode=?",
+                              (trader.j.mode,))
     except Exception:  # noqa: BLE001 - no entries table yet
         return []
 

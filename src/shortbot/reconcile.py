@@ -197,8 +197,8 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
     rows = j.open_trades(include_opening=True)
     live = live_positions if live_positions is not None else await trader.raw_positions()
     empty = not live and any(r["status"] == "open" for r in rows)   # proves nothing on its own (module doc)
-    if not empty and j.get(EMPTY_KEY):
-        j.mark(EMPTY_KEY, "")   # posted (#79), read back at once (#81)
+    if not empty and j.get(j.mode_key(EMPTY_KEY)):
+        j.mark(j.mode_key(EMPTY_KEY), "")   # posted (#79), read back at once (#81)
     pos = {p["symbol"]: p for p in live}
     newest = {r["symbol"]: r["id"] for r in rows}   # rows come by id: the last row per symbol wins
     done: list[dict[str, Any]] = []
@@ -288,8 +288,8 @@ async def _opening(trader, tr: dict[str, Any], p: dict[str, Any] | None) -> None
 async def _empty_answer(trader, rows: list[dict[str, Any]]) -> None:
     """No position at all, yet these trades' own history shows them still open: a glitch looks just like that, so
     they stay open (and 'opening' rows stay as they are). Alerted once per streak; a non-empty answer ends it."""
-    if not trader.j.get(EMPTY_KEY):
-        trader.j.mark(EMPTY_KEY, str(time.time()))
+    if not trader.j.get(trader.j.mode_key(EMPTY_KEY)):
+        trader.j.mark(trader.j.mode_key(EMPTY_KEY), str(time.time()))
         await trader.alert("positions_empty", "Binance answered NO positions, but trade history shows "
                            + ", ".join(f"#{r['id']} {r['symbol']}" for r in rows) + " still open: nothing closed or "
                            "aborted on that answer, and the guardian sees no position to check. Check Binance now.",

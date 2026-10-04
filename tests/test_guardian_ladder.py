@@ -88,7 +88,7 @@ async def test_live_only_alerts_that_a_human_clear_is_due_and_not_every_day():
     assert "shortbot-admin ladder-clear --setup pump_fade --reason" in a[0]["message"]
     assert reenables(h) == [] and L.status(h.j, "pump_fade")["state"] == "SHADOW"
     assert L.events(h.j, "pump_fade")["reenables"] == []
-    h.j.set("alert_ts:setup_ladder_clear_due:pump_fade:None", str(time.time() - gj.LADDER_CLEAR_REMIND_S - 1))
+    h.j.set(h.j.mode_key("alert_ts:setup_ladder_clear_due:pump_fade:None"), str(time.time() - gj.LADDER_CLEAR_REMIND_S - 1))
     await run_job(h)                                    # still waiting after the cooldown: reminded once more
     assert len(alerts(h, "setup_ladder_clear_due:pump_fade")) == 2
 
@@ -155,7 +155,8 @@ async def test_a_stop_row_reaches_telegram_exactly_once_and_is_not_journalled_ag
     for _ in range(2):
         await run_job(h, "setup_ladder_stops", h.forward_ladder_stops)
     assert len(sent) == 1 and "pump_fade hit its ladder stop" in sent[0] and "[demo] setup_ladder_stop" in sent[0]
-    assert len(alerts(h, "setup_ladder_stop")) == 3     # the two stops and the ancient row: no new row
+    assert len(alerts(h, "setup_ladder_stop")) == 2     # demo's stop and the ancient row: no new row
+    assert len(alerts(live, "setup_ladder_stop")) == 1  # each desk reads only its own alerts
     assert alerts(h, "guardian_error:setup_ladder_stops") == []
 
 
