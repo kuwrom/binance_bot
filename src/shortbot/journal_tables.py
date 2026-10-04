@@ -13,6 +13,8 @@ warmup the exchange layer). A table grows by adding columns to COLUMNS; the Jour
 - warmups: cold-start warm-ups (warmup.py)
 - laggard_events: the sector-laggard study (laggard.py)
 - level_sweeps: the level-sweep study (sweeps.py)
+- guardian_gaps: verified-heartbeat gaps over uptime.GAP_S, from the last stamp to the next, tagged `drill` inside a
+  drill window (uptime.py, #46)
 """
 
 from __future__ import annotations
@@ -36,6 +38,11 @@ CREATE TABLE IF NOT EXISTS laggard_events (id INTEGER PRIMARY KEY, ts TEXT, ts_m
     control_ret4h REAL, control_px REAL, breadth REAL, outcome TEXT, labelled_at TEXT);
 CREATE TABLE IF NOT EXISTS level_sweeps (symbol TEXT, ts INTEGER, kind TEXT, tier INTEGER, level REAL,
     data TEXT, PRIMARY KEY (symbol, ts, kind, level));
+CREATE TABLE IF NOT EXISTS guardian_gaps (
+    id INTEGER PRIMARY KEY, start_at TEXT NOT NULL, end_at TEXT NOT NULL, secs REAL NOT NULL, mode TEXT NOT NULL,
+    pid INTEGER, tag TEXT
+);
+CREATE INDEX IF NOT EXISTS guardian_gaps_end ON guardian_gaps (end_at);
 """
 COLUMNS: dict[str, dict[str, str]] = {
     "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL"},

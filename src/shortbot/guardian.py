@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from . import audit, procs
+from . import audit, procs, uptime
 from .app import FLUSH_S, close_app, get_app
 from .entries import EntryDesk
 from .gateway import LocalGateway
@@ -112,6 +112,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self.untracked_since: dict[str, float] = {}       # symbol -> first seen without a journal trade
         self.kill_seen: dict | None = None                # last kill-switch state seen (loosening tripwire)
         self._last_resync = 0.0
+        self._last_beat: float | None = None               # this process's last verified heartbeat (uptime.py)
         self.entries = EntryDesk(self.app.trader)
         self.gw = LocalGateway(lambda: self.j, ctx=self)   # its protective actions are intents (#36 step 2)
         self.liq_store = LiquidationStore(self.app.settings.db_path)
@@ -170,12 +171,17 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         """Called by a positions pass that verified every held position (or a flat account), `at` = its position read.
         Stamped only while the fill poll's last run succeeded: fills are protected (and journalled) by it. Its age is
         how long protection has gone unverified; every reader acts on that age (killswitch.watch_guardian). Posted
-        (#79): another process's write lock delays it, never the pass."""
+        (#79): another process's write lock delays it, never the pass. A gap since the stamp before (this process's,
+        else the previous process's) is logged (uptime.py, #46)."""
         lane = self.lanes.get("protective")
         if lane and lane.failing("entries"):
             log.info("heartbeat withheld: the fill poll is failing")
             return
+        first = self._last_beat is None
+        prev = uptime.stamp_of(self.j.get(HEARTBEAT_KEY)) if first else self._last_beat
+        self._last_beat = at
         self.j.post(lambda j: j.set(HEARTBEAT_KEY, str(at)))
+        uptime.beat(self.j, prev, at, first)
 
     def _journal_stalled(self, waited: float, who: dict | None) -> None:
         """journal_writer: its writes have waited `waited` s for another process's write lock (#79). From STALL_ALERT_S
