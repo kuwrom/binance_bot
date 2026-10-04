@@ -133,7 +133,9 @@ def test_tampered_backup_and_corrupt_database_are_refused(tmp_path):
     db = _desk(tmp_path)
     f = tmp_path / "backups" / B.run([db], _cfg(tmp_path), now=NOW)["copies"][0]["name"]
     data = bytearray(f.read_bytes())
-    data[len(data) // 2] ^= 0xFF
+    # the trailer's CRC32 (RFC 1952 §2.2): a flip mid-stream can land where deflate decodes the same bytes, and once
+    # did (the desk's deploy test, 2026-10-04); this one always differs from the data's CRC
+    data[-8] ^= 0xFF
     f.write_bytes(bytes(data))
     with pytest.raises(B.BackupError, match="sha256"):
         B.restore(f, tmp_path / "r.db")
