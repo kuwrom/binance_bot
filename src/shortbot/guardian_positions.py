@@ -292,8 +292,8 @@ class PositionChecks:
             return
         self._fund_ts[sym] = time.time()
         since = int(datetime.fromisoformat(trade["opened_at"]).timestamp() * 1000)
-        rows = await self.ex.trade.fapiPrivateGetIncome({"symbol": to_raw(sym), "incomeType": "FUNDING_FEE",
-                                                         "startTime": since, "limit": 1000})
+        rows = reconcile.unique_income(await self.ex.trade.fapiPrivateGetIncome({  # each row once (#46)
+            "symbol": to_raw(sym), "incomeType": "FUNDING_FEE", "startTime": since, "limit": 1000}))
         self.j.post(Journal.update_trade, trade["id"], funding=round(sum(float(r.get("income") or 0) for r in rows), 6))
 
     # ------------------------------------------------------------ limit entries (protective, 5 s)

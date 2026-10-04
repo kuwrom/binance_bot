@@ -49,8 +49,6 @@ def twice(fake) -> None:
 
 
 # ------------------------------------------------------------ REST pages answered twice
-@pytest.mark.xfail(strict=True, reason="bug: an income row answered twice is counted twice (reconcile.income_since "
-                   "drops only the rows a previous page of its second answered), doubling PnL and fees")
 async def test_a_stop_out_reconciled_from_pages_served_twice_counts_pnl_and_fees_once(monkeypatch):
     t, fake = trader(monkeypatch)
     tid = (await t.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100))["trade_id"]
@@ -65,8 +63,6 @@ async def test_a_stop_out_reconciled_from_pages_served_twice_counts_pnl_and_fees
     assert await reconcile.reconcile(t) == [] and t.j.get_trade(tid)["pnl"] == pytest.approx(net)   # once
 
 
-@pytest.mark.xfail(strict=True, reason="bug: an income row answered twice is counted twice (reconcile.income_since "
-                   "drops only the rows a previous page of its second answered), doubling PnL and fees")
 async def test_the_desks_own_close_from_pages_served_twice_counts_pnl_and_fees_once(monkeypatch):
     t, fake = trader(monkeypatch)
     tid = (await t.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100))["trade_id"]
@@ -78,8 +74,8 @@ async def test_the_desks_own_close_from_pages_served_twice_counts_pnl_and_fees_o
     assert tr["pnl"] == pytest.approx(net) and tr["fees"] == pytest.approx(fees)
 
 
-@pytest.mark.xfail(strict=True, reason="bugs: an income row answered twice is counted twice, and a userTrades row "
-                   "answered twice is two fills to entries_fills.history: the round trip is journalled at twice its size")
+@pytest.mark.xfail(strict=True, reason="bug: a userTrades row answered twice is two fills to entries_fills.history: "
+                   "the round trip is journalled at twice its size")
 async def test_a_round_trip_rebuilt_from_pages_served_twice_is_journalled_at_its_own_size(monkeypatch):
     fake = FaultyCcxt(price=1.035)
     pin(fake, 875)
@@ -96,8 +92,6 @@ async def test_a_round_trip_rebuilt_from_pages_served_twice_is_journalled_at_its
     assert tr["pnl"] == pytest.approx(net) and tr["fees"] == pytest.approx(fees)
 
 
-@pytest.mark.xfail(strict=True, reason="bug: an income row answered twice is counted twice (reconcile.income_since "
-                   "drops only the rows a previous page of its second answered), doubling PnL and fees")
 async def test_day_pnl_from_income_served_twice_counts_each_row_once(monkeypatch):
     t, fake = trader(monkeypatch)
     await t.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100)
@@ -108,8 +102,6 @@ async def test_day_pnl_from_income_served_twice_counts_each_row_once(monkeypatch
     assert (await t.account())["realized_today"] == pytest.approx(once) == pytest.approx(truth(fake)[0])
 
 
-@pytest.mark.xfail(strict=True, reason="bug: the guardian's funding tracker sums every FUNDING_FEE row it reads: one "
-                   "answered twice doubles the funding the plan's funding budget acts on (an early auto exit)")
 async def test_funding_tracked_from_income_served_twice_counts_each_row_once():
     fake = FaultyCcxt()
     g = guardian_with(fake)

@@ -56,9 +56,25 @@ def _row_key(r: dict[str, Any]) -> tuple:
     return tuple(sorted((k, str(v)) for k, v in r.items()))
 
 
+def unique_income(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each transaction once, in order: "tranId is unique in the same incomeType for a user" (Get-Income-History doc),
+    so a row answered twice (a page served twice, #46) is one row. A row without a tranId is kept as it comes."""
+    seen: set[tuple[Any, str]] = set()
+    out = []
+    for r in rows:
+        if r.get("tranId") not in (None, ""):
+            k = (r.get("incomeType"), str(r["tranId"]))
+            if k in seen:
+                continue
+            seen.add(k)
+        out.append(r)
+    return out
+
+
 async def income_since(t, start_ms: int, symbol: str | None = None) -> list[dict[str, Any]]:
-    """Raw /fapi/v1/income rows since start_ms, paged by time. Many rows share a second (module doc), so a full page
-    can end inside one: the next page starts AT that second and skips the rows of it already read."""
+    """Raw /fapi/v1/income rows since start_ms, paged by time, each transaction once (unique_income). Many rows share a
+    second (module doc), so a full page can end inside one: the next page starts AT that second and skips the rows of
+    it already read."""
     out: list[dict[str, Any]] = []
     cursor, seen = start_ms, Counter()
     for _ in range(10):
@@ -81,7 +97,7 @@ async def income_since(t, start_ms: int, symbol: str | None = None) -> list[dict
             break
         cursor = int(rows[-1]["time"])
         seen = Counter(_row_key(r) for r in out if int(r["time"]) == cursor)
-    return out
+    return unique_income(out)
 
 
 def summarize_income(rows: list[dict[str, Any]]) -> dict[str, float]:
