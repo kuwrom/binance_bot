@@ -7,7 +7,8 @@ open conditional orders for a stop: its not-found answer is unverified, #55) and
 (clientid.outcome; `not_found` once Binance hasn't heard of it GRACE_S after the send: it never reached the book, as
 entry_intents decides for limits; Binance keeps a filled order 90 days, an unfilled cancelled one ~3). Once every
 order is settled the intent is finalised once (`verdict`), with a decision row and an alert. It never sends anything:
-an order is never re-sent (#9). Trade state stays with reconcile and the fill poll, which follow the position.
+an order is never re-sent (#9). Trade state stays with reconcile and the fill poll, which follow the position. Its
+cancels and edits without an outcome are read from the order each targets (intent_changes.looked_up), never sent again.
 
 Runs from the guardian's entry_reconcile job (60 s; its first tick as the guardian starts), after the sweep."""
 
@@ -18,7 +19,9 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from . import clientid, errors, intents
+import ccxt.async_support as ccxt
+
+from . import clientid, errors, intent_changes, intents
 from .entry_intents import GRACE_S
 
 if TYPE_CHECKING:
@@ -57,6 +60,15 @@ async def _one(tr: Trader, row: dict[str, Any], now: float) -> dict[str, Any] | 
                 return None   # not found yet: it may still land
             await j.write(intents.record, o["client_id"], outcome)
             o["outcome"] = outcome
+    for c in intent_changes.of_intent(j, row["id"]):   # what its cancels and edits did: recorded when it can be told
+        if c["outcome"] is None:
+            try:
+                did = await _change(tr, c, now)
+            except Exception as e:  # noqa: BLE001 - its outcome stays unknown; the verdict doesn't count changes yet
+                log.warning("intent %s: change %s unread: %s", row["id"], c["ref"], errors.describe(e))
+                did = None
+            if did is not None:
+                await j.write(intent_changes.record, c["ref"], did)
     status = verdict(orders, doubted)
     if not await j.write(intents.resolve, row["id"], row["status"], status, intents.now_ms()):
         return None   # its owner answered first (interrupted), or another resolver did
@@ -79,6 +91,31 @@ async def _settle(tr: Trader, o: dict[str, Any], now: float) -> str | None:
     if found is not None:
         return clientid.outcome(o["client_id"], found)
     return "not_found" if now - datetime.fromisoformat(o["at"]).timestamp() >= GRACE_S else None
+
+
+async def _change(tr: Trader, c: dict[str, Any], now: float) -> str | None:
+    """A cancel's or an edit's outcome, read from the order it targets (Query Order, or Query Algo Order then the open
+    conditional orders); None while it can't be told yet. Never sent again."""
+    trig = bool(c["trigger"])
+    try:
+        found = await (tr.t.fetch_order(c["order_id"], c["symbol"], params={"trigger": True}) if trig
+                       else tr.t.fetch_order(c["order_id"], c["symbol"]))
+    except ccxt.OrderNotFound:
+        found = None
+    if found is None and trig:
+        found = next((x for x in await tr.t.fetch_open_orders(c["symbol"], params={"trigger": True})
+                      if str(x.get("id")) == c["order_id"]), None)
+    return intent_changes.looked_up(c, found, intent_changes.later_at(tr.j, c), now)
+
+
+def swept(r: dict[str, Any]) -> tuple[str, bool]:
+    """The intent_interrupted alert for an intent the sweep ended (intents.sweep), and whether it is urgent: it sent
+    something, whose outcome the resolver now settles."""
+    acts = [*r["orders"], *r["changes"]]
+    what = (f"what it sent: {', '.join(acts)}, settled from the exchange (intent_resolved)" if acts
+            else "it sent nothing" if r["status"] == "expired" else "no order, cancel or edit linked to it (at most an "
+            "account setting, or a link lost with its process): the next passes re-read the book")
+    return f"intent {r['id']} ({r['kind']}, {r['actor']}) {r['status']}: its process died mid-run; {what}", bool(acts)
 
 
 def verdict(orders: list[dict[str, Any]], doubted: set[str]) -> str:

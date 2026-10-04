@@ -8,7 +8,8 @@ ccxt's answer, or raise its error, as is: the flows that call them (entries_*, s
 first, classify the error and resolve an ambiguous answer by its client id. They are the only way any other module
 writes to the exchange (#36 gateway step 0; GATEWAY.md §7 makes them side-aware later). Each one tells the intent it
 runs in what it sends (#36 steps 2-3): an order under a client id is linked just before the send and settled with
-what Binance answered (intents.send / settle); an id-less write is marked sent (intents.sent).
+what Binance answered (intents.send / settle); a cancel or an edit is recorded against the order it targets
+(intent_changes.change, #86).
 
 trading.py imports this module, so `_f` and `_sleep` are imported inside each method at call time: a module-level
 import would be circular, and would bind `_sleep` before the tests patch `shortbot.trading._sleep`.
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from . import clientid, errors, intents, order_ids
+from . import clientid, errors, intent_changes, intents, order_ids
 
 if TYPE_CHECKING:
     from .exchange import Exchanges
@@ -176,13 +177,14 @@ class OrderFlow:
                     return o
             raise clientid.Unknown(cid, e) from e
 
-    async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order:
+    async def cancel(self, symbol: str, order_id: str, trigger: bool = False,
+                     note: dict[str, Any] | None = None) -> Order:
         """Cancel one order: a conditional one (trigger=True: a stop, bridge or pre-arm) or a limit (entry, target).
-        -2011 (ccxt OrderNotFound) means it is off the book: filled, triggered or cancelled before."""
-        intents.sent()
-        if trigger:
-            return await self.t.cancel_order(order_id, symbol, params={"trigger": True})
-        return await self.t.cancel_order(order_id, symbol)
+        -2011 (ccxt OrderNotFound) means it is off the book: filled, triggered or cancelled before. Recorded against
+        the order (intent_changes.py: a cancel has no id of its own); `note`: what it is sent for."""
+        req = (self.t.cancel_order(order_id, symbol, params={"trigger": True}) if trigger
+               else self.t.cancel_order(order_id, symbol))
+        return await intent_changes.change(self.j, "cancel", symbol, order_id, req, trigger=trigger, note=note)
 
     async def place_limit(self, symbol: str, amount: float, price: float, expires_ms: int, cid: str) -> Order:
         """A GTD limit SELL that opens a short when it fills (an entry, entries_place.py), resting to `expires_ms`."""
@@ -191,9 +193,10 @@ class OrderFlow:
             {"timeInForce": "GTD", "goodTillDate": expires_ms, "clientOrderId": cid}))
 
     async def edit_limit(self, symbol: str, order_id: str, amount: float, price: float) -> Order:
-        """Move a resting entry limit SELL to `price` (Modify Order: same order id)."""
-        intents.sent()
-        return await self.t.edit_order(order_id, symbol, "limit", "sell", amount, price)
+        """Move a resting entry limit SELL to `price` (Modify Order: same order id), recorded against the order."""
+        return await intent_changes.change(self.j, "edit", symbol, order_id,
+                                           self.t.edit_order(order_id, symbol, "limit", "sell", amount, price),
+                                           want=price)
 
     async def place_reduce_stop(self, symbol: str, amount: float, trigger: float, cid: str) -> Order:
         """A reduce-only STOP_MARKET BUY of `amount` (mark price): the bridge that covers a stop swap (stops.py) or an

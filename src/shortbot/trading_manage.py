@@ -66,7 +66,8 @@ class ManageFlow:
 
         async def flat_now(self, symbol: str) -> bool: ...
 
-        async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order: ...
+        async def cancel(self, symbol: str, order_id: str, trigger: bool = False,
+                         note: dict[str, Any] | None = None) -> Order: ...
 
     @refusals("close")
     async def close(self, symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,

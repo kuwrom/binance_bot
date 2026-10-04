@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-from . import audit, fill_report, intents, journal_tables, registry
+from . import audit, fill_report, intent_changes, intents, journal_tables, registry
 from .journal_learnings import LEARNINGS_SCHEMA, LearningStore
 from .journal_research import RESEARCH_SCHEMA, ResearchStore, add_columns
 from .journal_writer import Writer, connect
@@ -134,7 +134,7 @@ class Journal(ResearchStore, LearningStore):
         self.db.row_factory = sqlite3.Row
         # every table at open: a reader never runs DDL, which waits for the write lock (registry #81, journal_tables #82)
         self.db.executescript(SCHEMA + RESEARCH_SCHEMA + LEARNINGS_SCHEMA + intents.SCHEMA + registry.SCHEMA
-                              + journal_tables.SCHEMA)
+                              + journal_tables.SCHEMA + intent_changes.SCHEMA)
         self._migrate()
         self.w = Writer(self.db)
 

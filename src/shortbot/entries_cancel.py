@@ -48,7 +48,8 @@ async def drop_prearm(tr: Trader, symbol: str, prearm_id: Any, alert: Alert | No
         return False
 
 
-async def withdraw(tr: Trader, e: dict[str, Any], alert: Alert | None = None) -> str:
+async def withdraw(tr: Trader, e: dict[str, Any], alert: Alert | None = None,
+                   note: dict[str, Any] | None = None) -> str:
     """Cancel a pending entry's limit FIRST, then decide from what actually filled:
     - "unfilled": the limit is dead with nothing filled, so its pre-armed stop is cancelled too
     - "filled": it (partly) filled before the cancel landed: the stop and the pending row stay, the poll adopts it
@@ -56,14 +57,16 @@ async def withdraw(tr: Trader, e: dict[str, Any], alert: Alert | None = None) ->
     Binance answers -2011 (ccxt OrderNotFound) for ANY order no longer in the book, filled or dead, so fetch_order
     decides (MOVR 2026-10-01: a swallowed -2011 stripped a filled order's stop and left a naked short).
     A row with no order id (a send of unknown outcome) is first looked up by its client id (entry_intents.located).
-    `alert`: told when the pre-armed stop of an unfilled limit can't be cancelled (drop_prearm)."""
+    `alert`: told when the pre-armed stop of an unfilled limit can't be cancelled (drop_prearm). `note`: the status and
+    reason the limit's cancel is sent for, recorded with it (intent_changes.py: the poll labels the row by it when the
+    cancel's answer was lost)."""
     if not e.get("order_id"):
         found = await located(tr.t, e)
         if isinstance(found, str):
             return found
         e = found
     try:
-        o = await tr.cancel(e["symbol"], e["order_id"]) or {}
+        o = await tr.cancel(e["symbol"], e["order_id"], note=note) or {}
     except ccxt.OrderNotFound:
         try:
             o = await tr.t.fetch_order(e["order_id"], e["symbol"])
@@ -133,7 +136,7 @@ class EntryCancel:
                 if isinstance(found, str):
                     return found
                 e = found
-            got = await withdraw(self.tr, e, self.tr.alert)
+            got = await withdraw(self.tr, e, self.tr.alert, {"status": status, "reason": reason})
             if got == "unfilled":
                 await self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
         return got

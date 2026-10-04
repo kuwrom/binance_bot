@@ -17,7 +17,7 @@ from shortbot.params import ResearchParams
 NEW = "f" * 64
 VOLATILE = {"id", "ts", "started_at", "created_at", "updated_at", "opened_at", "actor", "claude_session",
             "code_version", "intent_id"}
-CALLS = ("intents", "intent_orders")   # who called, with what: compared through `calls`
+CALLS = ("intents", "intent_orders", "intent_changes")   # who called, with what: compared through `calls`
 _TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(\+00:00|Z)?")
 
 

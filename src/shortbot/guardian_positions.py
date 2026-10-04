@@ -365,12 +365,8 @@ class PositionChecks:
         if self.ex.trade:
             await entry_intents.reconcile(self.entries)
         for r in await self.j.write(intents.sweep):
-            sent = (f"orders it sent: {', '.join(r['orders'])}, settled by client id (intent_resolved)" if r["orders"]
-                    else "it sent nothing" if r["status"] == "expired" else "no order under a client id; a cancel or "
-                    "an edit it may have sent is not linked (#46): the next passes re-read the book")
-            await send_safe(self.n, "intent_interrupted", f"intent {r['id']} ({r['kind']}, {r['actor']}) "
-                            f"{r['status']}: its process died mid-run; {sent}", r["symbol"], urgent=bool(r["orders"]),
-                            cooldown_s=0)
+            msg, urgent = resolver.swept(r)
+            await send_safe(self.n, "intent_interrupted", msg, r["symbol"], urgent=urgent, cooldown_s=0)
         if self.ex.trade:
             await resolver.resolve(self.app.trader)
 

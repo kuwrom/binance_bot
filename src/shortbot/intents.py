@@ -12,7 +12,8 @@ anything runs, under an id its caller picks (a ULID). gateway.py runs them; this
   final (triggers). Decision and alert rows written while an intent runs carry its id (audit.py).
 - Its orders are linked by their #9 client id (`intent_orders`), written by the Trader primitives just before each
   send (`link`, or `send` around it), then what Binance answered (`settle`: the outcome, clientid.FULL / RAN); a send
-  of unknown outcome stays without one until the resolver looks it up. The per-order write-ahead rows (entries,
+  of unknown outcome stays without one until the resolver looks it up. Its cancels and edits, which Binance gives no
+  id of their own, are recorded against the order each targets (`intent_changes`, intent_changes.py, #86). The per-order write-ahead rows (entries,
   target_orders, the trade's open id) keep their own state and are reached through that id; nothing is copied.
 - What a run sent is also kept in memory (`Ledger`, one per run, set by the gateway: `recording`), so its status never
   waits for the journal.
@@ -207,9 +208,10 @@ def get(j: Journal, intent_id: str) -> dict[str, Any] | None:
 @dataclass
 class Ledger:
     """What the running intent sent, in memory (its status must never wait for the journal): `sent` once any exchange
-    write left, and each client id's outcome (None while in doubt)."""
+    write left, each client id's outcome and each cancel's or edit's (intent_changes.py, by its ref): None in doubt."""
     sent: bool = False
     orders: dict[str, str | None] = field(default_factory=dict)
+    changes: dict[str, str | None] = field(default_factory=dict)
 
     @property
     def doubt(self) -> list[str]:
@@ -233,8 +235,14 @@ def recording() -> Iterator[Ledger]:
         _ledger.reset(tok)
 
 
+def ledger() -> Ledger | None:
+    """The running intent's ledger, if any (intent_changes.change records cancels and edits in it)."""
+    return _ledger.get()
+
+
 def sent() -> None:
-    """Called by a Trader primitive just before an exchange write without a client id: a cancel, an edit, prepare."""
+    """Called by a Trader primitive just before an exchange write that targets no order: prepare (the account settings).
+    A cancel or an edit is recorded against its order instead (intent_changes.change)."""
     if (led := _ledger.get()) is not None:
         led.sent = True
 
@@ -328,7 +336,7 @@ def _alive(pid: int) -> bool:
 def sweep(j: Journal, now: float | None = None, alive: Callable[[int], bool] | None = None) -> list[dict[str, Any]]:
     """End this mode's open intents whose process is gone (one desk host, D2) or that have been open longer than
     MAX_OPEN_S: received -> expired (nothing ran), running -> interrupted (it may have sent: the resolver settles its
-    orders). Returns them, each with its client ids. A pid is judged only in this process's pid namespace: a row
+    orders). Returns them, each with its client ids and its cancels and edits. A pid is judged only in this process's pid namespace: a row
     from another one (a container's, or the host's seen from a container), or from before `ns`, ends by age alone."""
     now, alive = time.time() if now is None else now, alive or _alive
     out = []
@@ -347,5 +355,7 @@ def sweep(j: Journal, now: float | None = None, alive: Callable[[int], bool] | N
                             r["status"]))
         j.db.commit()
         if cur.rowcount:
-            out.append({**dict(r), "status": new, "orders": [o["client_id"] for o in orders(j, r["id"])]})
+            out.append({**dict(r), "status": new, "orders": [o["client_id"] for o in orders(j, r["id"])],
+                        "changes": [f"{c['op']} {c['order_id']}" for c in j._rows(
+                            "SELECT op, order_id FROM intent_changes WHERE intent_id=? ORDER BY at, rowid", (r["id"],))]})
     return out

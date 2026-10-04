@@ -215,7 +215,10 @@ async def test_killed_mid_halted_withdrawal(tmp_path):
     verified(g)
 
 
-async def test_the_interrupted_alert_never_says_a_withdrawal_that_cancelled_sent_nothing(tmp_path):
+async def test_the_interrupted_alert_names_the_cancel_a_withdrawal_sent_before_it_died(tmp_path):
     _, g = await halted_crash(tmp_path)
-    (swept,) = alerts(g, "intent_interrupted")
-    assert "withdraw_entries" in swept and "sent nothing" not in swept and "may have sent is not linked" in swept
+    (swept,) = [a for a in g.j.alerts(300) if a["kind"] == "intent_interrupted"]
+    (first,) = [c["order_id"] for c in g.j._rows("SELECT * FROM intent_changes WHERE op='cancel'")
+                if c["intent_id"] in swept["message"]]   # the one cancel the dead withdrawal sent
+    assert "withdraw_entries" in swept["message"] and f"cancel {first}" in swept["message"]
+    assert "sent nothing" not in swept["message"] and "not linked" not in swept["message"]
