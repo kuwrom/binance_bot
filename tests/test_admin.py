@@ -152,3 +152,26 @@ async def test_peak_reset_is_human_only_never_the_shortbot_cli_or_mcp():
     args = admin.parser().parse_args(["equity-peak", "reset", "--reason", "x"])
     assert (args.cmd, args.action) == ("equity-peak", "reset")
     assert admin.parser().parse_args(["clear", "--reason", "x"]).rearm_margin == 1.0
+
+
+def test_confirm_reads_the_code_from_a_real_terminal(monkeypatch):
+    """The real _tty on a pseudo-terminal (every other test fakes it): a terminal isn't seekable, so "r+" text mode
+    refused it on the desk ("File or stream is not seekable", 2026-10-04) and on a Mac alike."""
+    import os
+    import re as _re
+    import threading
+    pty = pytest.importorskip("pty")
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    master, slave = pty.openpty()
+    monkeypatch.setattr(admin, "TTY", os.ttyname(slave))
+    out: dict = {}
+    t = threading.Thread(target=lambda: out.update(why=admin.confirm("clear the kill switch")), daemon=True)
+    t.start()
+    seen = b""
+    while not (m := _re.search(rb"type (\w{4}) to confirm", seen)):
+        seen += os.read(master, 1024)
+    os.write(master, m.group(1) + b"\n")
+    t.join(5)
+    os.close(master)
+    os.close(slave)
+    assert not t.is_alive() and out == {"why": None}, out

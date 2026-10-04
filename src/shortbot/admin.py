@@ -42,9 +42,41 @@ from .config import Settings
 from .journal import Journal
 from .redact import install_log_redaction
 
+TTY = "/dev/tty"
 
-def _tty():
-    return open("/dev/tty", "r+", encoding="utf-8")   # OSError (ENXIO) without a controlling terminal
+
+class _Tty:
+    """The controlling terminal as a line stream: one handle reads, one writes. A terminal isn't seekable, and "r+"
+    text mode needs a seekable file ("File or stream is not seekable": no clear ever ran on a real terminal before
+    2026-10-04). Opening raises OSError (ENXIO) without a controlling terminal."""
+
+    def __init__(self, path: str) -> None:
+        self._in = open(path, encoding="utf-8")
+        try:
+            self._out = open(path, "w", encoding="utf-8")
+        except BaseException:
+            self._in.close()
+            raise
+
+    def write(self, s: str) -> int:
+        return self._out.write(s)
+
+    def flush(self) -> None:
+        self._out.flush()
+
+    def readline(self) -> str:
+        return self._in.readline()
+
+    def __enter__(self) -> _Tty:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._out.close()
+        self._in.close()
+
+
+def _tty() -> _Tty:
+    return _Tty(TTY)
 
 
 def _under_claude() -> str | None:
