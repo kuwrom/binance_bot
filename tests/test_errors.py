@@ -10,6 +10,7 @@ import pytest
 from shortbot import clientid, errors
 from shortbot.weight import BudgetWait
 from tests import fake_errors as err
+from tests.fake_faults import fault_error
 from tests.fakes import SYM, FakeCcxt
 
 URL = f"{err.DEMO_FAPI}/order"
@@ -112,6 +113,14 @@ def test_the_503_answers_are_what_ccxt_raises_at_http_503(method, path):
         got = ccxt_raises(503, body, url, method, "Service Unavailable")
         assert (type(got), str(got)) == (type(e), str(e)) and E.classify(e) is E.OutcomeUnknown
     assert E.code(err.throttled()) == -1008
+
+
+def test_the_lookup_miss_is_what_ccxt_raises_on_query_algo_order():
+    """fake_faults 2013_resting: Query Algo Order's -2013 for a conditional order that still rests (demo probe 8,
+    2026-10-04). ccxt's own handler, fed the body at GET /fapi/v1/algoOrder, raises the same class and message."""
+    e = fault_error("2013_resting", "fetch_order", algo=True)
+    got = ccxt_raises(400, str(e)[str(e).index("{"):], f"{err.DEMO_FAPI}/algoOrder", "GET")
+    assert (type(got), str(got)) == (type(e), str(e)) and E.classify(e) is E.Gone and E.code(e) == -2013
 
 
 @pytest.mark.parametrize("e, kind", [

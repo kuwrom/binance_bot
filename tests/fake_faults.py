@@ -11,6 +11,9 @@ test_duplicate_fills.py, test_crash_restart.py.
   - 1008: -1008 throttled (case C: a failure, nothing ran; reduce-only and close-position orders are exempt on Binance)
   - 1021_after: -1021 after the request ran (seen live on a cancel: ONDO #5)
   A send that did not run still reached Binance: it is recorded in `orders` as the base fake records a refusal.
+  MISSES, armed like a fault but kept out of FAULTS (and so out of the matrix): 2013_resting, a fetch_order of a
+  conditional order (Query Algo Order) answers -2013 "Order does not exist." while the order still rests and is listed
+  (demo probe 8, 2026-10-04 13:30Z: 1 of 4 lookups by clientAlgoId missed; test_algo_lookup_miss.py)
 - `dup_trades` / `dup_income`: every userTrades / income answer carries each row twice (a page served twice).
 - `View(fake)`: one process's client on the shared exchange. `crash_after(method, kind)`: that call runs on the
   exchange, then the process dies (Crash, a BaseException the desk never catches, as kill -9 leaves no handler to run):
@@ -29,6 +32,7 @@ from tests.fakes import FakeCcxt
 
 FAULTS = ("1007_ran", "1007_unsent", "503_unknown", "503_unavailable", "1008", "1021_after")
 RAN = ("1007_ran", "503_unknown", "1021_after")   # the request executed, then its answer was lost or refused
+MISSES = ("2013_resting",)   # a conditional order's lookup answers not-found while it rests (fetch_order only)
 METHODS = {"create_order": "POST", "cancel_order": "DELETE", "edit_order": "PUT", "fetch_order": "GET",
            "fetch_my_trades": "GET"}
 
@@ -44,6 +48,8 @@ def fault_error(fault: str, method: str = "create_order", algo: bool = False) ->
         return err.throttled()
     if fault == "1021_after":
         return err.clock_drift()
+    if fault == "2013_resting":
+        return err.no_such_order()
     raise ValueError(f"unknown fault {fault!r}")
 
 
@@ -67,7 +73,7 @@ class FaultyCcxt(FakeCcxt):
 
     def arm(self, method: str, fault: str, kind: str = "any", nth: int = 1) -> None:
         """The nth call of `method` about an order of client-id `kind` meets `fault`, once."""
-        assert method in METHODS and fault in FAULTS, (method, fault)
+        assert method in METHODS and (fault in FAULTS or fault in MISSES and method == "fetch_order"), (method, fault)
         self.armed.append({"method": method, "fault": fault, "kind": kind, "left": nth})
 
     def _take(self, method: str, kind: str) -> str | None:
@@ -118,6 +124,7 @@ class FaultyCcxt(FakeCcxt):
         cid = _cid(params)
         f = self._take("fetch_order", clientid.kind_of(cid) if cid else kind_of_id(self, i))
         if f is not None:
+            assert f not in MISSES or (params or {}).get("trigger"), f"{f}: a Query Algo Order answer"
             raise fault_error(f, "fetch_order", algo=bool((params or {}).get("trigger")))
         return await super().fetch_order(i, s, params)
 
