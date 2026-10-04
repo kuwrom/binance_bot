@@ -34,8 +34,8 @@ def evaluate(journal) -> dict[str, Any]:
                               " WHERE trade_id IS NOT NULL ORDER BY trade_id, id").fetchall()
     by: dict[int, dict[str, list]] = {}
     for tid, var, ts, price, xa, xv, ir in rows:
-        d = by.setdefault(tid, {})
-        d.setdefault(var or "base", []).append((ts, price, xa, xv, ir))
+        variants_of = by.setdefault(tid, {})
+        variants_of.setdefault(var or "base", []).append((ts, price, xa, xv, ir))
     per_trade: dict[int, dict[str, float]] = {}
     for tid, vs in by.items():
         t = journal.get_trade(tid) or {}

@@ -22,9 +22,11 @@ def playbook(stage: str, game: str, labels: list[str], vetoes: list[str]) -> dic
     """Map (stage, game, controller) to a playbook and sizing note. Rules are priors, not triggers."""
     size, notes = 1.0, []
     if "thin_float" in labels:
-        size, _ = 0.25, notes.append("thin float / squeeze-prone: <= 1/4 size, stop beyond the pump high")
+        size = 0.25
+        notes.append("thin float / squeeze-prone: <= 1/4 size, stop beyond the pump high")
     elif "mm_range" in labels:
-        size, _ = 0.5, notes.append("market-maker range: fade the range top only, small targets, exit on a break")
+        size = 0.5
+        notes.append("market-maker range: fade the range top only, small targets, exit on a break")
     if "insider_overhang" in labels:
         notes.append("insider supply overhang: favours shorts into unlocks / fresh-listing distribution")
     if vetoes:
@@ -60,7 +62,7 @@ def layered_evidence(rows: list[dict], symbol: str, arch: str) -> dict[str, Any]
     a_rows = [r for r in rows if archetype_of(r["features"]) == arch]
     a = stats(a_rows)
     c = stats([r for r in a_rows if r["symbol"] == symbol])
-    out = {}
+    out: dict[str, Any] = {}
     for k in ("ret", "hit"):
         la = shrink(a[k], a["n"], u[k])
         lc = shrink(c[k], c["n"], la["value"])

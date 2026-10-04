@@ -129,7 +129,7 @@ def _r(x: float | None, n: int = 2) -> float | None:
     return None if x is None else round(x, n)
 
 
-def _ci(c: dict[str, Any]) -> list[float] | None:
+def _ci(c: dict[str, Any] | None) -> list[float] | None:
     return [round(c["ci95"][0], 2), round(c["ci95"][1], 2)] if c and c.get("ci95") else None
 
 
@@ -154,7 +154,7 @@ def _summary(vals: list[dict[str, Any]], compact: bool = False) -> dict[str, Any
            "avg_short_ret_24h": round(raw["mean"], 2), "ci95_short_ret_24h": _ci(raw),
            "median_short_ret_24h": round(statistics.median(r24), 2),
            "hit_rate_pct": round(sum(x > 0 for x in r24) / len(r24) * 100, 1),
-           "avg_excess_ret_24h": _r(exc and exc["mean"]), "ci95_excess_ret_24h": _ci(exc),
+           "avg_excess_ret_24h": _r(exc["mean"] if exc else None), "ci95_excess_ret_24h": _ci(exc),
            "avg_net_ret_24h": round(statistics.fmean(net), 2),
            "avg_max_adverse_24h": round(statistics.mean(adv), 2) if adv else None,
            "squeeze_rate_pct": round(sum(a > SQUEEZE_PCT for a in adv) / len(adv) * 100, 1) if adv else None}

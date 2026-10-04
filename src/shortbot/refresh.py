@@ -127,6 +127,7 @@ def main() -> int:
 
     steps += [_step("registry seed", seed), _step("analog validation", analogs)]
     ok = all(x.get("rc", 0) == 0 and "error" not in x for x in steps)
+    report: dict[str, Any]
     report = {"day": day, "ok": ok, "steps": steps, "backtest_dir": str(bt_dir),
               "hist_db": {"before": before, "after": after, "changed": before.get("id") != after.get("id")},
               "provenance": P.stamp(P.config("shortbot.refresh", [], histdata_days=HIST_DAYS),

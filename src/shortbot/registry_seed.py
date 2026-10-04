@@ -63,8 +63,9 @@ def seed_static(db) -> int:
              definition=f"order {i}: {_src(rule.when)}", detector="tape.classify", metric=SCAN_METRIC,
              source="docs/TAPE.md")
         n += 1
-    for s in SETUPS.values():
-        _reg(db, id=f"setup.{s.name}", level="setup", name=s.name, definition=f"{s.description}\n{_src(s.detect)}",
+    for setup in SETUPS.values():
+        _reg(db, id=f"setup.{setup.name}", level="setup", name=setup.name,
+             definition=f"{setup.description}\n{_src(setup.detect)}",
              detector="setups.detect_all", metric=SCAN_METRIC, source="src/shortbot/setups.py")
         n += 1
     _reg(db, id="detector.pump_fade_discount_scan", level="detector", name="pump_fade at a discount (live scans)",
@@ -180,7 +181,7 @@ def scan_nodes(c: dict[str, Any]) -> set[str]:
              *(f"controller.{x}" for x in f.get("controller_labels") or []), *(f"setup.{s}" for s in setups)}
     if "pump_fade" in setups and _discount(f):           # learning #19 shadow candidate, live
         nodes.add("detector.pump_fade_discount_scan")
-    return nodes - {None}
+    return {n for n in nodes if n is not None}
 
 
 def _targets(db, feed: str) -> dict[str, tuple[int, int]]:
@@ -188,7 +189,8 @@ def _targets(db, feed: str) -> dict[str, tuple[int, int]]:
     from . import registry_forward as F
     out = {}
     for (pid,) in db.execute("SELECT DISTINCT id FROM patterns"):
-        p = R.latest(db, pid)
+        if (p := R.latest(db, pid)) is None:   # (an id read from the table: only if deleted meanwhile)
+            continue
         pl = F.plan_of(db, pid, p["version"])
         if pl and pl["plan"].get("feed") == feed:
             out[pid] = (p["version"], pl["registered_ms"])

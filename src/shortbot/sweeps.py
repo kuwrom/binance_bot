@@ -33,7 +33,7 @@ def _atr_1h(bars: list[list[float]], t: int) -> float:
     return statistics.fmean(rng) if rng else 0.0
 
 
-def measure(bars: list[list[float]], mark: dict[int, list[float]], t: int, level: float) -> dict[str, Any]:
+def measure(bars: list[list[float]], mark: dict[float, list[float]], t: int, level: float) -> dict[str, Any]:
     """Excursion after the cross at bar t: until the first close back below L, or WINDOW bars."""
     end = min(len(bars), t + WINDOW)
     back = next((i for i in range(t, end) if bars[i][4] < level), None)
@@ -43,7 +43,7 @@ def measure(bars: list[list[float]], mark: dict[int, list[float]], t: int, level
     mk = [mark[b[0]][2] for b in seg if b[0] in mark]
     atr = _atr_1h(bars, t)
     prior_vol = statistics.median(b[5] for b in bars[max(0, t - 60):t]) or 1e-9
-    rev = {}
+    rev: dict[str, float | None] = {}   # (bools, percentages, minutes)
     target = level - 0.25 * atr
     for n in (15, 60, 240):
         rev[f"rev{n}"] = any(b[4] < target for b in bars[t:min(len(bars), t + n)])
@@ -98,18 +98,18 @@ def detect(bars: list[list[float]], mark_bars: list[list[float]]) -> list[dict[s
     return out
 
 
-def _pcts(xs: list[float]) -> dict[str, float] | None:
-    xs = sorted(x for x in xs if x is not None)
-    if not xs:
+def _pcts(xs: list[float | None]) -> dict[str, float] | None:
+    known = sorted(x for x in xs if x is not None)
+    if not known:
         return None
-    q = lambda p: xs[min(len(xs) - 1, int(p * len(xs)))]  # noqa: E731
-    return {"n": len(xs), "p50": round(q(0.5), 3), "p75": round(q(0.75), 3), "p90": round(q(0.9), 3),
+    q = lambda p: known[min(len(known) - 1, int(p * len(known)))]  # noqa: E731
+    return {"n": len(known), "p50": round(q(0.5), 3), "p75": round(q(0.75), 3), "p90": round(q(0.9), 3),
             "p95": round(q(0.95), 3)}
 
 
 def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Overshoot percentiles and reversal rates per level type. p90 needs n >= 300, p95 n >= 500 to trust."""
-    out = {}
+    out: dict[str, Any] = {}
     groups = {"round_tier3": lambda e: e["kind"] == "round" and e["tier"] == 3,
               "round_tier1-2": lambda e: e["kind"] == "round" and e["tier"] < 3,
               "high24h": lambda e: e["kind"] == "high24h", "control": lambda e: e["kind"] == "control"}

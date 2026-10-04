@@ -29,9 +29,9 @@ def shrink(coin: float | None, n: int, universe: float | None, prior_n: int = PR
             "n": n, "w": round(w, 2)}
 
 
-def _p90(xs: list[float]) -> float | None:
-    xs = sorted(x for x in xs if x is not None)
-    return xs[min(len(xs) - 1, int(0.9 * len(xs)))] if xs else None
+def _p90(xs: list[float | None]) -> float | None:
+    known = sorted(x for x in xs if x is not None)
+    return known[min(len(known) - 1, int(0.9 * len(known)))] if known else None
 
 
 def level_behaviour(events: list[dict], symbol: str) -> dict[str, Any]:

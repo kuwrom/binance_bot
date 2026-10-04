@@ -149,10 +149,10 @@ def coin(c, h, lo, qv, minutes) -> dict[str, dict[int, np.ndarray]]:
             for r, f in flags.items()}
 
 
-def compare(eps: dict[int, np.ndarray]) -> dict[str, Any]:
-    """Leads of the 1- and 5-minute cadences over 15, and their transients."""
+def compare(eps: dict[int, np.ndarray]) -> dict[int, dict[str, Any]]:
+    """Leads of the 1- and 5-minute cadences over 15, and their transients (by cadence)."""
     e15 = eps[15]
-    out: dict[str, Any] = {}
+    out: dict[int, dict[str, Any]] = {}
     for cd in (1, 5):
         e = eps[cd]
         leads = []

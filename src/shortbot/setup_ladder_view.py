@@ -109,7 +109,7 @@ def listing(journal) -> dict[str, dict[str, Any]]:
         item = {k: st.get(k) for k in ("state", "mult", "dd_r", "cum_r", "hwm_r", "thresholds", "epoch", "family",
                                        "stop", "reasons")}
         stop, chk, _ = _stop_check(journal, s)
-        if stop:
+        if stop and chk is not None:   # (a stop has a verdict)
             item["stop"], item["reenable"] = stop, {**chk, "clear": CLEAR.format(setup=s)}
         out[s] = item
     return out
@@ -123,7 +123,7 @@ def clear_preview(journal, setup: str) -> dict[str, Any]:
     base = {"setup": setup, "state": lad.get("state"), "dd_r": lad.get("dd_r"),
             "raw": journal.get(L.key(journal, setup))}
     stop, chk, eps = _stop_check(journal, setup)
-    if stop is None:
+    if stop is None or chk is None:   # (no stop, no verdict)
         return {**base, "ok": False, "error": f"{setup} is not stopped (ladder {lad.get('state')}): nothing to clear"}
     out = {**base, "stop": stop, "evidence": chk, "episodes": eps}
     if not chk["ok"]:

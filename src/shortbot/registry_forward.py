@@ -64,7 +64,7 @@ def make_plan(pid: str, metric: str | None, override: dict[str, Any] | None = No
     if not feed:
         return {"v": 1, "metric": metric, "feed": None, "decidable": False,
                 "rule": "no forward feed for this node: not promotable; re-register it with a feed"}
-    plan = {"v": 1, "feed": feed, "decidable": True, **PLANS[feed], "alpha": ALPHA, "rule": RULE}
+    plan: dict[str, Any] = {"v": 1, "feed": feed, "decidable": True, **PLANS[feed], "alpha": ALPHA, "rule": RULE}
     for k in ("target_n", "min_days"):
         if override and override.get(k) is not None:
             plan[k] = int(override[k])

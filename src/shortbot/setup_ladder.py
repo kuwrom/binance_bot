@@ -283,7 +283,7 @@ def auto_reenable(journal, live: bool) -> list[dict[str, Any]]:
     rows = journal.db.execute("SELECT k FROM kv WHERE k LIKE ?", (KV + "%",)).fetchall()
     setups = sorted({k[len(KV):] if bare else k[len(KV):-len("@" + journal.mode)] for (k,) in rows
                      if ("@" not in k if bare else k.endswith("@" + journal.mode))})
-    out = []
+    out: list[dict[str, Any]] = []
     for setup in setups:
         try:
             st = status(journal, setup)

@@ -77,7 +77,7 @@ def model_bps(f: dict[str, Any], vol24_usd: float | None, costs: Costs = COSTS) 
     m = mult(f, costs)
     if m is None or (m and not vol24_usd):
         return None
-    return m * costs.slip(vol24_usd) * 1e4 if m else 0.0
+    return m * costs.slip(vol24_usd) * 1e4 if m and vol24_usd else 0.0   # (m: vol24_usd is known, above)
 
 
 def lag_ms(f: dict[str, Any]) -> int | None:
@@ -128,8 +128,8 @@ def _wavg(rows: list[dict], field: str) -> float | None:
 
 
 def _mean(xs: list[float | None]) -> float | None:
-    xs = [x for x in xs if x is not None]
-    return sum(xs) / len(xs) if xs else None
+    known = [x for x in xs if x is not None]
+    return sum(known) / len(known) if known else None
 
 
 def _per_trade(t: dict[str, Any], rows: list[dict]) -> dict[str, Any]:
@@ -138,11 +138,12 @@ def _per_trade(t: dict[str, Any], rows: list[dict]) -> dict[str, Any]:
     got = {f"{k}_bps": _wavg(leg[k], "bps") for k in leg}
     got.update({f"model_{k}_bps": _wavg(leg[k], "model_bps") for k in leg})
     vals = [got["entry_bps"], got["exit_bps"], got["model_entry_bps"], got["model_exit_bps"]]
+    known = [v for v in vals if v is not None]   # all four, else no excess
     missed = t["refs"].get("missed") or {}
     have = {r["order"] for r in rows}
     return {"trade_id": t["id"], "symbol": t["symbol"], "setup": t["setup"], "entry_type": _entry_type(t),
             "status": t["status"], **{k: _r(v) for k, v in got.items()},
-            "excess_bps": _r(vals[0] + vals[1] - vals[2] - vals[3]) if None not in vals else None,
+            "excess_bps": _r(known[0] + known[1] - known[2] - known[3]) if len(known) == len(vals) else None,
             "fills": len(rows), "stale": sum(r["stale"] for r in rows), "lost": len(set(missed) - have)}
 
 

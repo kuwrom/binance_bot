@@ -115,7 +115,7 @@ def record(tr, trade_id: int | None, leg: str, kind: str, order: dict | str | in
         f = {"leg": leg, "type": kind, "order": str(o["id"]), "px": _num(o.get("average") if px is None else px),
              "qty": _num(o.get("filled") if qty is None else qty),
              "ms": int(ms or o.get("lastTradeTimestamp") or o.get("timestamp") or 0) or None,
-             **({"trigger": float(trigger)} if _num(trigger) else {})}
+             **({"trigger": trig} if (trig := _num(trigger)) else {})}
         _spawn(_job(tr, int(trade_id), [f], snap))
     except Exception as e:  # noqa: BLE001 - research data: never in an order's way
         log.warning("fill reference for trade #%s not scheduled: %s: %s", trade_id, type(e).__name__, e)
@@ -140,7 +140,7 @@ def record_episode(tr, trade: dict[str, Any], ep: dict[str, Any], kinds: dict[st
     Entries are the trade's own entry type; exits found in history are `exchange`, with the trade's stop as trigger,
     unless `kinds` names the order's type ({order id: "target"}: a resting target, #65). Never raises."""
     try:
-        feats = trade.get("entry_features") if isinstance(trade.get("entry_features"), dict) else {}
+        feats = ef if isinstance(ef := trade.get("entry_features"), dict) else {}
         kind = "limit" if feats.get("entry_type") == "limit" else "market"
         kinds = kinds or {}
         buys = ep.get("buys") or []
@@ -167,7 +167,7 @@ def _by_order(leg: str, kind: str, rows: list[dict], trigger: float | None = Non
             out.append({"leg": leg, "type": kind, "order": oid, "qty": q,
                         "px": sum(float(x["price"]) * float(x["amount"]) for x in xs) / q,
                         "ms": min(int(x["timestamp"]) for x in xs),
-                        **({"trigger": float(trigger)} if _num(trigger) else {})})
+                        **({"trigger": trig} if (trig := _num(trigger)) else {})})
     return sorted(out, key=lambda f: f["ms"])
 
 
@@ -199,8 +199,7 @@ async def _job(tr, tid: int, fills: list[dict[str, Any]], snap: asyncio.Task | N
 
 async def capture(ex, symbol: str, ms: int | None = None) -> dict[str, Any]:
     """The mainnet reference for a fill at exchange time `ms`: {"src": ..., ...}, or {"why": ...}. Never raises."""
-    age = None if ms is None else time.time() * 1000 - ms
-    if age is None or age <= FRESH_MS:
+    if ms is None or (age := time.time() * 1000 - ms) <= FRESH_MS:
         return await _book(ex, symbol)
     if age > HORIZON_MS:
         return {"why": "too_old"}
@@ -226,8 +225,8 @@ async def _book(ex, symbol: str) -> dict[str, Any]:
     if len(out) == 1:
         log.info("mainnet book for %s unreadable: %r / %r", symbol, b, m)
         return {"why": "error"}
-    stamps = [int(s) for s in stamps if s]
-    return {**out, "ref_ms": max(stamps) if stamps else None}
+    known = [int(s) for s in stamps if s]
+    return {**out, "ref_ms": max(known) if known else None}
 
 
 async def _print(ex, symbol: str, ms: int) -> dict[str, Any]:

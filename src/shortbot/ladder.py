@@ -110,7 +110,8 @@ def live_exposure_target(score: float, cap: float) -> float:
     return max(0.0, min(cap, 1.0 + score / 2))
 
 
-BASE = {"step": STEP, "confirm": CONFIRM, "gap_min": MIN_GAP_MIN, "max_changes": MAX_CHANGES, "lam": LAMBDA}
+BASE: dict[str, Any] = {"step": STEP, "confirm": CONFIRM, "gap_min": MIN_GAP_MIN, "max_changes": MAX_CHANGES,
+                        "lam": LAMBDA}
 # Shadow variants scored side by side on the same trades (docs/LADDER.md C). Every variant ever tried goes in the
 # trial ledger so the winner can be judged with a deflated Sharpe, not by luck of the many.
 VARIANTS: dict[str, dict[str, Any]] = {
@@ -185,6 +186,8 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
     age_h = (now - datetime.fromisoformat(trade["opened_at"])).total_seconds() / 3600 if trade.get("opened_at") else 0
     tsh = plan.get("time_stop_hours") or 24
     entry, stop, price = pos["entry"], pos["exchange_stop"] or trade.get("stop_price"), pos["mark"]
+    if stop is None:   # the levels are in R: nothing to build on (was a TypeError in evaluate_ladder)
+        raise ValueError(f"{sym}: no stop on the exchange or in the journal")
     init_r = (trade.get("initial_stop") or stop) - entry
     sctx = {"game": classify(f)["state"], "ret_1h_pct": (c1h[-1][4] / c1h[-2][4] - 1) * 100 if len(c1h) > 1 else None,
             "oi_chg_1h_pct": (oi[-1]["oi"] / oi[-2]["oi"] - 1) * 100 if len(oi) > 1 and oi[-2]["oi"] else None,

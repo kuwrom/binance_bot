@@ -131,7 +131,9 @@ def summary(family: str | None = None, asof: int | None = None) -> dict[str, Any
     if db is None:
         return out
     try:
-        cond, args = ["id <= ?"], [_asof(asof) if _asof(asof) is not None else 1 << 62]
+        bound = _asof(asof)
+        cond = ["id <= ?"]
+        args: list[int | str] = [bound if bound is not None else 1 << 62]
         if family is not None:
             cond.append("family = ?")
             args.append(family)

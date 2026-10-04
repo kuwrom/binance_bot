@@ -107,7 +107,7 @@ def clustered_mean(values: Sequence[float], clusters: Sequence[Hashable]) -> dic
         return {"mean": None, "n": 0, "days": 0, "n_eff": None, "ci95": None, "se": None}
     m = math.fsum(values) / n
     v3, g = _cv3(values, clusters)
-    out = {"mean": m, "n": n, "days": g, "n_eff": None, "ci95": None, "se": None}
+    out: dict[str, Any] = {"mean": m, "n": n, "days": g, "n_eff": None, "ci95": None, "se": None}
     if g < 2:
         return out
     s2 = statistics.variance(values)
@@ -184,7 +184,7 @@ def clustered_wilson(hits: Sequence[bool | int], clusters: Sequence[Hashable]) -
         return {"p": None, "n": 0, "days": 0, "n_eff": None, "ci95": None}
     p = math.fsum(ys) / n
     v3, g = _cv3(ys, clusters)
-    out = {"p": p, "n": n, "days": g, "n_eff": None, "ci95": None}
+    out: dict[str, Any] = {"p": p, "n": n, "days": g, "n_eff": None, "ci95": None}
     if g < 2:
         return out
     n_eff = min(float(n), p * (1 - p) / v3) if v3 > 0 and 0 < p < 1 else float(n)
