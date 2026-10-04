@@ -30,7 +30,7 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, equity_marks, errors, intents, reconcile, targets
+from . import clientid, equity_marks, errors, intents, origin, reconcile, targets
 from .exchange import Exchanges, to_raw, to_symbol
 from .journal import Journal
 from .risk import AccountState
@@ -99,9 +99,10 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         self._alert = alert
 
     async def alert(self, kind: str, msg: str, symbol: str | None = None, urgent: bool = False) -> None:
-        """Tell a human (the alert sink set at construction or by set_alert), else journal it."""
-        if self._alert:
-            await self._alert(kind, msg, symbol, urgent)
+        """Tell a human (the alert sink of the intent's origin, else the one set at construction or by set_alert), else
+        journal it."""
+        if sink := origin.alert_sink() or self._alert:
+            await sink(kind, msg, symbol, urgent)
         else:
             self.j.log_alert(kind, msg, symbol)
 

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
-from . import weight
+from . import origin, weight
 from .config import Settings
 from .risk import bracket_for
 
@@ -132,11 +132,14 @@ class Exchanges:
 
     @property
     def limits(self):
-        """Effective risk limits: AI research overrides if enabled, else the fixed .env baseline."""
-        return self.params.effective() if self.params else self.settings.limits
+        """Effective risk limits: AI research overrides if enabled, else the fixed .env baseline (always for an intent
+        run for the guardian: origin.py)."""
+        return self.params.effective() if self.params and not origin.is_guardian() else self.settings.limits
 
     @property
     def experiment(self) -> str | None:
+        if origin.is_guardian():
+            return None
         return self.params.experiment() if self.params and self.params.active else None
 
     async def close(self) -> None:

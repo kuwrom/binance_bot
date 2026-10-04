@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import sqlite3
 
+from . import origin
 from .exchange import to_raw
 
 log = logging.getLogger("shortbot.symlock")
@@ -161,6 +162,8 @@ class SymbolLocks:
             finally:
                 mine.depth -= 1
             return
+        if wait_s is None and origin.is_guardian():   # run for the guardian: skipped, never waited out (origin.py)
+            wait_s = GUARDIAN_WAIT_S
         if other := self._symbol_of(task):
             raise RuntimeError(f"nested symbol locks: this task holds {other} and asked for {key} ({action}); "
                                "finish one symbol's sequence before starting another")
