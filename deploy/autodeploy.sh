@@ -54,21 +54,32 @@ alert() {   # kind message: once per (kind, commit) when $3 is a commit
   return 0
 }
 
-health() {  # within 3 minutes of the restart: the guardian beats, the web console answers and, when the compose file
-            # has an order gateway, it beats and the guardian reaches it (kv gateway_client:guardian: its 30 s check
-            # stamps ok, or that the guardian isn't its client: SHORTBOT_GATEWAY=sessions or 0)
-  local deadline=$(( $(date +%s) + HEALTH_S )) hb gb gc gw=0
-  docker compose config --services 2>/dev/null | grep -qx gateway && gw=1
+beat() {    # kv key [json]: its stamp as epoch seconds (empty when missing)
+  local v="CAST(v AS INTEGER)"
+  [ -n "${2:-}" ] && v="CAST(json_extract(v, '\$.at') AS INTEGER)"
+  sqlite3 -readonly data/shortbot.db "SELECT $v FROM kv WHERE k='$1'" 2>/dev/null || echo 0
+}
+
+reached() { # kv key: the guardian's gateway check stamped ok, or that it isn't the gateway's client
+  sqlite3 -readonly data/shortbot.db "SELECT CASE WHEN json_extract(v, '\$.client') = 0 OR \
+    json_extract(v, '\$.ok') = 1 THEN CAST(json_extract(v, '\$.at') AS INTEGER) ELSE 0 END FROM kv WHERE k='$1'" \
+    2>/dev/null || echo 0
+}
+
+desk_ok() { # suffix ("" demo, "@live") gateway-service: that desk's guardian beats and, with a gateway, the gateway
+            # beats and the guardian reaches it (kv gateway_client:guardian: its 30 s check)
+  [ "$(beat "guardian_heartbeat$1")" -ge "$BUILT_AT" ] 2>/dev/null || return 1
+  grep -qx "$2" <<<"$SVCS" || return 0
+  [ "$(beat "gateway_heartbeat$1" json)" -ge "$BUILT_AT" ] 2>/dev/null &&
+    [ "$(reached "gateway_client:guardian$1")" -ge "$BUILT_AT" ] 2>/dev/null
+}
+
+health() {  # within HEALTH_S of the restart: every desk's guardian (and gateway) is up and the web console answers.
+            # The live desk's services run only under the compose profile `live` (docs/DESKS.md)
+  local deadline=$(( $(date +%s) + HEALTH_S ))
+  SVCS=$(docker compose config --services 2>/dev/null)
   while :; do
-    hb=$(sqlite3 -readonly data/shortbot.db "SELECT CAST(v AS INTEGER) FROM kv WHERE k='guardian_heartbeat'" \
-         2>/dev/null || echo 0)
-    gb=$(sqlite3 -readonly data/shortbot.db \
-         "SELECT CAST(json_extract(v, '\$.at') AS INTEGER) FROM kv WHERE k='gateway_heartbeat'" 2>/dev/null || echo 0)
-    gc=$(sqlite3 -readonly data/shortbot.db "SELECT CASE WHEN json_extract(v, '\$.client') = 0 OR \
-         json_extract(v, '\$.ok') = 1 THEN CAST(json_extract(v, '\$.at') AS INTEGER) ELSE 0 END FROM kv WHERE \
-         k='gateway_client:guardian'" 2>/dev/null || echo 0)
-    if [ "${hb:-0}" -ge "$BUILT_AT" ] &&
-       { [ "$gw" = 0 ] || { [ "${gb:-0}" -ge "$BUILT_AT" ] && [ "${gc:-0}" -ge "$BUILT_AT" ]; }; } &&
+    if desk_ok "" gateway && { ! grep -qx guardian-live <<<"$SVCS" || desk_ok "@live" gateway-live; } &&
        { [ ! -f data/web_auth.json ] || curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:8080/; }; then
       return 0
     fi

@@ -57,6 +57,45 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
 
+  # The live desk (docs/DESKS.md, deploy/DEPLOY.md §6): its own guardian and gateway on the same image, journal and
+  # .env, as SHORTBOT_MODE=live (beats .env's demo). Off until the owner opts in with COMPOSE_PROFILES=live in .env,
+  # after adding the live keys and LIVE_CONFIRM. The demo guardian runs the market-wide jobs for both desks.
+  guardian-live:
+    build: .
+    command: shortbot-guardian
+    profiles: ["live"]
+    user: "${UID:-1000}:${GID:-1000}"
+    pid: host
+    env_file: .env
+    environment:
+      SHORTBOT_DB: /app/data/shortbot.db
+      SHORTBOT_MODE: live
+      SHORTBOT_GUARDIAN_MARKET: "0"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  gateway-live:
+    build: .
+    command: shortbot-gateway
+    profiles: ["live"]
+    user: "${UID:-1000}:${GID:-1000}"
+    pid: host
+    env_file: .env
+    environment:
+      SHORTBOT_DB: /app/data/shortbot.db
+      SHORTBOT_MODE: live
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
   # HTTPS on the bare IP: a Let's Encrypt IP certificate (shortlived profile, renewed automatically). The IP comes
   # from data/web.env (SHORTBOT_PUBLIC_IP=...), which deploy/sync.sh never touches. Needs inbound 80 and 443.
   caddy:

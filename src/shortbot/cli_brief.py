@@ -29,7 +29,8 @@ BACKUP_MAX_AGE_H = 36
 async def brief(app) -> str:
     """Compact markdown state for the start of a Claude session."""
     j, lines = app.journal, []
-    lines.append(f"## shortbot state ({app.settings.mode} mode, experiment: {app.ex.experiment or 'baseline'})")
+    desk = "LIVE desk, REAL MONEY: docs/DESKS.md \"The live desk\"" if app.settings.is_live else "demo mode"
+    lines.append(f"## shortbot state ({desk}, experiment: {app.ex.experiment or 'baseline'})")
     try:   # the watchdog may trip HALTED here: the guardian can't report its own death
         await asyncio.wait_for(killswitch.watch_guardian(app.trader), BRIEF_TIMEOUT_S)
     except Exception as e:  # noqa: BLE001
