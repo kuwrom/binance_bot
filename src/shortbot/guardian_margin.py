@@ -156,7 +156,7 @@ class MarginChecks:
                               cooldown_s=MULTI_ASSETS_COOLDOWN_S)
 
 
-@handler("cap_stop", late_ok=True)
+@handler("cap_stop", late_ok=True, ctx="guardian")
 async def cap_stop(g, symbol: str) -> dict | None:
     """CapStop (GATEWAY.md §4.2, the margin pass's intent): Trader.cap_stop, decided again under the symbol lock."""
     return await g.app.trader.cap_stop(symbol)

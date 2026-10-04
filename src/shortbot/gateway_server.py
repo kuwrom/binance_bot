@@ -1,4 +1,4 @@
-"""shortbot-gateway (#36 step 4, docs/GATEWAY.md §2-3): the process that runs the sessions' order writes.
+"""shortbot-gateway (#36 steps 4-6, docs/GATEWAY.md §2-3): the process that runs the order writes.
 
 - One per mode on the desk host (D1, D2): it holds `run/gateway-<mode>.lock` (flock) while it serves, and listens on
   `run/gateway-<mode>.sock` (gateway_wire.py: a 0700 directory, the peer's uid checked, one JSON object per line).
@@ -7,6 +7,11 @@
   its own task, under the caller's actor and Claude session (audit.on_behalf) and the command's #70 weight class:
   journalled on receipt (the caller is told `accepted`), run once per id, its result sent back. A caller that goes
   away never cancels it; a resubmitted id gets the stored answer or "in progress".
+- Step 6: it serves the guardian too (origin process "guardian"): every @handler kind (gateway.HANDLERS), each with
+  its ctx (gateway.CTX: this process's EntryDesk, or GuardianActs, gateway_acts.py), run for the guardian
+  (origin.guardian: the .env baseline, the guardian's alerts, a 5 s symbol wait). Those kinds come from the guardian
+  only; the commands and the watchdog's withdrawal from the sessions.
+- An intent's exception reaches its caller typed (gateway_wire.error_dict / error_from).
 - Policy runs here too, exactly as in an MCP server (get_app(research=True): the research parameters in the journal).
   Risk-adding bodies hold the #74 account lock from their cap checks through the send: its asyncio lock queues them
   account-wide inside this process and its flock against any other writer (a flag-off session, break-glass). That is
@@ -31,7 +36,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import audit, commands, gateway, gateway_health, procs, weight
+from . import audit, commands, gateway, gateway_health, origin, procs, weight
 from . import gateway_wire as wire
 from .gateway import LocalGateway
 from .intents import Intent
@@ -45,7 +50,10 @@ HELLO_S = 2.0            # a client says hello this soon after connecting, or is
 SESSION_KINDS = ("withdraw_entries",)   # not a command: the session watchdog's withdrawal (ctx: the EntryDesk)
 
 
-def served(kind: str) -> bool:
+def served(kind: str, process: Any = None) -> bool:
+    """Taken from a client of this process kind: the guardian's handler kinds, the sessions' order commands."""
+    if process == "guardian":
+        return kind in gateway.HANDLERS
     cmd = commands.by_kind(kind)
     return (cmd is not None and cmd.orders) or kind in SESSION_KINDS
 
@@ -59,9 +67,11 @@ class Refused(ValueError):
 
 
 class GatewayServer:
-    def __init__(self, journal: Any, mode: str, path: Path, ctx: Any):
-        self.j, self.mode, self.path = journal, mode, Path(path)
+    def __init__(self, journal: Any, mode: str, path: Path, ctx: Any, acts: Any = None):
+        """ctx: this process's EntryDesk; acts: GuardianActs (gateway_acts.py), None: no guardian kinds served."""
+        self.j, self.mode, self.path, self.acts = journal, mode, Path(path), acts
         self.gw = LocalGateway(lambda: journal, ctx=ctx)
+        self.gw_guardian = LocalGateway(lambda: journal, ctx=acts)
         self.inflight: dict[asyncio.Task[Any], str | None] = {}   # each running intent's task -> its symbol
         self._server: asyncio.Server | None = None
         self._beats: asyncio.Task[None] | None = None
@@ -157,13 +167,15 @@ class GatewayServer:
                                                                                        else {})}))
 
     # ------------------------------------------------------------ an intent
-    def parse(self, raw: Any) -> Intent:
+    def parse(self, raw: Any, process: Any = None) -> Intent:
         """The intent as the gateway runs it: a served kind, its args bound to the command's signature."""
         if not isinstance(raw, dict) or not isinstance(raw.get("args"), dict):
             raise Refused("malformed intent")
         kind, iid, actor = raw.get("kind"), raw.get("id"), raw.get("actor")
-        if not isinstance(kind, str) or not served(kind):
-            raise Refused(f"intent kind {kind!r} is not served by the gateway")
+        if not isinstance(kind, str) or not served(kind, process):
+            raise Refused(f"intent kind {kind!r} is not served by the gateway (to a {process or 'session'} client)")
+        if gateway.CTX.get(kind) == "guardian" and self.acts is None:
+            raise Refused(f"{kind}: this gateway runs no guardian context")
         if not (isinstance(iid, str) and 0 < len(iid) <= 64) or not isinstance(actor, str):
             raise Refused("an intent needs an id (1-64 characters) and an actor")
         cmd = commands.by_kind(kind)
@@ -178,7 +190,10 @@ class GatewayServer:
         return it
 
     async def submit(self, msg: dict[str, Any], writer: asyncio.StreamWriter) -> dict[str, Any]:
-        it = self.parse(msg.get("intent"))
+        raw = msg.get("origin")
+        origin_: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        process = origin_.get("process")
+        it = self.parse(msg.get("intent"), process)
         here = sum(1 for s in self.inflight.values() if s == it.symbol) if it.symbol else 0
         if len(self.inflight) >= BOUND_TOTAL or here >= BOUND_SYMBOL:
             return {"id": it.id, "status": "busy", "error": f"{len(self.inflight)} intents in flight ({here} on "
@@ -187,32 +202,40 @@ class GatewayServer:
         def accepted() -> None:
             if not writer.is_closing():
                 writer.write(wire.encode({"id": it.id, "status": "accepted"}))
-        origin = msg.get("origin")
-        session = origin.get("claude_session") if isinstance(origin, dict) else None
-        task = asyncio.create_task(self.execute(it, session, accepted))
+        task = asyncio.create_task(self.execute(it, origin_.get("claude_session"), accepted, process))
         self.inflight[task] = it.symbol
         task.add_done_callback(lambda t: self.inflight.pop(t, None))
         try:
             return {"id": it.id, "status": "final", "result": wire.jsonable(await asyncio.shield(task))}
-        except Exception as e:  # noqa: BLE001 - the caller gets it, as it would in-process
-            return {"id": it.id, "status": "error", "error": {"type": type(e).__name__, "message": str(e)}}
+        except Exception as e:  # noqa: BLE001 - the caller gets it, typed, as it would in-process
+            return {"id": it.id, "status": "error", "error": wire.error_dict(e)}
 
-    async def execute(self, it: Intent, claude_session: Any, accepted: Callable[[], None]) -> Any:
+    async def execute(self, it: Intent, claude_session: Any, accepted: Callable[[], None], process: Any = None) -> Any:
         """Runs `it` here, as its caller would have (named without an underscore: the lock audit reads it)."""
         cmd = commands.by_kind(it.kind)
         cls = cmd.weight if cmd is not None else weight.PROTECTIVE
+        gw = self.gw_guardian if gateway.CTX.get(it.kind) == "guardian" else self.gw
         with audit.on_behalf(it.actor, claude_session if isinstance(claude_session, str) else None), \
-                weight.tagged(cls, wait_s=weight.ENTRY_WAIT_S):
-            return await self.gw.submit(it, on_start=accepted)
+                weight.tagged(cls, wait_s=weight.ENTRY_WAIT_S), self.run_for(process):
+            return await gw.submit(it, on_start=accepted)
+
+    def run_for(self, process: Any) -> contextlib.AbstractContextManager[None]:
+        """An intent of the guardian runs as the guardian would run it (origin.py)."""
+        if process != "guardian":
+            return contextlib.nullcontext()
+        return origin.guardian(self.acts.n.as_trader_alert if self.acts is not None else None)
 
 
 # ------------------------------------------------------------ the process
 async def serve() -> int:
     from .app import close_app, get_app
     from .entries import EntryDesk
+    from .gateway_acts import GuardianActs
+    from .notify import Notifier
     app = get_app()
     desk = EntryDesk(app.trader)
-    srv = GatewayServer(app.journal, app.settings.mode, wire.socket_path(app.settings), desk)
+    acts = GuardianActs(app, Notifier(app.settings, app.journal))
+    srv = GatewayServer(app.journal, app.settings.mode, wire.socket_path(app.settings), desk, acts)
     try:
         await srv.start()
     except RuntimeError as e:

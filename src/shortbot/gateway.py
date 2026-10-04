@@ -52,15 +52,22 @@ HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {}
 # - withdraw_entries: the HALTED, governor, pause and resize sweeps and the session watchdog: as cancel_entry, per row.
 LATE_OK: set[str] = set()
 CLAIM_WAIT_S = 2.0          # how long a late_ok intent waits for its row first
+# What each handler's ctx is (#36 step 6: the gateway runs them all and hands each its own): "desk", the EntryDesk of
+# the process that runs it (entry rows, orphans); "guardian", the guardian or, in the gateway, its GuardianActs.
+CTX: dict[str, str] = {}
 
 
-def handler[F: Callable[..., Awaitable[Any]]](kind: str, late_ok: bool = False) -> Callable[[F], F]:
+def handler[F: Callable[..., Awaitable[Any]]](kind: str, late_ok: bool = False, ctx: str = "desk") -> Callable[[F], F]:
     """Register the function that runs intents of `kind`: fn(ctx, **args). late_ok: see the module doc; only for a
-    protective guardian action whose sends are idempotent."""
+    protective guardian action whose sends are idempotent. ctx: see CTX."""
+    if ctx not in ("desk", "guardian"):
+        raise ValueError(f"{kind}: ctx is desk or guardian, not {ctx!r}")
+
     def register(fn: F) -> F:
         if kind in HANDLERS:
             raise ValueError(f"two handlers for intent kind {kind}")
         HANDLERS[kind] = fn
+        CTX[kind] = ctx
         if late_ok:
             LATE_OK.add(kind)
         return fn

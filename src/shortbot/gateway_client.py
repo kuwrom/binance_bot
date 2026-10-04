@@ -36,7 +36,6 @@ from typing import Any
 
 from . import audit, commands
 from . import gateway_wire as wire
-from .commands import CommandError
 from .gateway import Gateway, LocalGateway
 from .intents import Intent
 
@@ -96,7 +95,8 @@ class RemoteGateway:
             return await self._without(intent, str(e))
         try:
             w.write(wire.encode({"op": "submit", "intent": wire.intent_dict(intent),
-                                 "origin": {"claude_session": audit.claude_session()}}))
+                                 "origin": {"claude_session": audit.claude_session(),
+                                            "process": audit.process_kind()}}))
             try:
                 first = await wire.read(r, ACCEPT_S)
             except (ConnectionError, TimeoutError, ValueError) as e:
@@ -121,10 +121,9 @@ class RemoteGateway:
 
     @staticmethod
     def _final(msg: dict[str, Any]) -> Any:
-        if msg.get("status") == "error":
-            err = msg.get("error") or {}
-            raise CommandError(err.get("message", "") if err.get("type") == "CommandError"
-                               else f"{err.get('type')}: {err.get('message')}")
+        if msg.get("status") == "error":   # raised as it would have been in-process (typed: gateway_wire)
+            err = msg.get("error")
+            raise wire.error_from(err if isinstance(err, dict) else {})
         return msg.get("result")
 
     async def _connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:

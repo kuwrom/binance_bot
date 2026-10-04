@@ -115,3 +115,47 @@ def intent_dict(it: Intent) -> dict[str, Any]:
     from .gateway import signature_of  # here: gateway pulls in the command registry
     return {"id": it.id, "kind": it.kind, "args": it.args, "symbol": it.symbol, "side": it.side, "actor": it.actor,
             "sig": signature_of(it.kind)}
+
+
+# ------------------------------------------------------------ errors (v2)
+class RemoteError(RuntimeError):
+    """An error the gateway's run of an intent raised, of a type this side doesn't rebuild: "Type: message"."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(f"{kind}: {message}")
+        self.kind = kind
+
+
+def error_dict(e: BaseException) -> dict[str, Any]:
+    """An intent's exception as the gateway sends it: its type, its message, and what its callers branch on."""
+    from .errors import OrderError
+    out: dict[str, Any] = {"type": type(e).__name__, "message": str(e)}
+    for attr in ("symbol", "holder"):   # SymbolBusy, AccountBusy
+        if isinstance(v := getattr(e, attr, None), str):
+            out[attr] = v
+    if isinstance(e, OrderError):
+        out["order"] = e.to_dict()
+    return out
+
+
+def error_from(d: dict[str, Any]) -> BaseException:
+    """The exception error_dict described, rebuilt as the caller would have caught it in-process: CommandError,
+    SymbolBusy, AccountBusy, StopNotPlaced (the fill poll alerts it at once) and the OrderError family (errors.py);
+    any other type as RemoteError."""
+    from .commands import CommandError
+    from .entries_fills import StopNotPlaced
+    from .errors import OrderError
+    from .symlock import AccountBusy, SymbolBusy
+    kind, msg = str(d.get("type")), str(d.get("message", ""))
+    if isinstance(d.get("order"), dict):
+        return OrderError.from_dict(d["order"])
+    types: dict[str, type[BaseException]] = {"CommandError": CommandError, "SymbolBusy": SymbolBusy,
+                                             "AccountBusy": AccountBusy, "StopNotPlaced": StopNotPlaced}
+    if (cls := types.get(kind)) is None:
+        return RemoteError(kind, msg)
+    e = cls.__new__(cls)
+    BaseException.__init__(e, msg)   # their constructors build the message, which already came built
+    for attr in ("symbol", "holder"):
+        if attr in d:
+            setattr(e, attr, d[attr])
+    return e

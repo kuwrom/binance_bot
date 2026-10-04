@@ -22,10 +22,10 @@ def short_dir() -> Path:
 
 
 @asynccontextmanager
-async def served(journal: Any, ctx: Any = None, mode: str = "demo") -> AsyncIterator[GatewayServer]:
-    """A gateway serving `journal`; while it runs, every client's socket path is its."""
+async def served(journal: Any, ctx: Any = None, mode: str = "demo", acts: Any = None) -> AsyncIterator[GatewayServer]:
+    """A gateway serving `journal`; while it runs, every client's socket path is its. acts: its GuardianActs."""
     d = short_dir()
-    srv = GatewayServer(journal, mode, d / "run" / f"gateway-{mode}.sock", ctx)
+    srv = GatewayServer(journal, mode, d / "run" / f"gateway-{mode}.sock", ctx, acts)
     await srv.start()
     try:
         with mock.patch.object(gateway_wire, "socket_path", lambda settings: srv.path):

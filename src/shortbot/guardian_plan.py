@@ -102,14 +102,14 @@ class PlanChecks:
         return done
 
 
-@handler("pull_targets")
+@handler("pull_targets", ctx="guardian")
 async def pull_targets(g, symbol: str) -> bool:
     """PullTargets (GATEWAY.md §4.2): a flat symbol's targets cancelled and their fills journalled, the position
     re-read under the lock (targets_sync.pull_flat). Strict (journal first): reduce-only orders can't fill at flat."""
     return await targets_sync.pull_flat(g.app.trader, symbol)
 
 
-@handler("plan_step")
+@handler("plan_step", ctx="guardian")
 async def plan_step(g, symbol: str, trade_id: int, seen: dict) -> dict:
     """PlanStep (GATEWAY.md §4.2): the plan's due actions and the target sync, under the symbol lock, decided again on
     what is true NOW (a session may have closed, added or moved the stop since the pass saw `seen`). ok: false when an

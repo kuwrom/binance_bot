@@ -373,13 +373,13 @@ class PositionChecks:
 
 
 # ------------------------------------------------------------ intent handlers (gateway.py): ctx = the guardian
-@handler("restore_stop", late_ok=True)
+@handler("restore_stop", late_ok=True, ctx="guardian")
 async def restore_stop(g, symbol: str, fallback_pct: float) -> dict | None:
     """RestoreStop (GATEWAY.md §4.2): Trader.ensure_stop, which re-reads everything under the symbol lock."""
     return await g.app.trader.ensure_stop(symbol, fallback_pct)
 
 
-@handler("force_close", late_ok=True)
+@handler("force_close", late_ok=True, ctx="guardian")
 async def force_close(g, symbol: str, failures: int) -> dict:
     """ForceClose: a short whose stop could not be restored `failures` times is closed at market, unless a stop rests
     by now or it is gone (re-read under the lock: another process may have protected or closed it)."""
