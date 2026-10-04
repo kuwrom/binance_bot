@@ -294,3 +294,10 @@ async def _empty_answer(trader, rows: list[dict[str, Any]]) -> None:
                            + ", ".join(f"#{r['id']} {r['symbol']}" for r in rows) + " still open: nothing closed or "
                            "aborted on that answer, and the guardian sees no position to check. Check Binance now.",
                            None, True)
+
+
+async def announce(n: Any, closed: list[dict[str, Any]]) -> None:
+    """A trade_closed alert per trade reconcile() finalized (the guardian's positions pass, the gateway's start-up)."""
+    for res in closed:
+        await n.send("trade_closed", f"{res['reason']}: net {res['net']:+.2f} USDT (fees {res['fees']:.2f}, "
+                     f"funding {res['funding']:.2f})", res["symbol"], cooldown_s=0, urgent=res["liquidated"])

@@ -79,6 +79,14 @@ class AccountBusy(RuntimeError):
         self.holder = holder
 
 
+class ReconcileBusy(RuntimeError):
+    """Another process reconciles the desk (the reconcile lease, `reconciling`): this one leaves it to that one."""
+
+    def __init__(self, waited_s: float, holder: str):
+        super().__init__(f"another process reconciles the desk ({holder}); waited {waited_s:g} s")
+        self.holder = holder
+
+
 def busy_refusal[**P, R](f: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R | dict[str, Any]]]:
     """A risk-adding flow's AccountBusy becomes its refusal: {"ok": False, "busy": True, "error": ...}."""
     @functools.wraps(f)
@@ -98,6 +106,7 @@ class _Hold:
 
 
 ACCOUNT_KEY = "_account"   # never a symbol's key: those are raw exchange ids
+RECONCILE_KEY = "_reconcile"
 _MEM_ROOT: str | None = None
 _RO_WARNED = False
 
@@ -196,6 +205,15 @@ class SymbolLocks:
                 yield
             finally:
                 self._account = None
+
+    @asynccontextmanager
+    async def reconciling(self, action: str = "", wait_s: float = 0.0) -> AsyncIterator[None]:
+        """The reconcile lease (#36 step 6, GATEWAY §5): one process at a time reconciles the desk with the exchange:
+        the gateway's start-up, the guardian's positions pass and entry_reconcile. Every deploy restarts both; whoever
+        comes second waits or skips, and finds nothing left to do. Taken before any symbol lock; ReconcileBusy after
+        `wait_s`."""
+        async with self._exclusive(RECONCILE_KEY, action, wait_s, ReconcileBusy):
+            yield
 
     @asynccontextmanager
     async def _exclusive(self, key: str, action: str, wait_s: float | None,

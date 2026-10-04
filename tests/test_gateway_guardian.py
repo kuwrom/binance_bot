@@ -86,8 +86,8 @@ async def test_its_writes_go_through_the_gateway(monkeypatch):
     fake = FakeCcxt()
     g = client_guardian(fake)
     await open_trade(g)
-    fake.stops.clear()
-    async with served(g.j, **acts(g)):
+    async with served(g.j, **acts(g)):   # its start-up found the stop resting
+        fake.stops.clear()
         with audit.acting("guardian:positions"):
             await g.check_positions()
     assert ran == [("restore_stop", "guardian:positions")] and list(fake.stops.values()) == [1.05]

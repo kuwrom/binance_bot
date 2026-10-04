@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from . import audit, procs, uptime
+from . import audit, procs, symlock, uptime
 from .app import FLUSH_S, close_app, get_app
 from .entries import EntryDesk
 from .gateway_guardian import Link, for_guardian
@@ -46,7 +46,7 @@ from .notify import Notifier
 from .redact import install_log_redaction
 from .scan_tiered import TieredScan
 from .stream_task import StreamTask
-from .symlock import GUARDIAN_WAIT_S
+from .symlock import GUARDIAN_WAIT_S, ReconcileBusy
 from .user_stream import UserStream
 
 log = logging.getLogger("shortbot.guardian")
@@ -134,8 +134,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                             if self.ex.trade else None)   # monitor-only: no account, no stream
 
     def _lanes(self) -> dict[str, Lane]:
-        fns = {"entries": self.check_entries, "positions": self.check_positions,
-               "entry_reconcile": self.reconcile_entries, "watch": self.watch_positions,
+        fns = {"entries": self.check_entries, "positions": self._leased("positions pass", self.check_positions),
+               "entry_reconcile": self._leased("entry_reconcile", self.reconcile_entries), "watch": self.watch_positions,
                "governor": self.check_governor, "announcements": self.check_announcements,
                "social": self.record_social, "refresh": self.research_refresh, "housekeeping": self.housekeeping,
                "processes": self.check_processes, "margin_mode": self.check_margin_mode,
@@ -154,6 +154,18 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                 "watch": lane("watch", WATCH, escalate_after=ESCALATE_AFTER_FAILS, escalate_note=FAILING),
                 "monitor": lane("monitor", MONITOR), "research": lane("research", RESEARCH),
                 "scan": lane("scan", SCAN), "coins": lane("coins", COINS)}
+
+    def _leased(self, what: str, fn: Callable[[], Awaitable[Any]]) -> Callable[[], Awaitable[None]]:
+        """A reconciling job under the reconcile lease (symlock.reconciling, GATEWAY §5): while the gateway's start-up
+        reconciles (every deploy restarts both), the pass is skipped after GUARDIAN_WAIT_S: no failure, no heartbeat;
+        the next one runs on what the gateway left. Never two reconcilers at once."""
+        async def run() -> None:
+            try:
+                async with self.app.trader.symlocks.reconciling(f"guardian {what}", symlock.GUARDIAN_WAIT_S):
+                    await fn()
+            except ReconcileBusy as e:
+                log.info("%s skipped: %s", what, e)
+        return run
 
     def _on_stream_event(self, hit, at: float) -> None:
         """A user-data event about one of our orders (user_events.py): its job runs now, `at` = when it arrived."""

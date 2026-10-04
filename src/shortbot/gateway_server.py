@@ -90,6 +90,9 @@ class GatewayServer:
             os.close(fd)
             raise RuntimeError(f"another gateway serves {self.mode} ({lock} is locked)") from None
         self._lock = fd
+        if self.acts is not None:   # §5: reconciled before it listens (clients break glass or wait meanwhile)
+            from .gateway_acts import start_up
+            await start_up(self.acts, self.gw, self.gw_guardian)
         self.path.unlink(missing_ok=True)   # a dead gateway's socket: this one holds the lock now
         self._server = await asyncio.start_unix_server(self.connection, path=str(self.path), limit=wire.LIMIT)
         self._beats = asyncio.create_task(self.heartbeats())

@@ -39,9 +39,9 @@ def book(tmp_path):
 async def test_a_guardian_restore_stop_runs_in_the_gateway_as_the_guardian(book, monkeypatch):
     r = await book.tr.open_short(SYM, stop_price=1.05, setup="pump_fade", thesis="t", notional=100)
     assert r["ok"], r
-    book.fake.stops.clear()
     as_session(monkeypatch, "guardian", None)
-    async with served(book.j, book.desk, acts=book.acts):
+    async with served(book.j, book.desk, acts=book.acts):   # its start-up found the stop resting
+        book.fake.stops.clear()
         with audit.acting("guardian:positions"):
             it = Intent("restore_stop", {"symbol": SYM, "fallback_pct": 10.0}, SYM)
         res = await book.remote().submit(it)

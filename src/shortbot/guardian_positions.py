@@ -100,9 +100,7 @@ class PositionChecks:
             log.exception("reconcile failed")
             await send_safe(self.n, "reconcile_error", f"{type(e).__name__}: {e}", cooldown_s=1800)
             closed = []
-        for res in closed:
-            await self.n.send("trade_closed", f"{res['reason']}: net {res['net']:+.2f} USDT (fees {res['fees']:.2f}, "
-                              f"funding {res['funding']:.2f})", res["symbol"], cooldown_s=0, urgent=res["liquidated"])
+        await reconcile.announce(self.n, closed)
         held = await tr.positions()
         for p in held:
             sym = p["symbol"]
