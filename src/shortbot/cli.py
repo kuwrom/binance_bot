@@ -2,7 +2,8 @@
 Every subcommand is a commands.py declaration, the same one its MCP tool comes from (one body for both surfaces):
 the parser is generated from the registry and each command runs its declared body.
 Audit (#24): each command runs as actor cli:<cmd>, under its #70 weight class; a write is an intent (gateway.py, #36),
-journalled before it runs. Every state-changing MCP tool has a CLI form: a stale MCP server's refusal names it (#68)."""
+journalled before it runs (with SHORTBOT_GATEWAY on, one that sends orders runs in shortbot-gateway: gateway_client.py).
+Every state-changing MCP tool has a CLI form: a stale MCP server's refusal names it (#68)."""
 
 from __future__ import annotations
 
@@ -10,10 +11,9 @@ import argparse
 import asyncio
 import json
 
-from . import audit, commands, weight
+from . import audit, commands, gateway_client, weight
 from .app import close_app, get_app
 from .commands import build_parser
-from .gateway import LocalGateway
 from .redact import install_log_redaction
 
 
@@ -23,7 +23,8 @@ async def _run(args: argparse.Namespace) -> object:
     kwargs = cmd.cli_kwargs(args)
     if not cmd.write:
         return await cmd.body(**kwargs)
-    return await LocalGateway(lambda: get_app().journal).submit(cmd.intent(kwargs))
+    gw = gateway_client.for_command(cmd, lambda: get_app().journal, lambda: get_app().settings)
+    return await gw.submit(cmd.intent(kwargs))
 
 
 async def _audited(args: argparse.Namespace) -> object:

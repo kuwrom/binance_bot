@@ -2,6 +2,7 @@ import importlib
 import os
 import re
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 
 import pytest
@@ -188,7 +189,8 @@ def order_lock_audit(monkeypatch):
     every risk-adding send and account-wide write also runs inside the account lock (so the guardian, which never
     takes it, can never add risk). Probes are exempt: demo-only minimum orders that bypass the caps by design (#55).
     #36 step 2b: every write the guardian makes (and the session watchdog's withdrawal) runs inside an intent
-    (gateway.py), except the listen key (NO_INTENT)."""
+    (gateway.py), except the listen key (NO_INTENT). #36 step 4: only a write command declared orders=True reaches the
+    exchange (_orders_only)."""
     from shortbot import audit as audit_ctx
     from shortbot import symlock
     from tests.fakes import FakeCcxt
@@ -199,6 +201,7 @@ def order_lock_audit(monkeypatch):
         real_init(self, *a, **k)
         tables.append(self)
     monkeypatch.setattr(symlock.SymbolLocks, "__init__", init)
+    not_orders = _orders_only(monkeypatch)
 
     def audit(name, at):
         real = getattr(FakeCcxt, name)
@@ -213,6 +216,8 @@ def order_lock_audit(monkeypatch):
                 bad.append(f"{what} outside the account lock")
             if audit_ctx.intent_id() is None and (root := intent_root(sys._getframe(1))):
                 bad.append(f"{what} outside an intent (from {root})")
+            if why := not_orders(what):
+                bad.append(why)
             return await real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name, at in _WRITES.items():
@@ -224,6 +229,8 @@ def order_lock_audit(monkeypatch):
         async def audited(self, *a, **k):
             if name not in NO_INTENT and audit_ctx.intent_id() is None and (root := intent_root(sys._getframe(1))):
                 bad.append(f"{name} outside an intent (from {root})")
+            if why := not_orders(name):
+                bad.append(why)
             return await real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name in [n for n in dir(FakeCcxt) if _RAW_WRITE.match(n)]:
@@ -231,6 +238,32 @@ def order_lock_audit(monkeypatch):
     _size_events(monkeypatch, tables, bad)
     yield bad
     assert not bad, bad
+
+
+_KIND: ContextVar[str | None] = ContextVar("test_intent_kind", default=None)
+
+
+def _orders_only(monkeypatch):
+    """With SHORTBOT_GATEWAY on, a session sends the write commands declared orders=True to the gateway and runs the
+    rest itself: an exchange write inside any other write command's intent would bypass the gateway. Probes stay raw
+    and local (GATEWAY.md §1.2). The kind comes from the LocalGateway.submit the write runs under."""
+    from shortbot import commands, gateway
+    real = gateway.LocalGateway.submit
+
+    async def submit(self, intent, *a, **k):
+        tok = _KIND.set(intent.kind)
+        try:
+            return await real(self, intent, *a, **k)
+        finally:
+            _KIND.reset(tok)
+    monkeypatch.setattr(gateway.LocalGateway, "submit", submit)
+
+    def check(what: str) -> str | None:
+        cmd = commands.by_kind(_KIND.get() or "")
+        if cmd is None or cmd.orders or cmd.kind == "probe":
+            return None
+        return f"{what} from {cmd.kind}: a write command not declared orders=True (it would bypass the gateway)"
+    return check
 
 
 def _size_events(monkeypatch, tables: list, bad: list[str]) -> None:

@@ -8,6 +8,8 @@ A command is an async body plus:
 - write: it changes state, so both surfaces submit it as an intent (gateway.py, #36: journalled on receipt, its row
   the #24 record of the call) and a stale MCP server refuses it (#68) unless stale_exempt. A read changes nothing at
   risk, or journals its own row (log_decision);
+- orders: a write whose body can send exchange orders: with SHORTBOT_GATEWAY on a session sends it to the
+  shortbot-gateway process (gateway_client.py, #36 step 4); other writes (the journal, research, probes) run here;
 - weight: its #70 class, weight.PROTECTIVE or weight.RESEARCH (None: a desk read);
 - help: the CLI one-liner (the body's docstring is the MCP description); hint: the CLI form a stale MCP server names for
   a write whose subcommand has another shape (cli_form() generates the rest);
@@ -81,6 +83,7 @@ class Command:
     help: str | None = None
     hint: str | None = None
     raw: bool = False
+    orders: bool = False
     sig: inspect.Signature | None = field(default=None, compare=False, repr=False)
 
     @property
@@ -181,12 +184,12 @@ _BY_KIND: dict[str, Command] = {}   # writes only
 def command[F: Callable[..., Any]](*, cli: str | None = None, mcp: bool = True, args: tuple[Arg, ...] = (),
                                    write: bool = False, weight: str | None = None, stale_exempt: bool = False,
                                    help: str | None = None, hint: str | None = None,
-                                   raw: bool = False) -> Callable[[F], F]:
+                                   raw: bool = False, orders: bool = False) -> Callable[[F], F]:
     """Declare a command; the body comes back unchanged (the MCP tool and the subcommand are generated from it)."""
     def register(body: F) -> F:
         name = body.__name__ if mcp else None
         sig = None if raw else inspect.signature(body, eval_str=True)
-        cmd = Command(body, name, cli, tuple(args), write, weight, stale_exempt, help, hint, raw, sig)
+        cmd = Command(body, name, cli, tuple(args), write, weight, stale_exempt, help, hint, raw, orders, sig)
         _check(cmd)
         REGISTRY.append(cmd)
         if name:
@@ -206,6 +209,8 @@ def _check(cmd: Command) -> None:
         raise ValueError(f"{label}: needs a unique MCP name or subcommand")
     if cmd.write and cmd.kind in _BY_KIND:
         raise ValueError(f"{label}: intent kind {cmd.kind} is taken")
+    if cmd.orders and not cmd.write:
+        raise ValueError(f"{label}: a command that sends orders is a write")
     if cmd.raw:
         if cmd.name or not cmd.cli:
             raise ValueError(f"{label}: a raw command is CLI only")

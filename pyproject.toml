@@ -29,6 +29,7 @@ shortbot-mcp = "shortbot.mcp_server:main"
 shortbot-guardian = "shortbot.guardian:main"
 shortbot-admin = "shortbot.admin:main"        # human-only kill-switch controls (killswitch.py)
 shortbot-web = "shortbot.web.server:main"     # the owner's browser console (docs/WEB.md)
+shortbot-gateway = "shortbot.gateway_server:main"   # the sessions' order writes, behind SHORTBOT_GATEWAY (docs/GATEWAY.md)
 
 [build-system]
 requires = ["hatchling"]
@@ -99,7 +100,8 @@ ignore_missing_imports = true
 module = [
     "shortbot.errors", "shortbot.commands", "shortbot.weight", "shortbot.symlock", "shortbot.exposure",
     "shortbot.steps", "shortbot.trading_orders", "shortbot.stale_guard", "shortbot.journal_writer",
-    "shortbot.wal_holder", "shortbot.results",
+    "shortbot.wal_holder", "shortbot.results", "shortbot.gateway_wire", "shortbot.gateway_server",
+    "shortbot.gateway_client", "shortbot.gateway_health",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true

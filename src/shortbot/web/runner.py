@@ -1,6 +1,7 @@
 """Run a desk command for the web console, the way mcp_server.tool() runs it for Claude: actor web:<command>, its
 weight class, the stale-code check (#68), and a write submitted to the gateway as an intent, journalled before it
-runs. Writes from this process run one at a time."""
+runs (with SHORTBOT_GATEWAY on, one that sends orders runs in shortbot-gateway: gateway_client.py). Writes from this
+process run one at a time."""
 
 from __future__ import annotations
 
@@ -11,10 +12,9 @@ from typing import Any
 
 import pydantic_core
 
-from .. import audit, procs, stale_guard, weight
+from .. import audit, gateway_client, procs, stale_guard, weight
 from ..app import get_app
 from ..commands import Command
-from ..gateway import LocalGateway
 
 _writes = asyncio.Lock()
 
@@ -43,7 +43,8 @@ async def run(name: str, cmd: Command, kwargs: dict[str, Any]) -> dict[str, Any]
             res = await cmd.body(**kwargs)
         else:
             async with _writes:
-                gw, intent = LocalGateway(lambda: get_app().journal), cmd.intent(kwargs)
+                gw = gateway_client.for_command(cmd, lambda: get_app().journal, lambda: get_app().settings)
+                intent = cmd.intent(kwargs)
                 if not code.ok and not cmd.stale_exempt:
                     res = await gw.submit(intent, refusal(name, code, cmd.cli_form()))
                 else:

@@ -45,6 +45,21 @@ The same command starts the web console and Caddy (docs/WEB.md). Both need a one
 
 **One pid table (proposed; not applied yet).** Each container has its own pid namespace. A pid read in one namespace names another process, or none, in the next. The guardian's container can't see the host's MCP servers, and the web container runs as pid 1, which in the guardian's namespace is the guardian itself. So every intent row records the pid namespace of the process that received it (`intents.ns`). The guardian's sweep asks after a pid only in its own namespace; a row from any other namespace ends only after `intents.MAX_OPEN_S` (1 h). To get the 60 s detection back, run the desk's containers in the host's pid namespace by adding `pid: host` to the `guardian` and `web` services (and to the gateway's, docs/GATEWAY.md). The process check (`procs.py`) then sees every desk process in one table. It judges code only within its own mount namespace, so the host's brief reports a container's code as unknown, never as stale.
 
+### 4a. The order gateway (proposed; off by default)
+`shortbot-gateway` takes the sessions' order writes (docs/GATEWAY.md). It's off until `SHORTBOT_GATEWAY=1` is set in `.env`; with the flag off, nothing changes.
+- **Where it runs:** one gateway per mode, on the desk host, as the same user as everything else. It holds `data/run/gateway-<mode>.lock` and listens on `data/run/gateway-<mode>.sock`. `data/run` must be mode 0700 and owned by that user, or the gateway refuses to start. Peers with another uid are refused.
+- **What goes through it:** the MCP, CLI and web console commands that send orders. Journal-only writes and `probe` stay in their own process. The guardian still writes directly until step 6.
+- **When it's down:** risk-adding commands are refused. Closes, stop tightening, cancels, flatten and the halt run locally under the symbol lock as break-glass, with actor `breakglass:<caller>` and an urgent `gateway_down_breakglass` alert. The brief shows the gateway's state, and the guardian sends an urgent `gateway_down` when its heartbeat is older than 15 s.
+- **Compose service (to add on the server):** the same image, `command: shortbot-gateway`, the guardian's `user`, `env_file` and `./data` volume, `restart: unless-stopped`, `stop_grace_period: 45s` (it drains running intents for up to 30 s). Add `pid: host` along with the guardian and web services (One pid table, above).
+- **Rollout:**
+  1. Deploy with the flag off.
+  2. Start the gateway service and check `ls -ld data/run` shows `drwx------`, and that the brief shows the gateway up.
+  3. Set `SHORTBOT_GATEWAY=1` in `.env`.
+  4. Reconnect `/mcp` in every session, then restart the web console and the guardian.
+  5. Soak for 3 demo days (D6). Watch `finished_at - received_at` on intent rows, and for any `breakglass` or `pending` rows.
+- **Rollback:** set `SHORTBOT_GATEWAY=0` and restart the same processes.
+- **Restarts:** every deploy rebuilds and restarts the gateway; clients retry their connection for 5 s, which covers the drain.
+
 ## 5. Trading sessions with Claude Code
 Run Claude Code **on the server**, so the MCP server and the guardian share `data/shortbot.db`:
 ```bash

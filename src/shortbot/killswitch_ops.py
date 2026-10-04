@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import audit
+from . import audit, gateway_client
 from . import killswitch as ks
 from .entries import EntryDesk
 from .entries_cancel import cancel_resting
@@ -34,10 +34,12 @@ async def halt(tr, state: str, by: str, reason: str, evidence: dict | None = Non
 async def withdraw_resting(desk, reason: str) -> dict[str, list[int]]:
     """Every resting entry withdrawn (cancel_resting): inside the running intent (a command's: halt_trading,
     flatten_all, kill-switch; an opening gate's watchdog), else as a withdraw_entries intent of its own (the watchdog
-    from a read: trading_state, the brief), actor the reader's (#36 step 2b)."""
+    from a read: trading_state, the brief), actor the reader's (#36 step 2b), sent to the gateway when a session's
+    order writes go there (gateway_client.for_session; there the gateway's own EntryDesk runs it)."""
     if audit.intent_id() is not None:
         return await cancel_resting(desk, reason)
-    return await desk.gw.submit(Intent("withdraw_entries", {"reason": reason}))
+    gw = gateway_client.for_session(lambda: desk.j, lambda: desk.tr.ex.settings, ctx=desk)
+    return await gw.submit(Intent("withdraw_entries", {"reason": reason}))
 
 
 async def flatten(tr, by: str, reason: str, lesson: str = "") -> dict[str, Any]:

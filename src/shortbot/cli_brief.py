@@ -12,7 +12,7 @@ import json
 import time
 from datetime import datetime
 
-from . import alerts_view, killswitch, procs, setup_ladder_view
+from . import alerts_view, gateway_health, killswitch, procs, setup_ladder_view
 from .entries import EntryDesk
 from .untrusted import clean
 
@@ -29,6 +29,8 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         lines.append(f"- ⚠️ guardian watchdog failed: {type(e).__name__}: {e}")
     lines.append(killswitch.brief_line(j))
+    if gw := gateway_health.brief_line(j, app.settings):   # SHORTBOT_GATEWAY on: is the order gateway up (#36)
+        lines.append(gw)
     try:   # setups the ladder sizes down (#67): one line, only when some setup is HALF, SHADOW or UNKNOWN
         lines += [ln for ln in (setup_ladder_view.brief_line(j),) if ln]
     except Exception as e:  # noqa: BLE001

@@ -2,7 +2,9 @@
 receipt, run once per id, and answered with today's result; its row keeps the typed result (results.py, step 3: the
 status exact by what it sent, the error typed). Step 2 runs it in the caller's process (LocalGateway):
 MCP tools and `shortbot` subcommands that write (commands.py) and the guardian's protective actions all go through
-`submit`. Step 4 puts the same interface behind a socket.
+`submit`. Step 4 puts the same interface behind a socket: with SHORTBOT_GATEWAY on, a session's order writes go to the
+shortbot-gateway process (gateway_client.RemoteGateway), which runs each through its own LocalGateway
+(gateway_server.py).
 
 - Handlers are found by kind: a write command's body (commands.by_kind), or a function registered with @handler,
   called as handler(ctx, **args). `ctx` is what the gateway runs for: nothing for a command (its body finds the app
@@ -78,7 +80,7 @@ def handler_for(kind: str) -> Callable[..., Awaitable[Any]]:
 class Gateway(Protocol):
     async def submit(self, intent: Intent, refusal: Any = None) -> Any: ...
 
-    def status(self, intent_id: str) -> dict[str, Any] | None: ...
+    async def status(self, intent_id: str) -> Any | None: ...
 
 
 def answer(j: Any, row: dict[str, Any]) -> Any:
@@ -106,11 +108,15 @@ class LocalGateway:
     def __init__(self, journal: Callable[[], Any], ctx: Any = None):
         self._journal, self.ctx = journal, ctx
 
-    def status(self, intent_id: str) -> dict[str, Any] | None:
-        return intents.get(self._journal(), intent_id)
+    async def status(self, intent_id: str) -> Any | None:
+        """What a resubmission of `intent_id` would answer (answer()), None for an id never journalled."""
+        j = self._journal()
+        row = intents.get(j, intent_id)
+        return None if row is None else answer(j, row)
 
-    async def submit(self, intent: Intent, refusal: Any = None) -> Any:
-        """Journal `intent`, run it, record its result; `refusal`: the caller refused it (stale code), journal only."""
+    async def submit(self, intent: Intent, refusal: Any = None, on_start: Callable[[], None] | None = None) -> Any:
+        """Journal `intent`, run it, record its result; `refusal`: the caller refused it (stale code), journal only.
+        on_start: called once this process starts running it (not for a refusal or a resubmitted id's answer)."""
         run = handler_for(intent.kind)
         inspect.signature(run).bind(self.ctx, **intent.args)   # a malformed intent is never journalled
         if (outer := audit.intent_id()) is not None:
@@ -132,6 +138,8 @@ class LocalGateway:
             verdict = await claim
         if verdict is not None:
             return verdict[0]
+        if on_start is not None:
+            on_start()
         with audit.within(intent.id), intents.recording() as led:
             try:
                 res = await run(self.ctx, **intent.args)

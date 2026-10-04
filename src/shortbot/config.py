@@ -162,6 +162,7 @@ class Settings:
     limits: RiskLimits = field(default_factory=RiskLimits)     # fixed baseline (guardian uses only this)
     bounds: ResearchBounds = field(default_factory=ResearchBounds)
     allow_ai_params_live: bool = False                         # AI overrides in live mode? human-only
+    gateway: bool = False   # SHORTBOT_GATEWAY=1: sessions send order writes to shortbot-gateway (#36, GATEWAY.md §3)
 
     @property
     def is_live(self) -> bool:
@@ -185,4 +186,5 @@ class Settings:
             limits=RiskLimits.from_env(),
             bounds=ResearchBounds.from_env(),
             allow_ai_params_live=os.getenv("AI_PARAMS_IN_LIVE", "false").lower() == "true",
+            gateway=os.getenv("SHORTBOT_GATEWAY", "").strip().lower() in ("1", "true", "yes", "on"),
         )

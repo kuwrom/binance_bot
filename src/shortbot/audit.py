@@ -12,6 +12,8 @@ passes it:
 - intent_id: the intent (#36, intents.py) running in this task, set by the gateway (`within`), so every row an
   intent's code writes links back to it. The intent row itself is the record of a write's call (it replaced the
   `call` decision row): request, actor and result.
+- on behalf of a caller: the shortbot-gateway process (#36 step 4) runs each session's intent with that session's
+  actor and Claude session (`on_behalf`); the code version stays its own, the code that ran.
 
 `refusals(op)` wraps each order path: a refusal (ok False, not a no-op) or an exception that journalled no decision
 of its own gets a `rejected` / `failed` row, an identical one (same actor, op, symbol, reason with numbers masked) at
@@ -50,6 +52,7 @@ _proc: dict[str, Any] = {"kind": None, "claude_session": os.getenv("CLAUDE_CODE_
 _actor: ContextVar[str | None] = ContextVar("audit_actor", default=None)
 _scope: ContextVar[list[int] | None] = ContextVar("audit_scope", default=None)
 _intent: ContextVar[str | None] = ContextVar("audit_intent", default=None)
+_session: ContextVar[tuple[str | None] | None] = ContextVar("audit_session", default=None)   # (claude_session,)
 _seen: dict[tuple, list[float]] = {}   # dedupe: key -> [first logged at, suppressed since]
 _now = time.monotonic
 
@@ -73,6 +76,27 @@ def actor() -> str:
     return _actor.get() or _proc["kind"] or f"py:{Path(sys.argv[0] or 'python').name}"
 
 
+def process_kind() -> str | None:
+    """What this process is (set_process): mcp, cli, web, guardian, gateway, admin; None for a script or a test."""
+    return _proc["kind"]
+
+
+def claude_session() -> str | None:
+    s = _session.get()
+    return s[0] if s is not None else _proc["claude_session"]
+
+
+@contextmanager
+def on_behalf(actor: str, claude_session: str | None):
+    """The rows written inside are another process's call (the gateway running a session's intent)."""
+    tok_a, tok_s = _actor.set(actor), _session.set((claude_session,))
+    try:
+        yield
+    finally:
+        _session.reset(tok_s)
+        _actor.reset(tok_a)
+
+
 @contextmanager
 def within(intent_id: str):
     """The rows written inside belong to this intent (gateway.py)."""
@@ -88,7 +112,7 @@ def intent_id() -> str | None:
 
 
 def stamp() -> dict[str, Any]:
-    return {"actor": actor(), "claude_session": _proc["claude_session"], "code_version": CODE_VERSION,
+    return {"actor": actor(), "claude_session": claude_session(), "code_version": CODE_VERSION,
             "intent_id": _intent.get()}
 
 

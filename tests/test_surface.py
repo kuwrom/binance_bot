@@ -1,6 +1,6 @@
 """The agent-facing surface: every MCP tool (name, approval meta, parameters), the server instructions, every CLI
 subcommand with its arguments, and how each command is classified (commands.py: read / write, #70 weight class, #68
-stale exemption). A refactor must leave tests/surface.json untouched; an intended change regenerates it:
+stale exemption, #36 orders). A refactor must leave tests/surface.json untouched; an intended change regenerates it:
 SNAPSHOT_UPDATE=1 .venv/bin/pytest -q tests/test_surface.py"""
 
 import argparse
@@ -55,7 +55,8 @@ async def _mcp() -> dict:
 def _commands() -> dict:
     from shortbot import commands
     return {c.name or c.cli: {"mcp": c.name, "cli": c.cli, "write": c.write, "weight": c.weight,
-                              "stale_exempt": c.stale_exempt, "raw": c.raw} for c in commands.load()}
+                              "stale_exempt": c.stale_exempt, "raw": c.raw, "orders": c.orders}
+            for c in commands.load()}
 
 
 def _dump(surface: dict) -> str:

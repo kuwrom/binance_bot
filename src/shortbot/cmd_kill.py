@@ -24,8 +24,8 @@ async def trading_state() -> dict[str, Any]:
     return killswitch.status(app.journal)
 
 
-@command(mcp=False, cli="kill-switch", write=True, weight=PROTECTIVE, help="show the kill switch, or trip it to "
-         "REDUCING | HALTED (clearing is human-only: shortbot-admin)", args=(
+@command(mcp=False, cli="kill-switch", write=True, orders=True, weight=PROTECTIVE, help="show the kill switch, or trip "
+         "it to REDUCING | HALTED (clearing is human-only: shortbot-admin)", args=(
     Arg("state", nargs="?", choices=(REDUCING, HALTED)), Arg("reason", "--reason", "required to trip")))
 async def kill_switch(state: str | None = None, reason: str | None = None) -> dict[str, Any]:
     """trading_state without a state; halt_trading with one (a reason required). Protective: a halt withdraws the
@@ -37,7 +37,7 @@ async def kill_switch(state: str | None = None, reason: str | None = None) -> di
     return await killswitch_ops.halt(get_app().trader, state, killswitch_ops.CLI_BY, reason)
 
 
-@command(write=True, weight=PROTECTIVE, stale_exempt=True, hint="kill-switch HALTED --reason REASON")
+@command(write=True, orders=True, weight=PROTECTIVE, stale_exempt=True, hint="kill-switch HALTED --reason REASON")
 async def halt_trading(reason: str, state: str = "HALTED") -> dict[str, Any]:
     """Trip the kill switch (always allowed: it only removes risk). REDUCING blocks new entries, adds, risk-raising
     amends, stop widening and ladder opt-ins; HALTED also withdraws every resting limit entry (a pre-armed stop only
@@ -46,8 +46,8 @@ async def halt_trading(reason: str, state: str = "HALTED") -> dict[str, Any]:
     return await killswitch_ops.halt(get_app().trader, state.upper(), MCP_BY, reason)
 
 
-@command(cli="flatten", write=True, weight=PROTECTIVE, help="HALTED + market-close every short reduce-only; the state "
-         "stays HALTED", args=(Arg("reason", "--reason"), Arg("lesson", "--lesson")))
+@command(cli="flatten", write=True, orders=True, weight=PROTECTIVE, help="HALTED + market-close every short "
+         "reduce-only; the state stays HALTED", args=(Arg("reason", "--reason"), Arg("lesson", "--lesson")))
 async def flatten_all(reason: str, lesson: str = "") -> dict[str, Any]:
     """Emergency: trip HALTED, withdraw resting entries, then buy back EVERY short at market (reduce-only), each
     journalled with exchange-truth PnL and this lesson. The state stays HALTED."""

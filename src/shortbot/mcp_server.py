@@ -9,7 +9,8 @@ comes from), registered below in declaration order (= tools/list order).
 
 Audit (#24): every tool call runs as actor mcp:<tool>, under its #70 weight class, and each write (not the reads, nor
 log_decision, whose row is the record) is an intent (gateway.py, #36): journalled with its args before it runs, its
-status and result after; a write refused on stale code is journalled as refused."""
+status and result after; a write refused on stale code is journalled as refused. With SHORTBOT_GATEWAY on, a write that
+sends orders runs in the shortbot-gateway process (gateway_client.py)."""
 
 from __future__ import annotations
 
@@ -21,10 +22,9 @@ from typing import Callable
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import audit, commands, procs, stale_guard, weight
+from . import audit, commands, gateway_client, procs, stale_guard, weight
 from .app import close_app
 from .commands import Command, CommandError
-from .gateway import LocalGateway
 from .redact import install_log_redaction
 
 INSTRUCTIONS = """Short-only Binance USDⓈ-M futures research desk. Call start_session first, then follow the
@@ -53,10 +53,10 @@ async def lifespan(_server):
 mcp = MCPServer("shortbot", instructions=INSTRUCTIONS, lifespan=lifespan)
 
 
-def _journal(f):
-    """The journal the tool's body uses: its module's get_app (patched in tests). A write journals its intent before
-    the body runs, so this builds the app when the server hasn't yet."""
-    return f.__globals__["get_app"]().journal
+def _app(f):
+    """The app the tool's body uses: its module's get_app (patched in tests). A write journals its intent before the
+    body runs, so this builds the app when the server hasn't yet."""
+    return f.__globals__["get_app"]()
 
 
 TOOLS: dict[str, Callable] = {}   # name -> the registered wrapper (what an MCP call runs: audit, stale guard, weight class)
@@ -81,7 +81,8 @@ def tool(cmd: Command):
             try:
                 if not cmd.write:
                     return stale_guard.annotate(await run(f(*args, **kwargs)), code)
-                gw, intent = LocalGateway(lambda: _journal(f)), cmd.intent(audit.bound_args(sig, args, kwargs))
+                gw = gateway_client.for_command(cmd, lambda: _app(f).journal, lambda: _app(f).settings)
+                intent = cmd.intent(audit.bound_args(sig, args, kwargs))
                 if not code.ok and not cmd.stale_exempt:   # refused: nothing sent, the intent row says so
                     return await gw.submit(intent, await stale_guard.refuse(name, code, cmd.cli_form()))
                 return stale_guard.annotate(await run(gw.submit(intent)), code)

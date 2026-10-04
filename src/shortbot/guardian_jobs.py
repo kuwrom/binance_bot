@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import killswitch as ks
-from . import entry_gates, news, procs, research, scan_job, setup_ladder, stream_task
+from . import entry_gates, gateway_health, news, procs, research, scan_job, setup_ladder, stream_task
 from .exchange import to_raw
 from .journal import Journal
 from .guardian_loop import guarded, send_safe
@@ -123,6 +123,11 @@ class MarketJobs:
         procs.forget(self.j, dead)
         for f in findings:
             await self.n.send(f"stale_process:{f['pid']}", f["text"], urgent=True, cooldown_s=procs.ALERT_COOLDOWN_S)
+
+    async def check_gateway(self) -> None:
+        """Every 30 s (#36 step 4): with SHORTBOT_GATEWAY on, a stale or missing order-gateway heartbeat is alerted:
+        the gateway can't report its own death (gateway_health.py)."""
+        await gateway_health.watch(self.j, self.app.settings, self.n)
 
     async def housekeeping(self) -> None:
         n = await self.j.write(Journal.prune_kv, ("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)

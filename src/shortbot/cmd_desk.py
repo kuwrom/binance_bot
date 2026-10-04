@@ -189,8 +189,8 @@ async def position_ladder(symbol: str) -> dict[str, Any]:
     return await build_ladder(app.ex, app.journal, pos[0], log=False) if pos else {"error": "no open position"}
 
 
-@command(mcp=False, cli="ladder", write=True, help="3-level ladder: per-level odds, edge score, exposure the rule "
-         "wants (shadow); --enable opts a trade into ladder_live_v1, --apply executes its decision", args=(
+@command(mcp=False, cli="ladder", write=True, orders=True, help="3-level ladder: per-level odds, edge score, exposure "
+         "the rule wants (shadow); --enable opts a trade into ladder_live_v1, --apply executes its decision", args=(
     Arg("symbol"), Arg("enable", "--enable", "opt this trade into the live ladder (pins 1R, full size)"),
     Arg("apply", "--apply", "execute the decision: cut / add (<= 1R) / stop re-level"),
     Arg("dry_run", "--dry-run", "show what --apply would do, without orders")))
