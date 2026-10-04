@@ -187,7 +187,7 @@ def run(cache: str, n: int = UNIVERSE) -> dict[str, Any]:
     days = (span[1] - span[0]) / 1440
     windows = int((span[1] - span[0]) // 15) + 1
     res: dict[str, Any] = {"coins": len(syms), "days": round(days, 1), "rules": {}}
-    all_starts = {cd: [] for cd in CADENCES}
+    all_starts: dict[int, list[int]] = {cd: [] for cd in CADENCES}
     for r in RULES:
         row: dict[str, Any] = {}
         for cd in CADENCES:
@@ -212,7 +212,7 @@ def run(cache: str, n: int = UNIVERSE) -> dict[str, Any]:
 
 def decide(res: dict[str, Any]) -> dict[str, Any]:
     """The pre-registered rule, on the pooled leads (all rules) and the p95 load."""
-    out = {}
+    out: dict[str, Any] = {}
     for cd, need in ((1, 5), (5, 3)):
         meds = [res["rules"][r][f"{cd}m"]["lead_median"] for r in RULES]
         tr = [res["rules"][r][f"{cd}m"]["transients"] for r in RULES]

@@ -96,7 +96,7 @@ def live_trades(ctx: Ctx, db_path: Path, variants=LIVE_VARIANTS) -> list[dict[st
                 q = clip_ratio(b) if rule == "ols" else shrink_ratio(b)
                 if rule == "cond" and not tide_up({"btc_ret_24h": b24, "btc_ret_4h": b4}):
                     q = 0.0
-            legs = [leg(r, r.interp(t_in), r.interp(t_out), t_in, t_out, t_sig, ctx.costs) for r in refs]
+            legs = [leg(r, _px(r, t_in), _px(r, t_out), t_in, t_out, t_sig, ctx.costs) for r in refs]
             usd = q * rec["notional"] * sum(lg["pnl"] for lg in legs) / len(legs)
             rec[v] = {"ratio": round(q, 2), "usd": round(usd, 2),
                       "r": round(usd / rec["risk_usd"], 3) if rec["risk_usd"] else None}
@@ -109,8 +109,15 @@ def _chg(s: Series, ts: int, back: int) -> float | None:
     return (b / a - 1) * 100 if a and b else None
 
 
+def _px(s: Series, t_ms: int) -> float:
+    """The price at t_ms, which the hist.db window covers here (a hole was a TypeError downstream)."""
+    if (px := s.interp(t_ms)) is None:
+        raise LookupError(f"{s.symbol}: no hourly bar at {t_ms}")
+    return px
+
+
 def _move(s: Series, t_in: int, t_out: int) -> float:
-    return s.interp(t_out) / s.interp(t_in) - 1
+    return _px(s, t_out) / _px(s, t_in) - 1
 
 
 # ------------------------------------------------------------ markdown
@@ -129,7 +136,7 @@ def table(res: dict[str, dict], cols=COLS) -> str:
 def section(ctx: Ctx, title: str, trades: list[dict], mid: int, weights: list[float] | None = None,
             diag: bool = True) -> tuple[str, dict]:
     """Every variant over `trades` (optionally weighted per trade) + regime / tail splits + rho^2 / idio stops."""
-    res = {}
+    res: dict[str, dict[str, Any]] = {}   # variant -> {"all": its stats, "rows": its rows}
     for v in VARIANTS:
         rows = []
         for k, t in enumerate(trades):
@@ -192,7 +199,8 @@ def main(argv: list[str] | None = None) -> None:
     mid = int(results["mid"])
     trades = load_trades(a.trades, results)
     ctx = Ctx(load_series(a.hist))
-    md, js = [f"mid (IS/OOS split) = {mid}", ""], {"mid": mid, "strategies": {}, "desk": {}}
+    md = [f"mid (IS/OOS split) = {mid}", ""]
+    js: dict[str, Any] = {"mid": mid, "strategies": {}, "desk": {}}
     for s, ts in trades.items():
         text, js["strategies"][s] = section(ctx, f"{s} ({results['selected'][s]['trial']})", ts, mid)
         md.append(text)

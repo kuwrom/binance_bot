@@ -77,7 +77,7 @@ class Panel:
             m = sum(v) / len(v)
             if m >= MIN_QV:
                 vol[s] = m
-        return sorted(vol, key=vol.get, reverse=True)[:top]
+        return sorted(vol, key=lambda s: vol[s], reverse=True)[:top]
 
     def ret(self, s: str, d: int, h: int) -> float | None:
         """Long price return close d -> close d+h (delivery-aware)."""
@@ -113,7 +113,9 @@ def _turnover(old: dict[str, float], new: dict[str, float]) -> float:
 def ctrend(p: Panel, top: int = 100, window: int = 52, min_weeks: int = 26) -> list[dict]:
     weeks = [d for d in p.days if _wd(d) == 6 and d + 7 * DAY <= p.end]
     hist: list[tuple[int, np.ndarray, np.ndarray]] = []       # (week, X, demeaned next-week return)
-    out, w_long, w_short = [], {}, {}
+    out: list[dict] = []
+    w_long: dict[str, float] = {}
+    w_short: dict[str, float] = {}
     for d in weeks:
         uni = [s for s in p.universe(d, top) if d in p.feat[s]]
         if len(uni) < 25:
@@ -124,7 +126,7 @@ def ctrend(p: Panel, top: int = 100, window: int = 52, min_weeks: int = 26) -> l
         if len(known) >= min_weeks:
             beta = ridge(np.vstack([k[1] for k in known]), np.concatenate([k[2] for k in known]))
             pred = dict(zip(uni, x @ beta, strict=True))
-            order = sorted(uni, key=pred.get)
+            order = sorted(uni, key=lambda s: pred[s])
             q = len(order) // 5
             shorts, longs = order[:q], order[-q:]
             lr, nl = _leg(p, longs, d, 7, +1)
@@ -146,7 +148,8 @@ def ctrend(p: Panel, top: int = 100, window: int = 52, min_weeks: int = 26) -> l
 
 
 def blend(p: Panel, top: int = 30, buffer: float = 0.02) -> list[dict]:
-    out, held = [], {}
+    out: list[dict] = []
+    held: dict[str, float] = {}
     for d in p.days:
         if d + DAY > p.end:
             break

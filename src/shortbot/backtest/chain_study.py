@@ -108,7 +108,7 @@ def events(flags: np.ndarray) -> np.ndarray:
     for i in np.flatnonzero(flags):
         if i >= nxt:
             out.append(i)
-            nxt = i + COOLDOWN
+            nxt = int(i) + COOLDOWN
     return np.array(out, dtype=int)
 
 

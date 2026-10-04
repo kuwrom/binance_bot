@@ -36,7 +36,8 @@ def _sma(cs: list[float], i: int, n: int) -> float | None:
 
 
 def _ema_series(xs: list[float], n: int) -> list[float]:
-    k, out = 2 / (n + 1), []
+    k = 2 / (n + 1)
+    out: list[float] = []
     for x in xs:
         out.append(x if not out else out[-1] + k * (x - out[-1]))
     return out
@@ -75,8 +76,9 @@ def indicators(bars: list[tuple]) -> list[dict[str, float | None]]:
             k = (c[i] - ll) / (hh - ll) * 100 if hh > ll else 50.0
         ks.append(k)
         f["stoch_k"] = k
-        if i >= 15 and all(x is not None for x in ks[-3:]):
-            f["stoch_d"] = sum(ks[-3:]) / 3
+        last3 = [x for x in ks[-3:] if x is not None]
+        if i >= 15 and len(last3) == 3:   # (ks has a value per bar: the last three, all known)
+            f["stoch_d"] = sum(last3) / 3
         if i >= 19:
             w = c[i - 19:i + 1]
             mu = sum(w) / 20

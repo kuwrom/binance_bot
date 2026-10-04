@@ -45,7 +45,7 @@ TOP_N, PUMP_7D, QUIET_DAYS, CONFIRM_DAYS, FEES = 10, 0.30, 7, 3, 0.001
 
 def classify(day: int, vol30: dict[str, float], ret7: dict[str, float]) -> dict[str, str]:
     """{symbol: class} for the coins eligible on `day` (vol30/ret7 computed from data up to `day` only)."""
-    majors = set(sorted(vol30, key=vol30.get, reverse=True)[:TOP_N])
+    majors = set(sorted(vol30, key=lambda s: vol30[s], reverse=True)[:TOP_N])
     return {s: "major" if s in majors else "pumped_alt" if ret7.get(s, 0.0) >= PUMP_7D else "other_alt"
             for s in vol30}
 
@@ -100,9 +100,10 @@ def events(data: dict[str, Any]) -> list[dict]:
     out: list[dict] = []
     quiet: dict[tuple[str, float], int] = {}
     for d in days:                                        # pass 2: events; the control starts on the ENTRY day
-        cls = cls_at.get(d)
-        if cls is None:
+        got = cls_at.get(d)
+        if got is None:
             continue
+        cls = got
         for s in cls:
             rate8h = fund.get(s, {}).get(d, 0.0) / 3
             for thr in THRESHOLDS:

@@ -85,15 +85,16 @@ class Study:
     def gate(self, rule: str, d: int) -> bool | None:
         n = GATES[rule]
         past = [self.btc.get(d - k * DAY) for k in range(n + 1)] if rule == "sma200" else [self.btc.get(d - n * DAY)]
-        if any(x is None for x in past) or d not in self.btc:
+        known = [x for x in past if x is not None]
+        if len(known) < len(past) or d not in self.btc:
             return None
-        return self.btc[d] > (statistics.fmean(past[:n]) if rule == "sma200" else past[0])
+        return self.btc[d] > (statistics.fmean(known[:n]) if rule == "sma200" else known[0])
 
 
 def tsmom(st: Study) -> dict[str, Any]:
     days = sorted(st.btc)
     out: dict[str, Any] = {}
-    basket = {}
+    basket: dict[int, float | None] = {}   # (as btc_ret: one series type for both)
     for d in days[:-1]:
         b = st.bench(d, 1, st.uni(d, BASKET)) if st.uni(d, BASKET) else None
         if b is not None:
@@ -102,15 +103,19 @@ def tsmom(st: Study) -> dict[str, Any]:
     for rule in GATES:
         g = {d: st.gate(rule, d) for d in days}
         for asset, series in (("btc", btc_ret), ("basket", basket)):
-            timed, hold, prev, split = [], [], False, {True: [], False: []}
+            timed: list[float] = []
+            hold: list[float] = []
+            split: dict[bool, list[float]] = {True: [], False: []}   # gate on / off -> next-day returns
+            prev = False
             for d in days[:-1]:
-                if g[d] is None or series.get(d) is None:
+                on, x = g[d], series.get(d)
+                if on is None or x is None:
                     continue
-                r = series[d] if g[d] else 0.0
-                timed.append(r - (SWITCH if g[d] != prev else 0.0))
-                hold.append(series[d])
-                split[g[d]].append(series[d])
-                prev = g[d]
+                r = x if on else 0.0
+                timed.append(r - (SWITCH if on != prev else 0.0))
+                hold.append(x)
+                split[on].append(x)
+                prev = on
             if len(timed) < 3:
                 out[f"{asset}|{rule}"] = {"timed": {"days": len(timed)}}
                 continue
@@ -119,7 +124,8 @@ def tsmom(st: Study) -> dict[str, Any]:
                                       "next_day_on_vs_off": _two_groups(split[True], split[False]),
                                       "vol_on_vs_off": [round(statistics.stdev(split[k]), 4) if len(split[k]) > 1 else None
                                                         for k in (True, False)]}
-        weeks_on, weeks_off = [], []
+        weeks_on: list[float] = []
+        weeks_off: list[float] = []
         for d in days:
             if datetime.fromtimestamp(d / 1000, UTC).weekday() == 6 and g[d] is not None:
                 f = st.bench(d, 7, st.uni(d, BASKET)) if st.uni(d, BASKET) else None
@@ -166,12 +172,14 @@ def chandelier(st: Study, s: str, d: int, mult: float = 3.0, max_h: int = 20) ->
 
 def breakout_days(st: Study) -> list[tuple[int, str]]:
     """(day, coin) of every L2 signal: the close exceeds the previous 20 days' highest high, first in 20 days."""
-    out, last = [], {}
+    out: list[tuple[int, str]] = []
+    last: dict[str, int] = {}   # coin -> its last signal day
     for d in st.p.days:
         for s in st.uni(d):
             bars = st.p.bars[s]
-            highs = [bars.get(d - k * DAY) for k in range(1, 21)]
-            if any(b is None for b in highs) or bars[d][4] <= max(b[2] for b in highs):
+            got = [bars.get(d - k * DAY) for k in range(1, 21)]
+            highs = [b for b in got if b is not None]
+            if len(highs) < len(got) or bars[d][4] <= max(b[2] for b in highs):
                 continue
             if d - last.get(s, -10 ** 15) < 20 * DAY:
                 continue
@@ -181,7 +189,7 @@ def breakout_days(st: Study) -> list[tuple[int, str]]:
 
 
 def breakout(st: Study) -> dict[str, list[dict[str, Any]]]:
-    out: dict[str, list[dict[str, Any]]] = {f"hold{h}": [] for h in (5, 10, 20)} | {"chandelier3": []}
+    out: dict[str, list[dict[str, Any]]] = {k: [] for k in (*(f"hold{h}" for h in (5, 10, 20)), "chandelier3")}
     for d, s in breakout_days(st):
         for h in (5, 10, 20):
             if (e := _event(st, s, d, st.net(s, d, h), h)) is not None:
@@ -199,7 +207,7 @@ def _beta(st: Study, s: str, d: int, n: int = 60) -> float:
     for k in range(n):
         t, t0 = d - k * DAY, d - (k + 1) * DAY
         b, b0, c, c0 = st.btc.get(t), st.btc.get(t0), st.p.bars[s].get(t), st.p.bars[s].get(t0)
-        if None not in (b, b0, c, c0):
+        if b is not None and b0 is not None and c is not None and c0 is not None:
             xs.append(b / b0 - 1)
             ys.append(c[4] / c0[4] - 1)
     if len(xs) < 30 or statistics.pvariance(xs) == 0:
@@ -252,7 +260,8 @@ def _fz(f: dict[int, float], d: int) -> float | None:
 
 
 def alt_negative_funding(st: Study) -> list[dict[str, Any]]:
-    out, busy = [], {}
+    out: list[dict[str, Any]] = []
+    busy: dict[str, int] = {}   # coin -> the day its open trade ends
     for d in st.p.days:
         for s in st.uni(d):
             f = st.p.fund.get(s, {})

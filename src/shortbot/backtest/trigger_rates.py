@@ -2,6 +2,7 @@
 Results: docs/SCANNING.md "Measured trigger rates". Run: python -m shortbot.backtest.trigger_rates [hist5m.db]"""
 import sqlite3
 import sys
+from typing import Any
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view as sw
@@ -24,7 +25,8 @@ def main() -> None:
         full = np.diff(np.r_[idx, len(a)]) == 3
         per[s] = (keys[full], c[full], v[full])
     print("symbols", len(per), "of", len(syms))
-    counts = {k: {} for k in ("z1h_2", "z4h_2", "z1h_3", "z4h_3", "vol_2", "vol_3", "any_2", "any_3")}
+    counts: dict[str, dict[Any, int]] = {   # rule -> {15m window: coins triggered}
+        k: {} for k in ("z1h_2", "z4h_2", "z1h_3", "z4h_3", "vol_2", "vol_3", "any_2", "any_3")}
     persist = {"z4h_2": [0, 0], "z1h_2": [0, 0]}
     for _s, (k, c, v) in per.items():
         if len(c) < 130:
@@ -72,8 +74,8 @@ def main() -> None:
     for name, d in counts.items():
         x = np.array([d.get(w, 0) for w in W])
         print(f"{name:7s} coins/window: mean {x.mean():5.1f}  median {np.median(x):4.0f}  p90 {np.percentile(x, 90):4.0f}  p99 {np.percentile(x, 99):4.0f}  max {x.max()}")
-    for k2, (a, b) in persist.items():
-        print(f"{k2}: share of triggers that also triggered the previous window {a / max(b, 1):.2f}")
+    for k2, (both, total) in persist.items():
+        print(f"{k2}: share of triggers that also triggered the previous window {both / max(total, 1):.2f}")
 
 
 if __name__ == "__main__":

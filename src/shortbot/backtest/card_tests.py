@@ -85,7 +85,8 @@ def hold_ret(closes: list[float], fund: list[float], i: int, h: int) -> float | 
 
 def negative_funding_streak(days, closes, fund) -> dict[str, Any]:
     m30 = [statistics.fmean(fund[i - 29:i + 1]) if i >= 29 else None for i in range(len(fund))]
-    out, streak, used = {30: [], 60: []}, 0, False
+    out: dict[int, list[float]] = {30: [], 60: []}   # hold days -> returns
+    streak, used = 0, False
     events = []
     for i, m in enumerate(m30):
         streak = streak + 1 if m is not None and m < 0 else 0
@@ -130,7 +131,8 @@ def funding_zscore_long(days, closes, fund) -> dict[str, Any]:
 
 
 def cycle_low(days, closes, fund) -> dict[str, Any]:
-    out, last, ath = {90: [], 180: []}, -10 ** 9, 0.0
+    out: dict[int, list[float]] = {90: [], 180: []}   # hold days -> returns
+    last, ath = -10 ** 9, 0.0
     events = []
     for i, c in enumerate(closes):
         ath = max(ath, c)
@@ -152,7 +154,10 @@ def dominance_rotation(data: dict[str, Any]) -> dict[str, Any]:
     bars = {s: {b[0]: b for b in rows} for s, rows in data["bars"].items() if s not in STABLES}
     btc, eth = bars["BTCUSDT"], bars.get("ETHUSDT", {})
     days = sorted(btc)
-    on, off, basket_on, basket_off = [], [], [], []
+    on: list[float] = []
+    off: list[float] = []
+    basket_on: list[float] = []
+    basket_off: list[float] = []
     for i, d in enumerate(days):
         if datetime.fromtimestamp(d / 1000, UTC).weekday() != 6 or i < 60 or i + 7 >= len(days):
             continue
@@ -225,7 +230,7 @@ def run_hourly() -> dict[str, Any]:
                     "t_day": _ct([r for _, r in xs], [d for d, _ in xs])}
     halves = {}
     for half, cond in (("first", lambda ts: ts < mid), ("second", lambda ts: ts >= mid)):
-        hm = {}
+        hm: dict[int, list[float]] = {}   # UTC hour -> bar returns
         for c in coins:
             for r in c.rows:
                 if cond(r["ts"]):

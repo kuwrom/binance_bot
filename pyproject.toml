@@ -78,7 +78,7 @@ select = [
 external = ["BLE001"]
 
 # ---------------------------------------------------------------- types (scripts/check types; #43)
-# mypy, in three tiers. https://mypy.readthedocs.io/en/stable/config_file.html, .../existing_code.html
+# mypy, in two tiers. https://mypy.readthedocs.io/en/stable/config_file.html, .../existing_code.html
 [tool.mypy]
 files = ["src"]
 python_version = "3.12"          # = requires-python
@@ -114,15 +114,7 @@ no_implicit_reexport = true
 strict_equality = true
 extra_checks = true
 
-# Every other module is the lenient tier (mypy's defaults), except this debt list: the modules with errors, 106 on
-# 0f0f45d (724 errors), 90 after #83 (276; a mixin declares its host's attributes, as trading_orders.OrderFlow does),
-# 12 after #85 (60).
-# Remove a module once `mypy` passes without it; never add one.
-[[tool.mypy.overrides]]
-module = [
-    "shortbot.backtest.cadence_study", "shortbot.backtest.card_tests", "shortbot.backtest.chain_study",
-    "shortbot.backtest.funding_events", "shortbot.backtest.hedge", "shortbot.backtest.hedge_report",
-    "shortbot.backtest.long_studies", "shortbot.backtest.report_v3", "shortbot.backtest.trials_eff",
-    "shortbot.backtest.trigger_rates", "shortbot.backtest.xs_factors", "shortbot.backtest.xs_features"
-]
-ignore_errors = true
+# Every other module is the lenient tier (mypy's defaults). The debt list that exempted the modules with errors is
+# gone: 106 on 0f0f45d (724 errors), 90 after #83 (276; a mixin declares its host's attributes, as
+# trading_orders.OrderFlow does), 0 after #85. A module with errors is fixed, never exempted (no ignore_errors, no
+# blanket `# type: ignore`; a narrow ignore names its code and why the library's typing is wrong).

@@ -2,7 +2,7 @@
 # The checks CI runs (.github/workflows/ci.yml calls this file, one step each), from uv.lock, in this order:
 #   sync   uv sync --locked --extra dev   (the venv = uv.lock exactly; fails if the lock is stale)
 #   lint   ruff check                     ([tool.ruff] in pyproject.toml)
-#   types  mypy                           ([tool.mypy]: strict tier, lenient tier, debt list)
+#   types  mypy                           ([tool.mypy]: strict tier, lenient tier)
 #   test   pytest -q
 # Usage: scripts/check [step...]   (no step: all four)
 set -euo pipefail

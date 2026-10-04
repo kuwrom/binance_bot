@@ -218,7 +218,7 @@ class Ctx:
         sym, sec = t["symbol"], (t.get("f") or {}).get("sector") or getattr(self.s.get(t["symbol"]), "sector", "other")
         key = (sym, sec, w[0], w[3])
         if key not in self._basket:
-            cand = [(m.vol24(w[0]), m) for m in self.sectors.get(sec, [])
+            cand = [(m.vol24(w[0]), m) for m in (self.sectors.get(sec, []) if sec is not None else [])
                     if m.symbol != sym and w[0] in m.bars and w[3] in m.bars]
             cand = sorted([c for c in cand if c[0] >= BASKET_VOL], key=lambda c: -c[0])[:BASKET_MAX]
             self._basket[key] = [m for _, m in cand] if len(cand) >= BASKET_MIN else []
@@ -260,8 +260,9 @@ class Ctx:
                "cost_r": 0.0, "inst": "", "reason": t.get("reason")}
         if rule != "zero":
             refs, label = self.instrument(t, inst, w)
-            legs = [self.leg_for(s, w) for s in refs]
-            if any(lg is None for lg in legs):
+            found = [self.leg_for(s, w) for s in refs]
+            legs = [lg for lg in found if lg is not None]
+            if len(legs) < len(found):   # a reference without bars over the trade: no hedge row
                 return None
             q = self.ratio(t, rule, refs, label)
             pnl = statistics.fmean(lg["pnl"] for lg in legs)
@@ -286,6 +287,10 @@ def _corr(a: list[float], b: list[float]) -> float | None:
     return sum((x - ma) * (y - mb) for x, y in zip(a, b, strict=True)) / sa / sb if sa and sb else None
 
 
+def _rnd(x: float | None, n: int) -> float | None:
+    return None if x is None else round(x, n)
+
+
 def summarize(rows: list[dict], mid: int) -> dict[str, Any]:
     """Stats of hedged rows (field r) with the unhedged r0 alongside, in the short's R."""
     if not rows:
@@ -298,13 +303,11 @@ def summarize(rows: list[dict], mid: int) -> dict[str, Any]:
     return {
         "n": len(rs), "coins": len({x["symbol"] for x in rows}), "avg_r": mean(rs),
         "win_pct": round(100 * sum(r > 0 for r in rs) / len(rs), 1),
-        "sd_r": round(math.sqrt(v), 3), "sr": None if sharpe(rs) is None else round(sharpe(rs), 3),
+        "sd_r": round(math.sqrt(v), 3), "sr": _rnd(sharpe(rs), 3),
         "max_dd_r": max_dd_r(rows), "p5": round(_pct(rs, 0.05), 2), "p1": round(_pct(rs, 0.01), 2),
-        "corr_btc": None if _corr(rs, [x["btc_ret"] for x in rows]) is None
-        else round(_corr(rs, [x["btc_ret"] for x in rows]), 2),
+        "corr_btc": _rnd(_corr(rs, [x["btc_ret"] for x in rows]), 2),
         "is": mean(half(True)), "oos": mean(half(False)),
-        "sr_is": None if sr_half(True) is None else round(sr_half(True), 3),
-        "sr_oos": None if sr_half(False) is None else round(sr_half(False), 3),
+        "sr_is": _rnd(sr_half(True), 3), "sr_oos": _rnd(sr_half(False), 3),
         "t_day": cluster_t(rows, "day")[0], "var_ratio": round(v / v0, 3) if v0 else None,
         "hedge_r": mean([x["hedge_r"] for x in rows]), "cost_r": mean([x["cost_r"] for x in rows]),
         "ratio": mean([x["ratio"] for x in rows]),

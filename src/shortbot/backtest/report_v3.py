@@ -19,7 +19,7 @@ def verdict2(v: dict[str, Any]) -> str:
     if o.get("n", 0) < 30:
         return "needs more data"
     beats = (v.get("edge_vs_placebo") or 0) > 0 and (v.get("edge_vs_time") or 0) > 0
-    stress = v.get("stress_r") if v.get("stress_r") is not None else -1.0
+    stress = v["stress_r"] if v.get("stress_r") is not None else -1.0
     if (o["avg_r"] > 0 and i.get("avg_r", -1) > 0 and beats and stress > 0
             and (v["all"].get("t_day") or 0) >= 2 and (v.get("dsr") or 0) >= 0.95):
         return "SURVIVES"
@@ -142,14 +142,14 @@ def round2_markdown(rep: dict[str, Any], res: dict[str, Any], m: Market) -> str:
         if key == "bounce_fade":
             names["current (be + 2R/1R trail)"] = REFERENCE["bounce_fade+current"]
         fixed = tri.get(names["fixed"] or "", {}).get("trades") or []
-        for mode, name in names.items():
-            if not name or name not in rep["trials"]:
+        for mode, trial in names.items():
+            if not trial or trial not in rep["trials"]:
                 continue
-            v, tr = rep["trials"][name], tri[name]["trades"]
+            v, tr = rep["trials"][trial], tri[trial]["trades"]
             ex = v["all"].get("exits") or {}
             exs = " ".join(f"{k} {round(n / max(1, len(tr)) * 100)}%" for k, n in ex.items())
-            d = paired_diff(tr, fixed, mid) if mode != "fixed" else {}
-            L.append(f"| {key} | {mode} | {_cols(v)} | {_pd(d)} | {exs} | {verdict2(v)} |")
+            diff = paired_diff(tr, fixed, mid) if mode != "fixed" else {}
+            L.append(f"| {key} | {mode} | {_cols(v)} | {_pd(diff)} | {exs} | {verdict2(v)} |")
         if names["fixed"]:
             plc = (res["placebo_time"].get(names["fixed"]) or {}).get("trades") or []
             for grp, tr in (("IS", [t for t in fixed if t["entry_ts"] < mid]), ("all", fixed), ("same-hour plc", plc)):
@@ -167,9 +167,10 @@ def round2_markdown(rep: dict[str, Any], res: dict[str, Any], m: Market) -> str:
     for key, base in (("pump_fade", REFERENCE["pump_fade+exit_be"]),
                       ("pump_fade+discount", REFERENCE["pump_fade+discount+exit_be"])):
         for var in ("reentry", "fundbudget"):
-            name = _name(rep, f"{key}+{var}")
-            if not name:
+            found = _name(rep, f"{key}+{var}")
+            if not found:
                 continue
+            name = found
             v, tr = rep["trials"][name], tri[name]["trades"]
             bt = tri.get(base, {}).get("trades") or []
             if var == "reentry":

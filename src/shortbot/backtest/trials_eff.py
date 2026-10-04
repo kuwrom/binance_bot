@@ -63,7 +63,7 @@ def average_linkage(corr: np.ndarray, cut: float = CORR_CUT) -> list[list[int]]:
     alive = np.ones(s.shape[0], bool)
     while alive.sum() > 1:
         masked = np.where(np.outer(alive, alive), s, -np.inf)
-        a, b = np.unravel_index(int(np.argmax(masked)), s.shape)
+        a, b = (int(x) for x in np.unravel_index(int(np.argmax(masked)), s.shape))
         if masked[a, b] <= cut:
             break
         na, nb = len(members[a]), len(members[b])
