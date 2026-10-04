@@ -7,7 +7,7 @@ kill switch and entry_gates withdraw every resting row through `_cancel_entry` t
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
@@ -15,6 +15,9 @@ from . import clientid, errors
 from .entry_gates import RESTING
 from .entry_intents import GRACE_S, located
 from .symlock import SymbolBusy
+
+if TYPE_CHECKING:
+    from .trading import Trader
 
 log = logging.getLogger("shortbot.entries")
 
@@ -51,9 +54,10 @@ async def withdraw(tr, e: dict[str, Any], alert=None) -> str:
     A row with no order id (a send of unknown outcome) is first looked up by its client id (entry_intents.located).
     `alert`: told when the pre-armed stop of an unfilled limit can't be cancelled (drop_prearm)."""
     if not e.get("order_id"):
-        e = await located(tr.t, e)
-        if isinstance(e, str):
-            return e
+        found = await located(tr.t, e)
+        if isinstance(found, str):
+            return found
+        e = found
     try:
         o = await tr.cancel(e["symbol"], e["order_id"]) or {}
     except ccxt.OrderNotFound:
@@ -94,6 +98,15 @@ async def cancel_resting(desk, reason: str, keep=None) -> dict[str, list[int]]:
 
 class EntryCancel:
     """Uses EntryDesk's trader, journal and entry-row storage (_rows, _settle)."""
+    tr: Trader
+    _cancel_fails: dict[int, int]
+
+    if TYPE_CHECKING:   # EntryDesk's
+        async def act(self, kind: str, e: dict[str, Any], **args: Any) -> Any: ...
+
+        def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]: ...
+
+        async def _settle(self, eid: int, frm: str, **f: Any) -> bool: ...
 
     async def _cancel_entry(self, e: dict, status: str, reason: str) -> str:
         """Withdraw one live row; returns withdraw's outcome. The row is re-read inside the symbol lock: one resolved

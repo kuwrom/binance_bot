@@ -9,7 +9,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import entry_gates, gateway_health, news, procs, research, scan_job, setup_ladder, stream_task
 from . import killswitch as ks
@@ -21,6 +21,17 @@ from .market.social import snapshot as social_snapshot
 from .probability.labels import label_due as label_predictions
 from .risk_budget import governor_status
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from .app import App
+    from .entries import EntryDesk
+    from .exchange import Exchanges
+    from .market.liquidations import LiquidationStore
+    from .market.social import SocialStore
+    from .notify import Notifier
+    from .scan_tiered import TieredScan
+
 log = logging.getLogger("shortbot.guardian")
 SOCIAL_TOP_MOVERS = 30
 LADDER_CLEAR_REMIND_S = 7 * 86400    # live: criteria pass, a human clear is due: alerted once, then weekly
@@ -29,8 +40,18 @@ KV_STOP_SENT = "setup_ladder_stop_sent:"   # + alert id: that row went to Telegr
 
 
 class MarketJobs:
-    """Guardian mixin: needs app, ex, j, n, entries, liq_store, social_store, _social_task, _refresh_proc, streams_db,
-    tiered."""
+    """Guardian mixin; the Guardian attributes it uses are declared below."""
+    app: App
+    ex: Exchanges
+    j: Journal
+    n: Notifier
+    entries: EntryDesk
+    liq_store: LiquidationStore
+    social_store: SocialStore
+    streams_db: Path | None
+    tiered: TieredScan
+    _social_task: asyncio.Task | None
+    _refresh_proc: asyncio.subprocess.Process | None
 
     # ------------------------------------------------------------ monitor lane
     async def check_announcements(self) -> None:

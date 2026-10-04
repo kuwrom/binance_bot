@@ -16,7 +16,7 @@ import sqlite3
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
@@ -30,6 +30,9 @@ from .plans import build_plan, validate_plan
 from .setups import resolve
 from .steps import floor_amount, too_small
 
+if TYPE_CHECKING:
+    from .trading import Trader
+
 log = logging.getLogger("shortbot.entries")
 MIN_TTL_S = 660
 MAX_TTL_H = 24.0
@@ -41,6 +44,19 @@ def _now_iso() -> str:
 
 class EntryPlacement:
     """Uses EntryDesk's trader, journal, regime, entry-row storage and cancel (_cancel_entry)."""
+    tr: Trader
+    j: Journal
+
+    if TYPE_CHECKING:   # EntryDesk's and EntryCancel's
+        async def _regime(self) -> str: ...
+
+        def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]: ...
+
+        async def _update(self, eid: int, **f: Any) -> None: ...
+
+        async def _settle(self, eid: int, frm: str, **f: Any) -> bool: ...
+
+        async def _cancel_entry(self, e: dict, status: str, reason: str) -> str: ...
 
     @refusals("propose_group")
     async def propose_group(self, proposals: list[dict[str, Any]], ttl_hours: float = 6.0,

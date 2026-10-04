@@ -8,11 +8,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from . import indicators as ind
 from . import news
 from .exchange import to_raw
 from .guardian_loop import send_safe
+
+if TYPE_CHECKING:
+    from .app import App
+    from .exchange import Exchanges
+    from .guardian_loop import Streak
+    from .journal import Journal
+    from .notify import Notifier
 
 log = logging.getLogger("shortbot.guardian")
 SQUEEZE_PRICE_1H_PCT = 5.0
@@ -33,7 +41,18 @@ def _why(v) -> str:
 
 
 class WatchChecks:
-    """Guardian mixin: needs app, ex, j, n, watch_streak, adl_streak, and MarginChecks (adl_read, adl_check)."""
+    """Guardian mixin; the Guardian attributes and MarginChecks methods it uses are declared below."""
+    app: App
+    ex: Exchanges
+    j: Journal
+    n: Notifier
+    watch_streak: Streak
+    adl_streak: Streak
+
+    if TYPE_CHECKING:
+        async def adl_read(self) -> tuple[dict[str, int], list[str], str | None]: ...
+
+        async def adl_check(self, p: dict, got: dict[str, int], bad: list[str], err: str | None) -> str | None: ...
 
     # ------------------------------------------------------------ watch (alert-only, 60 s, own lane)
     async def watch_positions(self) -> None:
@@ -81,24 +100,26 @@ class WatchChecks:
         c5, oi, fr, intervals = await asyncio.gather(
             pub.fetch_ohlcv(sym, "5m", limit=SQUEEZE_BARS), self.ex.oi_history(sym, "5m", SQUEEZE_BARS),
             pub.fetch_funding_rate(sym), self.ex.funding_intervals(), return_exceptions=True)
-        bad = {name: _why(v) for name, v, ok in (
-            ("candles", c5, isinstance(c5, list) and len(c5) >= SQUEEZE_BARS),
-            ("oi", oi, isinstance(oi, list) and len(oi) > 1),
-            ("funding rate", fr, isinstance(fr, dict)),
-            ("funding intervals", intervals, isinstance(intervals, dict))) if not ok}
-        if "candles" not in bad:
-            px = ind.pct_change(c5[0][4], c5[-1][4])
-            oi_chg = ind.pct_change(oi[0]["oi"], oi[-1]["oi"]) if "oi" not in bad else 0
+        candles = c5 if isinstance(c5, list) and len(c5) >= SQUEEZE_BARS else None
+        oi_rows = oi if isinstance(oi, list) and len(oi) > 1 else None
+        rate = fr if isinstance(fr, dict) else None
+        ivals = intervals if isinstance(intervals, dict) else None
+        bad = {name: _why(v) for name, v, got in (("candles", c5, candles), ("oi", oi, oi_rows),
+                                                   ("funding rate", fr, rate), ("funding intervals", intervals, ivals))
+               if got is None}
+        if candles is not None:
+            px = ind.pct_change(candles[0][4], candles[-1][4])
+            oi_chg = ind.pct_change(oi_rows[0]["oi"], oi_rows[-1]["oi"]) if oi_rows is not None else 0
             if px >= SQUEEZE_PRICE_1H_PCT and oi_chg >= SQUEEZE_OI_1H_PCT:
                 await self.n.send("squeeze_risk", f"Price +{px:.1f}% and OI +{oi_chg:.1f}% in 1h. Re-evaluate now.",
                                   sym, urgent=True, cooldown_s=1800)
             elif px >= SQUEEZE_PRICE_1H_PCT * 1.5:
                 await self.n.send("price_spike", f"Price +{px:.1f}% in 1h against the short.", sym, urgent=True,
                                   cooldown_s=1800)
-        if "funding rate" not in bad and (fr.get("fundingRate") or 0) < 0:
-            await self.n.send("funding_negative", f"Funding {fr['fundingRate'] * 100:.4f}%: shorts now PAY and the "
+        if rate is not None and (rate.get("fundingRate") or 0) < 0:
+            await self.n.send("funding_negative", f"Funding {rate['fundingRate'] * 100:.4f}%: shorts now PAY and the "
                               "trade is crowded. Playbook: consider cutting.", sym, cooldown_s=4 * 3600)
-        if "funding intervals" not in bad and intervals.get(to_raw(sym), {}).get("interval_h") == 1:
+        if ivals is not None and ivals.get(to_raw(sym), {}).get("interval_h") == 1:
             await self.n.send("funding_hourly", "Funding switched to 1h settlement (cap hit): extreme regime.", sym,
                               urgent=True, cooldown_s=4 * 3600)
         if bad:

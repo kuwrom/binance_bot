@@ -13,6 +13,7 @@ import would be circular, and would bind `_sleep` before the tests patch `shortb
 from __future__ import annotations
 
 from decimal import ROUND_FLOOR, Decimal
+from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
@@ -21,6 +22,12 @@ from .audit import refusals
 from .exchange import to_symbol
 from .journal import Journal
 from .stops import is_bridge, is_protective_stop
+
+if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
+    from .exchange import Exchanges
+    from .trading_orders import Order
 
 TRIG = {"trigger": True}
 FLAT_FIRST = "flat before the close landed (-2022): a stop or target closed it first, nothing of ours filled"
@@ -33,6 +40,29 @@ def _whole(o: dict) -> bool:
 
 class ManageFlow:
     """Uses Trader's exchange, journal, symbol_lock, position/stop queries and order primitives."""
+    ex: Exchanges
+    j: Journal
+
+    if TYPE_CHECKING:   # Trader's and OrderFlow's
+        @property
+        def t(self) -> Any: ...   # ccxt.binanceusdm: Any to mypy (ccxt ships no type information)
+
+        def symbol_lock(self, symbol: str, action: str = "",
+                        wait_s: float | None = None) -> AbstractAsyncContextManager[None]: ...
+
+        async def alert(self, kind: str, msg: str, symbol: str | None = None, urgent: bool = False) -> None: ...
+
+        async def position(self, symbol: str) -> dict[str, Any] | None: ...
+
+        async def stop_orders(self, symbol: str, close_position_only: bool = False) -> list[dict]: ...
+
+        async def place_close_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict: ...
+
+        async def close_market(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> Order: ...
+
+        async def flat_now(self, symbol: str) -> bool: ...
+
+        async def cancel(self, symbol: str, order_id: str, trigger: bool = False) -> Order: ...
 
     @refusals("close")
     async def close(self, symbol: str, reason: str, lesson: str = "", fraction: float = 1.0,
@@ -67,7 +97,7 @@ class ManageFlow:
                 await targets_sync.after(self, symbol, "partial close")
                 return res
             order = await self.close_market(symbol, amount)
-            fill_quality.record(self, trade and trade["id"], "exit", "market", order)   # mainnet ref, background (#35)
+            fill_quality.record(self, trade["id"] if trade else None, "exit", "market", order)   # mainnet ref, background (#35)
             exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
             legs = await tranches.cancel_legs(self, trade["id"], "trade closed") if trade else {}
             await _sleep(1)  # let the position settle and income records land
@@ -113,7 +143,7 @@ class ManageFlow:
             await stops.strip_flat(self, symbol)
             return {"ok": True, "flat": True, "symbol": symbol, "closed_amount": 0.0, "remaining": 0.0,
                     "note": f"{FLAT_FIRST}; the guardian's reconcile journals that exit within a minute"}
-        fill_quality.record(self, trade and trade["id"], "exit", "market", order)
+        fill_quality.record(self, trade["id"] if trade else None, "exit", "market", order)
         exit_px = _f(order.get("average"), _f(pos.get("markPrice")))
         if order.get("filled") is None:   # flat meanwhile, or an answer without it: the position says what is left
             try:
@@ -158,11 +188,10 @@ class ManageFlow:
         qty = None if pos is None else _f(pos["contracts"])
         short = filled < amount
         why = f"the close filled {filled:g} of {amount:g}" if short else "an order filled during the close"
-        if pos is None:
+        if qty is None:   # pos is None
             head, why, cover = "could not re-read the position after a full close", f"{unread}", "every stop kept"
         else:
             head, cover = f"{qty:g} still open after a full close", await self._cover(symbol, trade, qty)
-        stays = short or not trade
         nxt = ("not in the journal: close it again" if not trade else "trade stays open: close it again" if short
                else "trade closed, the fill poll adopts the rest")
         msg = f"{head} ({why}): {cover}; no stop cancelled; {nxt}"
@@ -171,7 +200,7 @@ class ManageFlow:
             "trade_id": trade and trade["id"], "amount": amount, "filled": filled, "remaining": qty,
             "exit": exit_px, "stop": cover, "lesson": lesson})
         out = {"symbol": symbol, "closed_amount": filled if short else amount, "exit": exit_px, "remaining": qty}
-        if stays:
+        if short or not trade:   # the trade stays open
             return {"ok": False, "error": msg, **out}
         return {"ok": True, **out, "warning": msg, "result": await reconcile.finalize(self, trade, reason, lesson)}
 
@@ -325,8 +354,9 @@ class ManageFlow:
             tick = _f(self.t.market(symbol)["precision"]["price"])
             if cap is None or cur - cap < tick / 2:
                 return None   # inside the cap (never loosened), or less than a tick past it
-            out = {"symbol": symbol, "from": cur, "to": cap, "liquidation": liq, "mark": _f(pos.get("markPrice"))}
-            if cap <= out["mark"]:
+            mark = _f(pos.get("markPrice"))
+            out = {"symbol": symbol, "from": cur, "to": cap, "liquidation": liq, "mark": mark}
+            if cap <= mark:
                 await self._close_past(symbol, pos, self.j.active_trade(symbol) or {},
                                        f"guardian: stop {cur:g} past liquidation {liq:g}, price past {cap:g}")
                 return {**out, "action": "closed"}

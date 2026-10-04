@@ -11,7 +11,7 @@ decision. A lowering holds the account lock (symlock.py, #74) from its risk chec
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import killswitch
 from .audit import refusals
@@ -19,9 +19,22 @@ from .entry_gates import stamps
 from .risk import AccountState, RiskViolation, ShortRequest, check_open_short
 from .symlock import busy_refusal
 
+if TYPE_CHECKING:
+    from .journal import Journal
+    from .trading import Trader
+
 
 class EntryAmend:
     """Uses EntryDesk's trader, journal, regime and entry-row storage."""
+    tr: Trader
+    j: Journal
+
+    if TYPE_CHECKING:   # EntryDesk's
+        async def _regime(self) -> str: ...
+
+        def _rows(self, where: str = "1=1", args: tuple = ()) -> list[dict[str, Any]]: ...
+
+        async def _update(self, eid: int, **f: Any) -> None: ...
 
     @refusals("amend")
     @busy_refusal
@@ -51,7 +64,7 @@ class EntryAmend:
                 refused, extra = await self._amend_risk(e, px, snap["risk_usdt"])
                 if refused:
                     self.j.log_decision("rejected", f"amend entry #{entry_id} to {px}: " + "; ".join(
-                        refused.get("rejected_by_budget") or refused.get("rejected_by_risk")), sym, snapshot=snap)
+                        refused.get("rejected_by_budget") or refused["rejected_by_risk"]), sym, snapshot=snap)
                     return refused
                 snap.update(extra)
             async with self.tr.symbol_lock(sym, f"amend entry #{entry_id}: {reason}"):

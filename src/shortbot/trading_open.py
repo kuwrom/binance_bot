@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from typing import TYPE_CHECKING, Any
 
 from . import clientid, errors, exposure, fill_quality, killswitch, reconcile, stops, targets_sync, warmup
 from .audit import refusals
@@ -38,6 +39,16 @@ from .risk import RiskViolation, ShortRequest, check_open_short, liquidity_tier,
 from .setups import resolve
 from .steps import floor_amount, too_small
 from .symlock import busy_refusal
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager
+
+    from .exchange import Exchanges
+    from .journal import Journal
+    from .risk import AccountState
+    from .trading import Prechecks
+    from .trading_orders import Order
 
 
 def _reason(x: str | None) -> str | None:
@@ -55,6 +66,13 @@ def _resting(j, symbol: str) -> list[dict]:
     return [r for r in rows if (r.get("mode") or "demo") == j.mode]
 
 
+def _own(j: Journal, tid: int) -> dict[str, Any]:
+    """The flow's own trade row: journalled before the send, never deleted."""
+    if (t := j.get_trade(tid)) is None:
+        raise LookupError(f"trade #{tid} is not in the journal")
+    return t
+
+
 def _beside(symbol: str, rows: list[dict]) -> dict:
     own, ext = [r for r in rows if r["status"] != "external"], [r for r in rows if r["status"] == "external"]
     why = ([f"resting entries {[r['id'] for r in own]} (group {', '.join(sorted({r['group_id'] for r in own}))}) can "
@@ -68,6 +86,33 @@ def _beside(symbol: str, rows: list[dict]) -> dict:
 
 class OpenFlow:
     """Uses Trader's exchange, journal, account_lock (then symbol_lock), prechecks, budget and order primitives."""
+    ex: Exchanges
+    j: Journal
+    prechecks: Prechecks
+    budget: Callable[..., Awaitable[dict[str, Any]]]
+
+    if TYPE_CHECKING:   # Trader's and OrderFlow's
+        @property
+        def t(self) -> Any: ...   # ccxt.binanceusdm: Any to mypy (ccxt ships no type information)
+
+        def account_lock(self, action: str = "", wait_s: float | None = None) -> AbstractAsyncContextManager[None]: ...
+
+        def symbol_lock(self, symbol: str, action: str = "",
+                        wait_s: float | None = None) -> AbstractAsyncContextManager[None]: ...
+
+        async def account_state(self) -> AccountState: ...
+
+        async def alert(self, kind: str, msg: str, symbol: str | None = None, urgent: bool = False) -> None: ...
+
+        async def position(self, symbol: str) -> dict[str, Any] | None: ...
+
+        async def prepare(self, symbol: str, leverage: int) -> None: ...
+
+        async def place_close_stop(self, symbol: str, stop_price: float, tries: int = 2) -> dict: ...
+
+        async def open_market(self, symbol: str, amount: float, cid: str, lookups: int = 3) -> Order: ...
+
+        async def close_market(self, symbol: str, amount: float, tries: int = 3, whole: bool = True) -> Order: ...
 
     @refusals("open_short")
     @busy_refusal
@@ -116,7 +161,7 @@ class OpenFlow:
                           "multipliers": {**(budget.get("multipliers") or {}), "liquidity_funding": m}}
             dist = (stop_price - price) / price if price else 0
             sized, over_budget = notional is None, None
-            if sized:  # size = dynamic risk budget / stop distance, still inside the hard caps
+            if notional is None:  # size = dynamic risk budget / stop distance, still inside the hard caps
                 notional = round(min(budget["risk_usd"] / dist if dist > 0 else 0,
                                      max_notional_for_risk(acct.equity, price, stop_price, lim)) * 0.98, 2)
             elif dist > 0 and notional * dist > budget["risk_usd"] * 1.001:
@@ -222,7 +267,7 @@ class OpenFlow:
             try:
                 await self.close_market(symbol, size or amount)
                 await _sleep(1)
-                res = await reconcile.finalize(self, {**self.j.get_trade(tid), "status": "open"},
+                res = await reconcile.finalize(self, {**_own(self.j, tid), "status": "open"},
                                                f"aborted: stop placement failed ({e})")
             except Exception as e2:  # noqa: BLE001
                 if size and fill:
@@ -252,7 +297,7 @@ class OpenFlow:
             warnings.append(f"slippage: actual risk {risk_usdt / equity * 100:.2f}% of equity")
         for w in warnings:
             await self.alert("entry_warning", w, symbol, False)
-        self.j.log_decision("open", self.j.get_trade(tid)["thesis"], symbol, snapshot={
+        self.j.log_decision("open", _own(self.j, tid)["thesis"], symbol, snapshot={
             "trade_id": tid, "fill": fill, "size": size, "stop": stop_price, "warnings": warnings})
         return {"ok": True, "trade_id": tid, "symbol": symbol, "amount": size, "fill": fill, "client_id": cid,
                 "notional": round(size * fill, 2), "auto_sized": sized, "leverage": leverage,

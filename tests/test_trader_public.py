@@ -30,6 +30,12 @@ def mixins() -> list[Path]:
     return sorted(SRC.glob("trading*.py"))
 
 
+def stub(f: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A mixin's declaration of its host's method (under `if TYPE_CHECKING:`, body `...`): it sends nothing."""
+    return len(f.body) == 1 and isinstance(f.body[0], ast.Expr) and isinstance(f.body[0].value, ast.Constant) \
+        and f.body[0].value.value is Ellipsis
+
+
 def private_members() -> set[str]:
     """Private methods of the classes in trading*.py, and the private attributes they set on self."""
     names = set()
@@ -101,7 +107,7 @@ def test_every_primitive_tells_the_running_intent_what_it_sends():
     found = {}
     for p in mixins():
         for f in ast.walk(ast.parse(p.read_text())):
-            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name in SENDERS:
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name in SENDERS and not stub(f):
                 found[f.name] = {n.func.attr for n in ast.walk(f) if isinstance(n, ast.Call)
                                  and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
                                  and n.func.value.id == "intents"} & marks

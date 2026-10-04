@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 RESEARCH_SCHEMA = """
 CREATE TABLE IF NOT EXISTS candidates (
@@ -60,7 +60,12 @@ def add_columns(db: sqlite3.Connection, table: str, cols: dict[str, str], have: 
 
 
 class ResearchStore:
-    db: Any  # provided by Journal
+    db: sqlite3.Connection   # provided by Journal
+
+    if TYPE_CHECKING:   # Journal's
+        def _rows(self, sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]: ...
+
+        def _insert(self, sql: str, args: tuple[Any, ...]) -> int: ...
 
     def _migrate_research(self) -> None:
         add_columns(self.db, "candidates", CANDIDATE_COLUMNS)

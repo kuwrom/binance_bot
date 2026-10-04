@@ -166,7 +166,9 @@ class Journal(ResearchStore, LearningStore):
     def _insert(self, sql: str, args: tuple) -> int:
         cur = self.db.execute(sql, args)
         self.db.commit()
-        return int(cur.lastrowid)
+        if (rowid := cur.lastrowid) is None:   # a plain INSERT always sets it
+            raise sqlite3.ProgrammingError(f"no row id after {sql}")
+        return rowid
 
     def _rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.execute(sql, args).fetchall()]

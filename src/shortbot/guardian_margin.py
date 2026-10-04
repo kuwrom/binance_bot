@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from . import margin
 from .exchange import to_raw
@@ -25,6 +26,13 @@ from .gateway import handler
 from .guardian_loop import send_safe
 from .intents import Intent
 from .symlock import SymbolBusy
+
+if TYPE_CHECKING:
+    from .exchange import Exchanges
+    from .gateway import LocalGateway
+    from .guardian_loop import Streak
+    from .journal import Journal
+    from .notify import Notifier
 
 log = logging.getLogger("shortbot.guardian")
 ADL_SAMPLE_KEY = "adl_sample"
@@ -35,13 +43,19 @@ MULTI_ASSETS_COOLDOWN_S = 4 * 3600
 
 
 class MarginChecks:
-    """Guardian mixin: needs app, ex, j, n, adl_streak, _adl_logged."""
+    """Guardian mixin; the Guardian attributes it uses are declared below."""
+    ex: Exchanges
+    j: Journal
+    n: Notifier
+    gw: LocalGateway
+    adl_streak: Streak
+    _adl_logged: dict[str, tuple[int, float]]
 
     # ------------------------------------------------------------ watch lane (ADL)
     async def adl_read(self) -> tuple[dict[str, int], list[str], str | None]:
         """(raw symbol -> quantile, what couldn't be read, the read's error)."""
         try:
-            resp = await self.ex.trade.fapiPrivateGetAdlQuantile({})
+            resp = await self.ex.require_trade().fapiPrivateGetAdlQuantile({})
         except Exception as e:  # noqa: BLE001 - each short's watch result carries it
             return {}, [], f"adl: adlQuantile read failed: {type(e).__name__}: {e}"
         if resp and self.j.get(ADL_SAMPLE_KEY) is None:   # the live shape, once (unverified on demo)

@@ -13,7 +13,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from . import entry_gates, entry_intents, errors, intents, reconcile, resolver, stops
 from . import killswitch as ks
@@ -25,6 +27,15 @@ from .journal import Journal
 from .killswitch import ACTIVE, HALTED, REDUCING
 from .risk_budget import track_day_peak
 from .symlock import SymbolBusy
+
+if TYPE_CHECKING:
+    from .app import App
+    from .entries import EntryDesk
+    from .exchange import Exchanges
+    from .gateway import LocalGateway
+    from .guardian_loop import Streak
+    from .notify import Notifier
+    from .user_stream import UserStream
 
 log = logging.getLogger("shortbot.guardian")
 STOP_NEAR_PCT = 1.0
@@ -39,9 +50,36 @@ SEEN_KEY = "trading_state_seen"   # last state the guardian saw (via journal.mod
 
 
 class PositionChecks:
-    """Guardian mixin: needs app, ex, j, n, entries, stop_fails, pos_streak, _last_resync, _fund_ts, untracked_since,
-    kill_seen, pnl_streak, pnl_tripped, user_stream, _heartbeat, _triggered, MarginChecks.margin_pass and
-    PlanChecks._run_plan / _settle_flat."""
+    """Guardian mixin; the Guardian attributes and the Guardian, MarginChecks and PlanChecks methods it uses are
+    declared below."""
+    app: App
+    ex: Exchanges
+    j: Journal
+    n: Notifier
+    entries: EntryDesk
+    gw: LocalGateway
+    user_stream: UserStream | None
+    stop_fails: dict[str, int]
+    pos_streak: Streak
+    pnl_streak: Streak
+    pnl_tripped: bool
+    untracked_since: dict[str, float]
+    kill_seen: dict | None
+    _last_resync: float
+    _fund_ts: dict[str, float]
+
+    if TYPE_CHECKING:
+        def _heartbeat(self, at: float) -> None: ...
+
+        def _triggered(self, job: str) -> bool: ...
+
+        async def margin_pass(self, live: list[dict], held: list[dict]) -> None: ...
+
+        async def _settle_flat(self, live: list[dict]) -> None: ...
+
+        async def _targets(self, coro: Awaitable[Any], sym: str | None = None, default: Any = None) -> Any: ...
+
+        async def _run_plan(self, trade: dict, p: dict) -> None: ...
 
     # ------------------------------------------------------------ positions (protective, 60 s)
     async def check_positions(self) -> None:

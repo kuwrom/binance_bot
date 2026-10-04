@@ -8,6 +8,8 @@ symbol's targets are pulled in a `pull_targets` intent (step 2b), before reconci
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable
+from typing import TYPE_CHECKING, Any
 
 from . import targets, targets_sync
 from .gateway import handler
@@ -17,11 +19,20 @@ from .journal import Journal
 from .manager import excursions, plan_actions
 from .symlock import SymbolBusy
 
+if TYPE_CHECKING:
+    from .app import App
+    from .gateway import LocalGateway
+    from .notify import Notifier
+
 log = logging.getLogger("shortbot.guardian")
 
 
 class PlanChecks:
-    """Guardian mixin: needs app, j, n, gw."""
+    """Guardian mixin; the Guardian attributes it uses are declared below."""
+    app: App
+    j: Journal
+    n: Notifier
+    gw: LocalGateway
 
     async def _settle_flat(self, live: list[dict]) -> None:
         """Each symbol with live target rows and no position (targets_sync.flat_symbols): its targets pulled in an
@@ -32,7 +43,7 @@ class PlanChecks:
             except SymbolBusy:
                 continue
 
-    async def _targets(self, coro, sym: str | None = None, default=None):
+    async def _targets(self, coro: Awaitable[Any], sym: str | None = None, default: Any = None) -> Any:
         """A target step never costs the pass's stop and plan checks: a failure is alerted (SymbolBusy: next pass)."""
         try:
             return await coro
@@ -113,8 +124,9 @@ async def plan_step(g, symbol: str, trade_id: int, seen: dict) -> dict:
         if not fresh or fresh["status"] != "open":
             return {"ok": True, "skipped": "trade not open"}
         stop = min((s["trigger"] for s in await tr.stop_orders(symbol)), default=None)
-        p = {"mark": float(pos["markPrice"]), "contracts": float(pos["contracts"]), "exchange_stop": stop}
-        trade = {**fresh, **excursions(fresh, p["mark"])}
+        mark = float(pos["markPrice"])
+        p = {"mark": mark, "contracts": float(pos["contracts"]), "exchange_stop": stop}
+        trade = {**fresh, **excursions(fresh, mark)}
         done = await g._apply_plan(trade, p, plan_actions(trade, p))
         await g._targets(targets_sync.sync(tr, symbol, "guardian pass"), symbol)
     failed = [d for d in done if isinstance(d.get("result"), dict) and d["result"].get("ok") is False
