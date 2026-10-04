@@ -15,6 +15,7 @@ from .probe_kit import TRIG, Probe, algo_status, outcome, say
 
 UNKNOWN_ALGO_ID = 9_999_999_999_999   # an algoId this account never had
 COUNTDOWN_MS, COUNTDOWN_WAIT_S = 3000, 6.0   # the doc advises against "too precise or too small" countdowns
+LOOKUP_MISSES = "1 of 4 on demo, 2026-10-04"   # probe 8: Query Algo Order by clientAlgoId missed a resting order (#89)
 
 
 def _answer(ok: bool, res: Any) -> dict[str, Any]:
@@ -41,8 +42,9 @@ async def algo_unknown_cid(p: Probe) -> dict[str, Any]:
 
 
 async def trigger_listing_cid(p: Probe) -> dict[str, Any]:
-    """8: does fetch_open_orders(sym, {'trigger': True}) carry our clientOrderId on a conditional order, and does the
-    lookup by clientAlgoId find it (Trader.find_stop relies on both)?"""
+    """8: does fetch_open_orders(sym, {'trigger': True}) carry our clientOrderId on a conditional order? Judged on that:
+    Trader.find_stop and the resolver fall back to it. The lookup by clientAlgoId is reported, not judged: it can answer
+    -2013 for an order that rests (LOOKUP_MISSES)."""
     await p.setup()
     ok, o, cid = await p.stop("reduce-only stop +10% (pre-arm shape)", p.px(10), close=False, qty=p.qty)
     if not ok:
@@ -57,9 +59,10 @@ async def trigger_listing_cid(p: Probe) -> dict[str, Any]:
     obs = {"listed": mine is not None, "listed_clientOrderId": listed_cid,
            "listed_info_clientAlgoId": ((mine or {}).get("info") or {}).get("clientAlgoId"), "lookup_by_cid": found,
            "lookup": _answer(okq, q)}
-    return {"observed": obs, "matches_fake": listed_cid == cid and found,
+    look = str(found) if found or okq else f"False ({say(okq, q)})"
+    return {"observed": obs, "matches_fake": listed_cid == cid,
             "verdict": f"the trigger listing carries our client id: {listed_cid == cid}; the lookup by clientAlgoId "
-                       f"finds it: {found}"}
+                       f"found it: {look}; it can miss a resting order: {LOOKUP_MISSES}"}
 
 
 async def fetch_by_cid(p: Probe) -> dict[str, Any]:

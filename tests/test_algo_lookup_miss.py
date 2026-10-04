@@ -8,15 +8,18 @@ import time
 
 import pytest
 
-from shortbot import audit, clientid, intents, resolver
+from shortbot import audit, clientid, intents, probe_kit, probes, resolver
 from shortbot.intents import Intent
-from shortbot.trading import STOP_PARAMS
-from tests.fakes import SYM
+from shortbot.journal import Journal
+from shortbot.trading import STOP_PARAMS, Trader
+from tests.fake_faults import FaultyCcxt
+from tests.fakes import SYM, FakeEx, neutral_budget, ok_prechecks
 from tests.test_fault_matrix import bridges, cids, close_stops, trader
 from tests.test_intent_status import outcomes, submit
 from tests.test_trading import open_default
 
 LATER = resolver.GRACE_S + 1
+XRP = "XRP/USDT:USDT"
 
 
 def stop_sends(fake) -> list[str]:
@@ -90,3 +93,22 @@ async def test_the_resolver_settles_a_conditional_send_the_lookup_misses_from_th
     assert ev["orders"] == {cid: "placed"} and ev["status"] == "done"
     assert fake.fired[-1] == ("fetch_order", kind, "2013_resting") and len(fake.orders) == sent   # nothing re-sent
     assert [fake.algo[i]["cid"] for i in fake.prearms] == [cid]   # it still rests
+
+
+async def test_probe_8_judges_the_listing_and_reports_a_lookup_that_misses(monkeypatch):
+    """Probe 8 judges what the desk relies on, the listing carrying our client id; the lookup is observational."""
+    fake = FaultyCcxt()
+    fake.add_symbol(XRP, 2.5, tick=0.0001, step=0.1, min_notional=5.0)
+    tr = Trader(FakeEx(fake), Journal(":memory:"), prechecks=ok_prechecks, budget=neutral_budget)
+
+    async def instant(_s):
+        return None
+    monkeypatch.setattr(probe_kit, "_sleep", instant)
+    fake.arm("fetch_order", "2013_resting", "probe")
+    r = await probes.run(tr, "trigger-listing-cid", "XRPUSDT")
+    obs = r["observed"]
+    assert r["ok"] and r["clean"] and r["matches_fake"] is True, r
+    assert obs["listed"] and obs["listed_clientOrderId"].startswith("sb-x8XRP-") and obs["lookup_by_cid"] is False
+    assert obs["lookup"]["code"] == -2013 and fake.fired == [("fetch_order", "probe", "2013_resting")]
+    assert "the lookup by clientAlgoId found it: False (OrderNotFound -2013)" in r["verdict"]
+    assert r["verdict"].endswith("it can miss a resting order: 1 of 4 on demo, 2026-10-04")
