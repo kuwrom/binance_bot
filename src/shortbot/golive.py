@@ -26,7 +26,8 @@ passes. Every threshold names where it comes from (repo rule: parameters come fr
 - uptime: uptime recorded (kv uptime_since); no untagged guardian gap, nor one open now, past the session watchdog's
   stale limit. Drill-tagged gaps are planned outages.
 - incidents: zero unprotected-position alerts in the window; near-misses are listed, not gated.
-- slippage: fill_report.calibrate ok (>= 30 trades with market or stop fills over >= 20 days, k > 0).
+- slippage: fill_report.calibrate on the window's trades ok (>= 30 trades with market or stop fills over >= 20 days,
+  k > 0).
 - plumbing: golive_view.plumbing (drills, probes, backup drill, gateway soak; each within 30 days).
 - parameters (reported, not gated): the window's trades sized under the .env baseline the live guardian uses."""
 
@@ -305,10 +306,11 @@ def incidents_crit(j: Any, start: str) -> dict[str, Any]:
                 {"by_kind": dict(Counter(r["kind"] for r in inc)), "incidents": inc[-10:], "near_misses": near})
 
 
-def slippage_crit(j: Any) -> dict[str, Any]:
-    c = FR.calibrate(j)
-    return crit(c["ok"], c["k_bps"], f">= {FR.MIN_TRADES} trades with market or stop fills over >= {rs.MIN_DAYS} "
-                "days, k > 0", "fill_report.calibrate (#35): the backtest's slip k refit from the desk's own fills",
+def slippage_crit(j: Any, start: str) -> dict[str, Any]:
+    c = FR.calibrate(j, since=start)
+    return crit(c["ok"], c["k_bps"], f">= {FR.MIN_TRADES} trades opened in the window with market or stop fills over "
+                f">= {rs.MIN_DAYS} days, k > 0", "fill_report.calibrate (#35): the backtest's slip k refit from the "
+                "desk's own fills, those of the window's trades (since=)",
                 f"{c['note']}; k {c['k_bps']} bp vs model {c['current_k_bps']} bp", c)
 
 
@@ -356,7 +358,8 @@ def report(j: Any, limits: RiskLimits | None = None, light: bool = False, now: d
     crits = {"registry": registry_crit(d, trades), "sample": sample_crit(trades),
              "expectancy": expectancy_crit(trades), "stress": stress_crit(trades),
              "drawdown": drawdown_crit(trades, light), "equity": equity_crit(d, start, limits),
-             "uptime": uptime_crit(d, start, now), "incidents": incidents_crit(d, start), "slippage": slippage_crit(d),
+             "uptime": uptime_crit(d, start, now), "incidents": incidents_crit(d, start),
+             "slippage": slippage_crit(d, start),
              "plumbing": plumbing_crit(d, now), "parameters": parameters(trades, limits)}
     blockers = [k for k, c in crits.items() if c["gated"] and not c["ok"]]
     out: dict[str, Any] = {

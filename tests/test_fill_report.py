@@ -144,6 +144,18 @@ def test_calibration_refuses_below_30_trades_or_20_days(n, days):
     assert costs is COSTS and not info["ok"]
 
 
+def test_calibration_can_take_only_the_trades_opened_since_a_time():
+    j = Journal(":memory:")
+    synthetic(j, 40, 25)
+    j.db.execute("UPDATE trades SET opened_at='2020-01-01T00:00:00+00:00'")
+    j.db.commit()
+    synthetic(j, 40, 25, k=10.0)                      # opened now: the only ones since 2026
+    cal = fr.calibrate(j, since="2026-01-01T00:00:00+00:00")
+    assert cal["ok"] and (cal["n_trades"], cal["k_bps"]) == (40, approx(10.0))
+    assert cal["since"] == "2026-01-01T00:00:00+00:00" and "since 2026-01-01" in cal["note"]
+    assert fr.calibrate(j)["n_trades"] == 80 and fr.calibrate(j)["since"] is None
+
+
 def test_calibration_with_no_fills_is_empty_not_an_error():
     cal = fr.calibrate(Journal(":memory:"))
     assert not cal["ok"] and cal["n_fills"] == 0 and cal["k_bps"] is None

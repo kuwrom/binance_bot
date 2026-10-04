@@ -93,8 +93,11 @@ def _json(x: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
 
-def _trades(j, all_modes: bool) -> list[dict[str, Any]]:
+def _trades(j, all_modes: bool, since: str | None = None) -> list[dict[str, Any]]:
+    """This mode's trades (all modes: every one), never a drill's; with `since`, only those opened at or after it."""
     m, args = j._in_mode(all_modes)
+    if since is not None:
+        m, args = f"{m} AND opened_at >= ?", (*args, since)
     rows = j._rows(f"SELECT id, symbol, setup, status, entry_features, fill_refs FROM trades WHERE {m} AND {NOT_DRILL}"
                    " ORDER BY id", args)   # a plumbing drill's fills are no evidence (#46)
     for r in rows:   # the doc's `orders` are the trade's order ids (order_ids.py, #76): a doc of only those has none
@@ -198,24 +201,28 @@ def _coverage(trades: list[dict], rows: list[dict]) -> dict[str, Any]:
 
 
 def calibrate(j, all_modes: bool = False, min_trades: int = MIN_TRADES, min_days: int = rs.MIN_DAYS,
-              costs: Costs = COSTS) -> dict[str, Any]:
+              costs: Costs = COSTS, since: str | None = None) -> dict[str, Any]:
     """Refit sim's slippage constant k from logged market and stop fills (module doc). ok=False below the sample:
-    the numbers are then descriptive only and calibrated_costs() keeps the current model."""
-    pts = [(r, r["mult"] / math.sqrt(r["vol24_usd"] / 1e6)) for r in fills(j, all_modes, costs)
+    the numbers are then descriptive only and calibrated_costs() keeps the current model. since: only the trades
+    opened at or after it (an ISO time; the go-live gate's window)."""
+    pts = [(r, r["mult"] / math.sqrt(r["vol24_usd"] / 1e6)) for r in fills(j, costs=costs,
+                                                                            trades=_trades(j, all_modes, since))
            if not r["stale"] and r["bps"] is not None and r["mult"] and r["vol24_usd"]]
     trades, days = len({r["trade_id"] for r, _ in pts}), len(set(rs.days_of([r for r, _ in pts], "ms")))
     out: dict[str, Any] = {"n_fills": len(pts), "n_trades": trades, "days": days, "current_k_bps": costs.slip_k_bps,
-                           "venue": "all modes" if all_modes else j.mode, "k_bps": None, "k_bps_median": None,
-                           "n_eff": None, "ok": False}
+                           "venue": "all modes" if all_modes else j.mode, "since": since, "k_bps": None,
+                           "k_bps_median": None, "n_eff": None, "ok": False}
+    trades_since = f"{trades} trades" + (f" since {since[:10]}" if since else "")
     if pts:
         ratios = [r["bps"] / x for r, x in pts]
         out.update(k_bps=_r(sum(r["bps"] * x for r, x in pts) / sum(x * x for _, x in pts)),
                    k_bps_median=_r(statistics.median(ratios)),
                    n_eff=_r(rs.clustered_mean(ratios, rs.days_of([r for r, _ in pts], "ms"))["n_eff"], 1))
     out["ok"] = bool(trades >= min_trades and days >= min_days and (out["k_bps"] or 0) > 0)
-    out["note"] = (f"calibrated on {trades} trades over {days} days ({out['venue']} fills: that venue's costs)"
+    out["note"] = (f"calibrated on {trades_since} over {days} days ({out['venue']} fills: that venue's costs)"
                    if out["ok"] else f"descriptive only: {trades} trade(s) < {min_trades} or {days} day(s) < "
-                   f"{min_days}; the backtest keeps k = {costs.slip_k_bps} bp")
+                   f"{min_days}" + (f" since {since[:10]}" if since else "") +
+                   f"; the backtest keeps k = {costs.slip_k_bps} bp")
     return out
 
 

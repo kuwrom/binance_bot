@@ -166,6 +166,17 @@ def test_mainnet_repricing_moves_r_by_the_excess_over_the_model():
     j = Journal(":memory:")
     rig.trade(j, 1.0, rig.DAY0, rig.DAY0 + timedelta(hours=2), entry=("limit", -50.0), exit_bps=0.0)
     rig.trade(j, 1.0, rig.DAY0, rig.DAY0 + timedelta(hours=2), refs=False)
+def test_slippage_calibrates_on_the_windows_fills_only(monkeypatch):
+    j = rig.desk(monkeypatch)
+    before = run(j)["criteria"]["slippage"]
+    for i in range(40):   # an older stack's demo fills, before the window: with them k would be <= 0
+        t0 = rig.DAY0 - timedelta(days=30 - i * 0.5)
+        rig.trade(j, 0.5, t0, t0 + timedelta(hours=2), entry=("market", -40.0), exit_bps=-40.0)
+    c = run(j)["criteria"]["slippage"]
+    assert c["ok"] and c["value"] == before["value"] and c["detail"]["n_trades"] == 60
+    assert c["detail"]["since"] == rig.SINCE
+
+
     a, b = golive.sample(j, "")
     model_exit = 20 / (rig.VOL / 1e6) ** 0.5
     assert a["excess_bps"] == pytest.approx(-50.0 - model_exit, abs=0.02)
