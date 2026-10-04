@@ -5,14 +5,19 @@ symbol's target pull) journals first and sends only once the lock is free."""
 import asyncio
 import time
 
+import pytest
+
 from shortbot import killswitch as ks
 from shortbot.journal import Journal
+from tests.gateway_rig import guardian_transport  # noqa: F401 - the suite runs locally and through the gateway
 from tests.held_lock import STALL_REPORT, HeldLock
 from tests.test_entries import favorable, prop
 from tests.test_entries_cancel import oid_at
 from tests.test_guardian_offloop import guardian_on
 from tests.test_killswitch import SETTINGS
 from tests.test_target_paths import book, placed
+
+pytestmark = pytest.mark.usefixtures("guardian_transport")
 
 HOLD_S = 4.0
 

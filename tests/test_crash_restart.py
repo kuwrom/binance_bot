@@ -18,14 +18,21 @@ import pytest
 
 from shortbot import audit, fill_quality, gateway, intents, reconcile
 from shortbot import killswitch as ks
+from shortbot.gateway_guardian import IntentPending
 from shortbot.guardian import Guardian
 from shortbot.intents import Intent
 from shortbot.journal import Journal
 from shortbot.trading import Trader
 from tests.fake_faults import Crash, FaultyCcxt, View
 from tests.fakes import SYM, FakeEx, neutral_budget, ok_prechecks
+from tests.gateway_rig import (  # noqa: F401 - the suite runs locally and through the gateway
+    guardian_transport,
+    transport,
+)
 from tests.test_entries import favorable, prop
 from tests.test_fault_matrix import bridges, cids, close_stops, resolutions
+
+pytestmark = pytest.mark.usefixtures("guardian_transport")
 
 STOP = 1.05
 
@@ -167,7 +174,7 @@ async def test_killed_after_the_close_filled_before_the_journal_write(tmp_path, 
 
 # ------------------------------------------------------------ (4) a limit entry filled, before / inside protect_fill
 @pytest.mark.parametrize("point", ["before_protect", "after_its_stop"])
-async def test_killed_after_a_limit_fill(point, tmp_path, monkeypatch):
+async def test_killed_after_a_limit_fill(point, tmp_path, monkeypatch, request):
     d = Desk(tmp_path, price=1.035)
     old = d.guardian("old guardian")
     (p,) = (await old.entries.propose_group([prop(1.04)]))["placed"]
@@ -177,7 +184,9 @@ async def test_killed_after_a_limit_fill(point, tmp_path, monkeypatch):
         old.ex.fake.crash_after("fetch_order", "entry")                        # the poll saw the fill, then died
     else:
         old.ex.fake.crash_after("create_order", "stop")                        # its whole-position stop rests
-    with pytest.raises(Crash), audit.acting("guardian:entries"):
+    # through the gateway, a crash inside protect_fill is the gateway's: the guardian sees its intent pending
+    died = IntentPending if transport(request) == "gateway" and point == "after_its_stop" else Crash
+    with pytest.raises(died), audit.acting("guardian:entries"):
         await old.check_entries()
     assert d.fake.position == p["amount"] and not old.j.open_trades()
     g = d.guardian()

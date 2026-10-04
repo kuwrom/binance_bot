@@ -51,7 +51,7 @@ from .entries_cancel import EntryCancel, amended_on_the_book, dead_label
 from .entries_place import EntryPlacement
 from .entry_gates import STAMPED, Retry
 from .entry_intents import HINTS, ON_BOOK, resolve
-from .gateway import LocalGateway
+from .gateway import Gateway, LocalGateway
 from .intents import Intent
 from .symlock import SymbolBusy
 
@@ -100,7 +100,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         self._orphans_at = 0.0             # orphans: last all-symbol conditional-orders sweep
         self._flagged: set[tuple] = set()  # entry_intents: alerted once (unmatched pre-arms, late orders)
         self.retry = Retry()               # entry_gates: withdrawals that keep failing, resubmitted further apart
-        self.gw = LocalGateway(lambda: self.j, ctx=self)   # this desk's entry-row sends (entries_acts.py)
+        # this desk's entry-row sends (entries_acts.py); the guardian sends its desk's to the gateway (step 6)
+        self.gw: Gateway = LocalGateway(lambda: self.j, ctx=self)
 
     async def act(self, kind: str, e: dict[str, Any], **args: Any) -> Any:
         """Row `e`'s send, an intent of the caller's job: the guardian's poll, sweeps and reconciler decide, the

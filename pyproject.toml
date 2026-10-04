@@ -98,7 +98,7 @@ module = [
     "shortbot.steps", "shortbot.trading_orders", "shortbot.stale_guard", "shortbot.journal_writer",
     "shortbot.wal_holder", "shortbot.results", "shortbot.gateway_wire", "shortbot.gateway_server",
     "shortbot.gateway_client", "shortbot.gateway_health", "shortbot.gateway", "shortbot.intents", "shortbot.resolver",
-    "shortbot.intent_changes", "shortbot.origin", "shortbot.gateway_acts",
+    "shortbot.intent_changes", "shortbot.origin", "shortbot.gateway_acts", "shortbot.gateway_guardian",
     "shortbot.clientid", "shortbot.order_ids", "shortbot.stops", "shortbot.risk", "shortbot.risk_budget",
     "shortbot.killswitch", "shortbot.killswitch_ops", "shortbot.killswitch_rearm", "shortbot.entries_place",
     "shortbot.entries_amend", "shortbot.entries_cancel", "shortbot.entries_fills", "shortbot.entries_acts",

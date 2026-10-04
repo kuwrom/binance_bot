@@ -59,6 +59,9 @@ async def test_the_guardian_alerts_a_stale_gateway_once_per_cooldown_only_with_t
     assert down() == []                                   # fresh
     beat(g.j, health.STALE_S + 5)
     await g.check_gateway()
+    assert down() == []                                   # a restart (every deploy has one): logged only
+    beat(g.j, health.DOWN_URGENT_S + 5)
+    await g.check_gateway()
     await g.check_gateway()
     (a,) = down()                                         # once per cooldown
     assert "refused" in a["message"] and "break-glass" in a["message"] and "docker compose" in a["message"]

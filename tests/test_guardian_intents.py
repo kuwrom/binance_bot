@@ -12,12 +12,18 @@ from shortbot import audit, commands, entry_gates, gateway
 from shortbot import killswitch as ks
 from shortbot.gateway import LocalGateway
 from tests.fakes import FakeCcxt
+from tests.gateway_rig import (  # noqa: F401 - the suite runs locally and through the gateway
+    guardian_transport,
+    transport,
+)
 from tests.intent_jobs import job, kinds, rows
 from tests.test_entries import favorable, prop
 from tests.test_entries_cancel import SYM2, fail_cancel, oid_at
 from tests.test_entry_intents import SPLIT, on_send
 from tests.test_guardian import guardian_with, open_trade
 from tests.test_killswitch import SETTINGS
+
+pytestmark = pytest.mark.usefixtures("guardian_transport")
 
 JOB = "guardian:entries"
 LATE_OK = {"restore_stop", "force_close", "cap_stop", "protect_fill", "cancel_entry", "withdraw_entries"}
@@ -152,7 +158,10 @@ async def test_a_quiet_pass_submits_no_intent(sent):
         assert await job(g, sent, g.reconcile_entries, "guardian:entry_reconcile") == []
 
 
-async def test_the_guard_catches_a_guardian_send_outside_an_intent(monkeypatch, order_lock_audit):
+async def test_the_guard_catches_a_guardian_send_outside_an_intent(monkeypatch, order_lock_audit, request):
+    if transport(request) == "gateway":
+        pytest.skip("an in-process regression: through the gateway, the guardian sends nothing itself")
+
     async def bypass(self, intent, refusal=None):              # a regression: the handler runs, no intent around it
         return await gateway.handler_for(intent.kind)(self.ctx, **intent.args)
     monkeypatch.setattr(LocalGateway, "submit", bypass)

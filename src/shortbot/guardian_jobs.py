@@ -11,7 +11,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from . import entry_gates, gateway_health, news, procs, research, scan_job, setup_ladder, stream_task
+from . import entry_gates, gateway_guardian, gateway_health, news, procs, research, scan_job, setup_ladder, stream_task
 from . import killswitch as ks
 from .exchange import to_raw
 from .guardian_loop import guarded, send_safe
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from .app import App
     from .entries import EntryDesk
     from .exchange import Exchanges
+    from .gateway import Gateway
+    from .gateway_guardian import Link
     from .market.liquidations import LiquidationStore
     from .market.social import SocialStore
     from .notify import Notifier
@@ -52,6 +54,8 @@ class MarketJobs:
     tiered: TieredScan
     _social_task: asyncio.Task | None
     _refresh_proc: asyncio.subprocess.Process | None
+    gw: Gateway
+    gateway_link: Link
 
     # ------------------------------------------------------------ monitor lane
     async def check_announcements(self) -> None:
@@ -147,8 +151,18 @@ class MarketJobs:
 
     async def check_gateway(self) -> None:
         """Every 30 s (#36 step 4): with SHORTBOT_GATEWAY on, a stale or missing order-gateway heartbeat is alerted:
-        the gateway can't report its own death (gateway_health.py)."""
+        the gateway can't report its own death (gateway_health.py). Step 6: can this guardian reach it (kv
+        gateway_client:guardian, for the deploy health check)? A gateway that beats but stays unreachable from here
+        for gateway_health.DOWN_URGENT_S is alerted: every guardian write runs as break-glass meanwhile."""
+        rec = await gateway_guardian.ping(self.gw, self.j)
         await gateway_health.watch(self.j, self.app.settings, self.n)
+        down = self.gateway_link.outage_s()
+        if rec["client"] and not rec["ok"] and down >= gateway_health.DOWN_URGENT_S and \
+                gateway_health.age_s(self.j) <= gateway_health.STALE_S:
+            await self.n.send("gateway_unreachable", f"The order gateway beats but the guardian hasn't reached it for "
+                              f"{down:.0f} s ({rec['why']}): every guardian write runs as break-glass. Check "
+                              "`docker compose logs gateway` and data/run (deploy/DEPLOY.md §4a).", cooldown_s=1800,
+                              urgent=True)
 
     async def housekeeping(self) -> None:
         n = await self.j.write(Journal.prune_kv, ("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)

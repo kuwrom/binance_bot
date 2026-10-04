@@ -7,12 +7,15 @@ import asyncio
 import pytest
 
 from tests.fakes import SYM
+from tests.gateway_rig import guardian_transport  # noqa: F401 - the suite runs locally and through the gateway
 from tests.intent_jobs import job, kinds, rows
 from tests.test_entries import prop
 from tests.test_entry_intents import SPLIT, age, on_send, open_limits
 from tests.test_guardian_intents import guardian
 from tests.test_orphans import failing_trigger_cancels
 from tests.test_target_paths import book, placed
+
+pytestmark = pytest.mark.usefixtures("guardian_transport")
 
 JOB = "guardian:entry_reconcile"
 

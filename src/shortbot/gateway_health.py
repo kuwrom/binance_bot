@@ -1,16 +1,22 @@
 """Is the order gateway up? (#36 step 4, docs/GATEWAY.md §3.4). The gateway posts kv gateway_heartbeat (per mode)
 every few seconds; with SHORTBOT_GATEWAY on, the session brief shows one line and the guardian alerts a stale one.
 It gates nothing: a write learns the gateway is down when it can't connect or isn't greeted (gateway_client.py),
-which is exact, while a heartbeat can lag behind a busy journal. With the flag off nothing reads it."""
+which is exact, while a heartbeat can lag behind a busy journal. With the flag off nothing reads it.
+No alert fatigue from deploys (#36 step 6): every deploy restarts the gateway (drain, start-up reconciliation), so a
+heartbeat between STALE_S and DOWN_URGENT_S old is a restart, logged only; the guardian's break-glass alert follows
+the same line (gateway_guardian.py)."""
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 
+log = logging.getLogger("shortbot.gateway")
 KEY = "gateway_heartbeat"
 STALE_S = 15.0              # three missed beats
+DOWN_URGENT_S = 60.0        # down this long: an outage, not a restart (a drain is <= 30 s, a restart a few seconds)
 ALERT_COOLDOWN_S = 1800.0
 STILL = ("new risk (open, add, widen, propose, amend, ladder, plan changes) is refused; closes, stop tightening, "
          "cancels, halts and flatten run in the session's own process as break-glass, each alerted")
@@ -28,6 +34,12 @@ def read(j: Any) -> dict[str, Any] | None:
     except ValueError:
         return None
     return rec if isinstance(rec, dict) and isinstance(rec.get("at"), (int, float)) else None
+
+
+def age_s(j: Any, now: float | None = None) -> float:
+    """How old the gateway's last heartbeat is (inf: never seen)."""
+    age, _ = _state(j, now)
+    return float("inf") if age is None else age
 
 
 def _state(j: Any, now: float | None) -> tuple[float | None, dict[str, Any] | None]:
@@ -53,6 +65,9 @@ async def watch(j: Any, settings: Any, n: Any, now: float | None = None) -> None
         return
     age, rec = _state(j, now)
     if rec is not None and age is not None and age <= STALE_S:
+        return
+    if age is not None and age < DOWN_URGENT_S:
+        log.info("gateway heartbeat %.0f s old: a restart, not an outage yet", age)
         return
     what = "has never sent a heartbeat" if rec is None else f"heartbeat is {age:.0f} s old (pid {rec.get('pid')})"
     await n.send("gateway_down", f"The order gateway {what}. While it is down {STILL}. Fix: {FIX}.",

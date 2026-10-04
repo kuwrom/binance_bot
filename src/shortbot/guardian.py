@@ -29,7 +29,7 @@ from typing import Any
 from . import audit, procs, uptime
 from .app import FLUSH_S, close_app, get_app
 from .entries import EntryDesk
-from .gateway import LocalGateway
+from .gateway_guardian import Link, for_guardian
 from .guardian_coins import CoinJobs
 from .guardian_jobs import MarketJobs
 from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, supervised
@@ -114,7 +114,11 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
         self._last_resync = 0.0
         self._last_beat: float | None = None               # this process's last verified heartbeat (uptime.py)
         self.entries = EntryDesk(self.app.trader)
-        self.gw = LocalGateway(lambda: self.j, ctx=self)   # its protective actions are intents (#36 step 2)
+        # its protective actions are intents (#36 step 2), sent to the order gateway since step 6 (gateway_guardian.py)
+        self.gateway_link = Link()
+        self.gw = for_guardian(lambda: self.j, lambda: self.app.settings, self, self.n, self.gateway_link)
+        self.entries.gw = for_guardian(lambda: self.j, lambda: self.app.settings, self.entries, self.n,
+                                       self.gateway_link)
         self.liq_store = LiquidationStore(self.app.settings.db_path)
         self.social_store = SocialStore(self.app.settings.db_path)
         self.j.w.on_stall = self._journal_stalled

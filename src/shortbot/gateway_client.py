@@ -3,8 +3,8 @@ LocalGateway, behind SHORTBOT_GATEWAY.
 
 - Who uses it (for_session): an MCP server, a CLI call or the web console (audit.process_kind), with the flag on,
   outside a running intent, for the write commands declared orders=True (commands.py) and the session watchdog's
-  withdrawal. Everything else runs here, as before: journal-only writes, probes, the guardian (until step 6), and the
-  gateway's own process.
+  withdrawal. Everything else runs here, as before: journal-only writes, probes and the gateway's own process. The
+  guardian has its own client (gateway_guardian.GuardianClient, step 6), which changes the policy steps below.
 - One connection per intent: connect and hello within CONNECT_S, retried for CONNECT_RETRY_S (a drained restart),
   the gateway's uid checked (gateway_wire.py); then `accepted` within ACCEPT_S (journalling may wait for another
   process's write lock), then the result within FINAL_S, else a `pending` answer: the intent keeps running there, and
@@ -68,9 +68,34 @@ class Unavailable(Exception):
 
 
 class RemoteGateway:
+    """A session's client. The guardian's (gateway_guardian.GuardianClient) changes the steps marked `policy`."""
+
     def __init__(self, journal: Callable[[], Any], settings: Callable[[], Any], ctx: Any = None,
                  stale: dict[str, Any] | None = None):
         self._journal, self._settings, self.ctx, self.stale = journal, settings, ctx, stale
+
+    # ------------------------------------------------------------ policy
+    def process(self) -> str | None:
+        return audit.process_kind()
+
+    def retry_s(self) -> float:
+        return CONNECT_RETRY_S
+
+    def accept_s(self, intent: Intent) -> float:
+        return ACCEPT_S
+
+    def breaks_glass(self, intent: Intent) -> bool:
+        return intent.kind in BREAKGLASS
+
+    async def busy(self, intent: Intent, why: Any) -> Any:
+        """The gateway's queues are full: nothing received. The refusal is journalled here under the intent's id."""
+        return await LocalGateway(self._journal).submit(intent, {
+            "ok": False, "busy": True, "error": f"the order gateway is busy ({why}): {intent.kind} was not received, "
+            "nothing sent. Re-read the state, then retry"})
+
+    async def lost(self, intent: Intent) -> Any:
+        """Accepted, but its end isn't known here (the wait ended, or the gateway went away): what status() says."""
+        return await self.status(intent.id)
 
     async def status(self, intent_id: str) -> Any | None:
         """The answer a resubmission would get (None: never journalled): from the gateway, else from the journal."""
@@ -95,16 +120,13 @@ class RemoteGateway:
             return await self._without(intent, str(e))
         try:
             w.write(wire.encode({"op": "submit", "intent": wire.intent_dict(intent),
-                                 "origin": {"claude_session": audit.claude_session(),
-                                            "process": audit.process_kind()}}))
+                                 "origin": {"claude_session": audit.claude_session(), "process": self.process()}}))
             try:
-                first = await wire.read(r, ACCEPT_S)
+                first = await wire.read(r, self.accept_s(intent))
             except (ConnectionError, TimeoutError, ValueError) as e:
                 return await self._without(intent, f"no answer to the intent ({type(e).__name__}: {e})")
             if first.get("status") == "busy":
-                return await LocalGateway(self._journal).submit(intent, {
-                    "ok": False, "busy": True, "error": f"the order gateway is busy ({first.get('error')}): "
-                    f"{intent.kind} was not received, nothing sent. Re-read the state, then retry"})
+                return await self.busy(intent, first.get("error"))
             if first.get("status") == "refused":
                 return await self._without(intent, f"the gateway refused it: {first.get('error')}")
             if first.get("status") != "accepted":
@@ -115,7 +137,7 @@ class RemoteGateway:
                 log.warning("intent %s (%s) still running after %.0f s: pending", intent.id, intent.kind, FINAL_S)
             except (ConnectionError, ValueError) as e:
                 log.warning("intent %s (%s): lost the gateway after it accepted (%s)", intent.id, intent.kind, e)
-            return await self.status(intent.id)
+            return await self.lost(intent)
         finally:
             w.close()
 
@@ -128,7 +150,7 @@ class RemoteGateway:
 
     async def _connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         settings = self._settings()
-        path, end, why = wire.socket_path(settings), time.monotonic() + CONNECT_RETRY_S, "no attempt"
+        path, end, why = wire.socket_path(settings), time.monotonic() + self.retry_s(), "no attempt"
         while True:
             try:
                 return await asyncio.wait_for(self._hello(path, settings.mode), CONNECT_S)
@@ -165,7 +187,7 @@ class RemoteGateway:
             log.warning("gateway didn't take %s %s (%s), and this client's code is stale: refused", intent.kind,
                         intent.id, why)
             return await local.submit(intent, {**self.stale, "gateway": why})
-        if intent.kind not in BREAKGLASS:
+        if not self.breaks_glass(intent):
             log.warning("gateway unavailable (%s): %s %s refused", why, intent.kind, intent.id)
             return await local.submit(intent, {
                 "ok": False, "gateway": "unavailable", "error": f"the order gateway is unavailable ({why}): "

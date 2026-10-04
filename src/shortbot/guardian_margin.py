@@ -29,7 +29,7 @@ from .symlock import SymbolBusy
 
 if TYPE_CHECKING:
     from .exchange import Exchanges
-    from .gateway import LocalGateway
+    from .gateway import Gateway
     from .guardian_loop import Streak
     from .journal import Journal
     from .notify import Notifier
@@ -47,7 +47,7 @@ class MarginChecks:
     ex: Exchanges
     j: Journal
     n: Notifier
-    gw: LocalGateway
+    gw: Gateway
     adl_streak: Streak
     _adl_logged: dict[str, tuple[int, float]]
 

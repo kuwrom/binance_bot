@@ -21,7 +21,7 @@ from .symlock import SymbolBusy
 
 if TYPE_CHECKING:
     from .app import App
-    from .gateway import LocalGateway
+    from .gateway import Gateway
     from .notify import Notifier
 
 log = logging.getLogger("shortbot.guardian")
@@ -32,7 +32,7 @@ class PlanChecks:
     app: App
     j: Journal
     n: Notifier
-    gw: LocalGateway
+    gw: Gateway
 
     async def _settle_flat(self, live: list[dict]) -> None:
         """Each symbol with live target rows and no position (targets_sync.flat_symbols): its targets pulled in an

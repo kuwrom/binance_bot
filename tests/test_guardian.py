@@ -1,11 +1,16 @@
 from types import SimpleNamespace
 
+import pytest
+
 from shortbot.config import RiskLimits, Settings
 from shortbot.guardian import Guardian
 from shortbot.journal import Journal
 from shortbot.notify import Notifier
 from shortbot.trading import Trader
 from tests.fakes import SYM, FakeCcxt, FakeEx, neutral_budget, ok_prechecks
+from tests.gateway_rig import guardian_transport  # noqa: F401 - the suite runs locally and through the gateway
+
+pytestmark = pytest.mark.usefixtures("guardian_transport")
 
 SETTINGS = Settings("demo", "", "", ":memory:", "", "", RiskLimits())
 

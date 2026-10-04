@@ -11,10 +11,13 @@ import pytest
 from shortbot import audit, intents
 from shortbot.entries import EntryDesk
 from tests.fake_faults import Crash
+from tests.gateway_rig import guardian_transport  # noqa: F401 - the suite runs locally and through the gateway
 from tests.test_crash_restart import STOP, Desk, alerts, dies, opened, startup, verified
 from tests.test_entries import favorable, prop
 from tests.test_entry_intents import age, open_limits
 from tests.test_fault_matrix import bridges, cids, close_stops, resolutions
+
+pytestmark = pytest.mark.usefixtures("guardian_transport")
 
 T1 = {"targets": [{"price": 0.95, "fraction": 0.5}], "auto": {"targets": True, "breakeven": True}}
 

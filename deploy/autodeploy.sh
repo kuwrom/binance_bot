@@ -20,6 +20,7 @@ INSTALL=${AUTODEPLOY_INSTALL:-uv sync --locked --extra dev}
 TESTS=${AUTODEPLOY_TEST:-.venv/bin/pytest -q -p no:cacheprovider}
 BUILD=${AUTODEPLOY_BUILD:-docker compose up -d --build && docker image prune -f}
 HEALTH=${AUTODEPLOY_HEALTH:-health}
+HEALTH_S=${AUTODEPLOY_HEALTH_S:-180}
 ALERT=${AUTODEPLOY_ALERT:-.venv/bin/python -m shortbot.deploy_alert}
 TEST_LOG=${AUTODEPLOY_TEST_LOG:-data/logs/deploy-tests.log}
 FETCH_ALERT_AFTER=12   # failed fetches in a row (an hour) before deploy_blocked: a network blip stays quiet
@@ -53,16 +54,21 @@ alert() {   # kind message: once per (kind, commit) when $3 is a commit
   return 0
 }
 
-health() {  # the guardian beats after the restart, the web console answers and the order gateway (when the compose
-            # file has one) beats, within 3 minutes
-  local deadline=$(( $(date +%s) + 180 )) hb gb gw=0
+health() {  # within 3 minutes of the restart: the guardian beats, the web console answers and, when the compose file
+            # has an order gateway, it beats and the guardian reaches it (kv gateway_client:guardian: its 30 s check
+            # stamps ok, or that the guardian isn't its client: SHORTBOT_GATEWAY=sessions or 0)
+  local deadline=$(( $(date +%s) + HEALTH_S )) hb gb gc gw=0
   docker compose config --services 2>/dev/null | grep -qx gateway && gw=1
   while :; do
     hb=$(sqlite3 -readonly data/shortbot.db "SELECT CAST(v AS INTEGER) FROM kv WHERE k='guardian_heartbeat'" \
          2>/dev/null || echo 0)
     gb=$(sqlite3 -readonly data/shortbot.db \
          "SELECT CAST(json_extract(v, '\$.at') AS INTEGER) FROM kv WHERE k='gateway_heartbeat'" 2>/dev/null || echo 0)
-    if [ "${hb:-0}" -ge "$BUILT_AT" ] && { [ "$gw" = 0 ] || [ "${gb:-0}" -ge "$BUILT_AT" ]; } &&
+    gc=$(sqlite3 -readonly data/shortbot.db "SELECT CASE WHEN json_extract(v, '\$.client') = 0 OR \
+         json_extract(v, '\$.ok') = 1 THEN CAST(json_extract(v, '\$.at') AS INTEGER) ELSE 0 END FROM kv WHERE \
+         k='gateway_client:guardian'" 2>/dev/null || echo 0)
+    if [ "${hb:-0}" -ge "$BUILT_AT" ] &&
+       { [ "$gw" = 0 ] || { [ "${gb:-0}" -ge "$BUILT_AT" ] && [ "${gc:-0}" -ge "$BUILT_AT" ]; }; } &&
        { [ ! -f data/web_auth.json ] || curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:8080/; }; then
       return 0
     fi
@@ -115,7 +121,8 @@ else
   if ! bash -c "$BUILD"; then
     failed="docker build"
   elif ! run_health; then
-    failed="health check (no guardian heartbeat or no web console within 3 minutes)"
+    failed="health check (within 3 minutes: no guardian heartbeat, no gateway heartbeat, the guardian not reaching \
+the gateway, or no web console)"
   fi
 fi
 if [ -z "$failed" ]; then

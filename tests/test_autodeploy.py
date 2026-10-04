@@ -54,8 +54,8 @@ class Desk:
         git(self.dev, "push", "-q", "-f", "origin", "master:master", "master:deploy")
         return sha
 
-    def run(self, tests="true", health="true", build=None) -> subprocess.CompletedProcess:
-        env = {**os.environ, **GIT_ENV,
+    def run(self, tests="true", health="true", build=None, **extra: str) -> subprocess.CompletedProcess:
+        env = {**os.environ, **GIT_ENV, **extra,
                "AUTODEPLOY_STATE": str(self.tmp / "state"), "AUTODEPLOY_LOCK": str(self.tmp / "lock"),
                "AUTODEPLOY_INSTALL": f"echo install >> {self.calls}",
                "AUTODEPLOY_TEST": f"echo tests >> {self.calls}; {tests}",
@@ -156,3 +156,33 @@ async def test_deploy_alert_is_an_urgent_alerts_row():
     (row,) = [a for a in j.alerts(10) if a["kind"] == "deploy_failed"]
     assert row["message"] == "abc was not deployed"
     assert alerts_view.is_urgent("deploy_failed") and alerts_view.is_urgent("deploy_blocked")
+
+
+# ------------------------------------------------------------ the health check (#36 step 6)
+NOW = "CAST(strftime('%s', 'now') AS INTEGER)"
+
+
+@pytest.mark.skipif(shutil.which("sqlite3") is None, reason="needs the sqlite3 CLI")
+@pytest.mark.parametrize("client, ok, deployed", [("true", "true", True), ("true", "false", False),
+                                                  ("false", "null", True)])
+def test_the_health_check_waits_for_the_guardian_to_reach_the_gateway(desk, client, ok, deployed):
+    """With a gateway in the compose file: its heartbeat and the guardian's kv gateway_client:guardian stamp, ok (or
+    not its client: SHORTBOT_GATEWAY=sessions or 0), both since the build."""
+    home = desk.tmp / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    docker = home / ".local" / "bin" / "docker"   # first on the script's PATH: `compose config --services`
+    docker.write_text("#!/bin/sh\n[ \"$1 $2\" = 'compose config' ] && printf 'guardian\\ngateway\\nweb\\n'\nexit 0\n")
+    docker.chmod(0o755)
+    sql = desk.tmp / "rows.sql"
+    sql.write_text(f"""CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+INSERT OR REPLACE INTO kv VALUES ('guardian_heartbeat', {NOW});
+INSERT OR REPLACE INTO kv VALUES ('gateway_heartbeat', json_object('at', {NOW}));
+INSERT OR REPLACE INTO kv VALUES ('gateway_client:guardian', json_object('at', {NOW}, 'client', json('{client}'),
+  'ok', json('{ok}')));""")
+    desk.promote("v2")
+    r = desk.run(health="health", build=f"mkdir -p data && sqlite3 data/shortbot.db < {sql}", HOME=str(home),
+                 AUTODEPLOY_HEALTH_S="0")
+    assert (r.returncode == 0) is deployed, r.stdout + r.stderr
+    if not deployed:
+        (alert,) = desk.lines(desk.alerts)
+        assert "the guardian not reaching the gateway" in alert

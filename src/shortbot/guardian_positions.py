@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from .app import App
     from .entries import EntryDesk
     from .exchange import Exchanges
-    from .gateway import LocalGateway
+    from .gateway import Gateway
     from .guardian_loop import Streak
     from .notify import Notifier
     from .user_stream import UserStream
@@ -57,7 +57,7 @@ class PositionChecks:
     j: Journal
     n: Notifier
     entries: EntryDesk
-    gw: LocalGateway
+    gw: Gateway
     user_stream: UserStream | None
     stop_fails: dict[str, int]
     pos_streak: Streak
