@@ -76,15 +76,17 @@ def late_note(others: dict[str, Any]) -> str:
 
 
 async def history(t: Client, e: dict[str, Any], o: dict[str, Any]) -> list[dict[str, Any]]:
-    """The symbol's trades since this order was created (exchange clock), oldest first; [] if unreadable. Never
-    older than ccxt's 7-day window allows (it would silently cut the query to the order's first week)."""
+    """The symbol's trades since this order was created (exchange clock), oldest first, each fill once (a row answered
+    twice is one fill: by its id, as episodes.history merges its reads, #46); [] if unreadable. Never older than ccxt's
+    7-day window allows (it would silently cut the query to the order's first week)."""
     since = max(int(o.get("timestamp") or 0), int(time.time() * 1000) - WEEK_MS + 60_000)
     try:
         rows = await t.fetch_my_trades(e["symbol"], since=since, limit=1000)
     except Exception as x:  # noqa: BLE001 - the fill path goes on with its fallbacks
         log.warning("trade history %s: %s: %s", e["symbol"], type(x).__name__, x)
         return []
-    return sorted(rows, key=lambda x: (int(x["timestamp"]), _num(x.get("id"))))
+    once = {(x.get("id"), x["timestamp"]): x for x in rows}
+    return sorted(once.values(), key=lambda x: (int(x["timestamp"]), _num(x.get("id"))))
 
 
 def first_fill_ms(trades: list[dict[str, Any]], e: dict[str, Any], o: dict[str, Any]) -> int | None:

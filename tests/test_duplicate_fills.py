@@ -74,8 +74,6 @@ async def test_the_desks_own_close_from_pages_served_twice_counts_pnl_and_fees_o
     assert tr["pnl"] == pytest.approx(net) and tr["fees"] == pytest.approx(fees)
 
 
-@pytest.mark.xfail(strict=True, reason="bug: a userTrades row answered twice is two fills to entries_fills.history: "
-                   "the round trip is journalled at twice its size")
 async def test_a_round_trip_rebuilt_from_pages_served_twice_is_journalled_at_its_own_size(monkeypatch):
     fake = FaultyCcxt(price=1.035)
     pin(fake, 875)
