@@ -243,7 +243,7 @@ def by_liquidity(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def report(journal, min_n: int = 5) -> dict[str, Any]:
     """What predicted drops? Grouped by tradable/vetoed, veto reason, setup, score bucket, feature tertiles.
     n = symbol-episodes (min_n applies to them); rows = raw scan rows."""
-    from .learnings_view import audit as learnings_audit   # statistical learnings with their n and days (#28)
+    from .learnings_view import audit as learnings_audit  # statistical learnings with their n and days (#28)
     rows = [r for r in journal.candidates(labelled_only=True, limit=ALL_ROWS) if r.get("short_ret_24h") is not None]
     if not rows:
         return {"labelled_candidates": 0, "note": "No labelled candidates yet: outcomes are labelled 72h after "

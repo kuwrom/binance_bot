@@ -1,7 +1,6 @@
 """The order path's error vocabulary (errors.py, #37): every Binance answer it must tell apart maps to one type, checked
 against ccxt 4.5.84's OWN handle_errors (so neither the fake nor the table can drift from what ccxt raises)."""
 
-import asyncio
 import inspect
 import json
 
@@ -106,7 +105,7 @@ def test_the_fakes_errors_are_what_ccxt_raises(name, e):
 @pytest.mark.parametrize("e, kind", [
     (ccxt.RequestTimeout("timed out"), E.OutcomeUnknown), (ccxt.ExchangeNotAvailable("503"), E.OutcomeUnknown),
     (ccxt.NetworkError("reset"), E.OutcomeUnknown), (ccxt.BadResponse("garbled"), E.OutcomeUnknown),
-    (ccxt.OperationFailed("x"), E.OutcomeUnknown), (asyncio.TimeoutError(), E.OutcomeUnknown),
+    (ccxt.OperationFailed("x"), E.OutcomeUnknown), (TimeoutError(), E.OutcomeUnknown),
     (TimeoutError(), E.OutcomeUnknown), (ConnectionResetError(), E.OutcomeUnknown),
     (clientid.Unknown("sb-o1-ab", err.status_unknown()), E.OutcomeUnknown),
     (ccxt.InvalidNonce("-1021"), E.ClockDrift), (ccxt.ExchangeError("answered -1021 late"), E.ClockDrift),

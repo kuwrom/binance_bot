@@ -27,7 +27,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Any, Awaitable, Callable, Protocol
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
 
 from . import audit, commands, intents
 from .intents import Intent

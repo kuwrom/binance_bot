@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -140,7 +140,7 @@ async def _coin(hub: DataHub, sym: str, prev: dict[str, Any] | None, now_ms: int
     st["events"] = events(st, prev, {"btc_15m_pct": btc, "liq": liq, "entries": entries})
     if trade:
         at = datetime.fromisoformat(trade["opened_at"]) if trade.get("opened_at") else None
-        opened = (at if at is None or at.tzinfo else at.replace(tzinfo=timezone.utc))
+        opened = (at if at is None or at.tzinfo else at.replace(tzinfo=UTC))
         st["break"] = {**break_score({"opened_ms": opened.timestamp() * 1000 if opened else 0}, st,
                                      (read or {}).get("invalidation")),
                        "trade_id": trade["id"]}

@@ -70,7 +70,7 @@ class RiskLimits:
     max_adds: int = 2                         # adds per trade (add_to_winner)
 
     @classmethod
-    def from_env(cls) -> "RiskLimits":
+    def from_env(cls) -> RiskLimits:
         return cls(
             max_leverage=_i("MAX_LEVERAGE", cls.max_leverage),
             max_position_notional=_f("MAX_POSITION_NOTIONAL", cls.max_position_notional),
@@ -144,7 +144,7 @@ class ResearchBounds:
         return {k: [lo, hi] for k, (lo, hi) in self.ranges.items()}
 
     @classmethod
-    def from_env(cls) -> "ResearchBounds":
+    def from_env(cls) -> ResearchBounds:
         out = {}
         for k, (lo, hi) in DEFAULT_BOUNDS.items():
             out[k] = (_f(f"BOUND_{k.upper()}_MIN", lo), _f(f"BOUND_{k.upper()}_MAX", hi))
@@ -169,7 +169,7 @@ class Settings:
         return self.mode == "live"
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         mode = os.getenv("SHORTBOT_MODE", "demo").lower()
         if mode not in ("demo", "live"):
             raise ValueError(f"SHORTBOT_MODE must be demo or live, got {mode!r}")

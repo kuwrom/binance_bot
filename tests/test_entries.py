@@ -147,6 +147,7 @@ async def test_split_entry_second_leg_dies_when_the_trade_closes():
 
 def test_split_entry_rejects_bad_shares():
     import pytest
+
     from shortbot.tranches import expand
     with pytest.raises(ValueError):
         expand({"tranches": [{"limit_price": 1, "share": 0.7}, {"limit_price": 2, "share": 0.5}]})

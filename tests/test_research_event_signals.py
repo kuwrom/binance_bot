@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from shortbot import news
@@ -8,7 +8,7 @@ from shortbot.signals import REGISTRY
 from shortbot.signals.hack import hack_flag, match
 from shortbot.signals.supply import classify, listing_supply, supply_facts
 
-NOW = datetime(2026, 10, 2, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 2, 12, tzinfo=UTC)
 
 
 def iso(hours_ago: float) -> str:

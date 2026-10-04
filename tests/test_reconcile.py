@@ -3,7 +3,7 @@ re-entry before the 60 s pass close the old trade at its own exit, each position
 positions answer closes nothing, and a reconcile failure never costs the guardian its stop checks. The desk's clock
 follows the fake exchange clock here (`fake.advance` moves time between positions)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import ccxt
 import pytest
@@ -20,7 +20,7 @@ SYM2 = "MOVR/USDT:USDT"
 
 
 def iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def setup(monkeypatch):

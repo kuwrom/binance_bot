@@ -1,7 +1,7 @@
 """Limit entries when the exchange moves between two 5 s polls: fills and stops that happen on their own (the fake's
 matching engine), on more than one symbol. Public behaviour only: propose_group, poll, Trader, journal rows."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -50,7 +50,7 @@ async def test_8_a_fill_stopped_out_before_the_poll_is_journaled_as_a_round_trip
     fake.price = 1.12                 # fills at 1.04, then its pre-armed stop buys back at 1.10: flat before the poll
     assert fake.position == 0 and [f["side"] for f in fake.fills] == ["sell", "buy"]
     # the poll runs a 5 s tick after the fills: a trade stamped "now" would miss them (income/userTrades startTime)
-    later = (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(timespec="seconds")
+    later = (datetime.now(UTC) + timedelta(seconds=5)).isoformat(timespec="seconds")
     monkeypatch.setattr("shortbot.journal.now_iso", lambda: later)
     await d.poll()
     trades = t.j.trades()

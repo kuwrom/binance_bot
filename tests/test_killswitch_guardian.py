@@ -4,7 +4,7 @@ fail the protective pass."""
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -12,9 +12,9 @@ from shortbot import equity_marks as em
 from shortbot import guardian_positions as gp
 from shortbot import killswitch as ks
 from shortbot.entries import EntryDesk
-from shortbot.journal import now_iso
 from shortbot.guardian_loop import guarded
 from shortbot.guardian_positions import UNTRACKED_GRACE_S
+from shortbot.journal import now_iso
 from shortbot.killswitch import ACTIVE, HALTED, REDUCING, STALE
 from tests.fakes import SYM, FakeCcxt
 from tests.test_guardian import SETTINGS, guardian_with, kinds
@@ -73,7 +73,7 @@ async def test_every_fill_while_reducing_is_alerted_including_a_late_oco_sibling
 
 def day_mark(g, equity, late=False):
     """Today's equity mark, as the first guardian pass after 00:00 UTC (or a late one) recorded it."""
-    key, start = em.period_starts(datetime.now(timezone.utc))["day"]
+    key, start = em.period_starts(datetime.now(UTC))["day"]
     g.j.set(f"eq_mark:day:{key}", json.dumps({"equity": equity, "ts": start + (3_600_000 if late else 60_000)}))
 
 

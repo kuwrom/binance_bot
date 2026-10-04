@@ -3,7 +3,7 @@ scan's unflagged coins after costs, one decision on a fixed sample at alpha / M,
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -204,7 +204,7 @@ def test_backtest_rows_rebuilt_from_hist_db_never_enter_the_forward_test(monkeyp
 
 # ------------------------------------------------------------------ trades
 def _trade(j, symbol, setup, opened_ms, hold_h, pnl, entry=100.0, stop=105.0, amount=1.0):
-    iso = lambda ms: datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat()  # noqa: E731
+    iso = lambda ms: datetime.fromtimestamp(ms / 1000, UTC).isoformat()  # noqa: E731
     j.db.execute("INSERT INTO trades (symbol, status, opened_at, entry_price, amount, initial_stop, stop_price, setup,"
                  " closed_at, exit_price, pnl, mae_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                  (symbol, "closed", iso(opened_ms), entry, amount, stop, stop, setup, iso(opened_ms + hold_h * H),

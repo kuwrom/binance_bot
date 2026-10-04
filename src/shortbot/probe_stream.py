@@ -30,7 +30,7 @@ CONNECT_S, EVENTS_KEPT = 15.0, 8   # measured 2026-10-02: a public connect + fir
 
 
 def urls(key: str) -> dict[str, str]:
-    import ccxt.pro as ccxtpro   # only for the URL ccxt would use: no connection, nothing to close
+    import ccxt.pro as ccxtpro  # only for the URL ccxt would use: no connection, nothing to close
     pro = ccxtpro.binanceusdm()
     pro.enable_demo_trading(True)
     return {"ccxt_pro_demo": pro.get_private_ws_url("future", key),

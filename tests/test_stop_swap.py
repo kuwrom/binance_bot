@@ -264,7 +264,8 @@ async def test_full_close_sweeps_a_leftover_bridge():
 
 
 async def test_guardian_sweeps_a_leftover_bridge_next_to_the_stop():
-    from tests.test_guardian import guardian_with, kinds as g_kinds, open_trade
+    from tests.test_guardian import guardian_with, open_trade
+    from tests.test_guardian import kinds as g_kinds
     fake = FakeCcxt()
     g = guardian_with(fake)
     await open_trade(g)

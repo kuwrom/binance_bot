@@ -4,7 +4,7 @@ stop width and size, plus research features. Hour-of-day return effects don't pe
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -46,7 +46,7 @@ def minutes_since_funding(now: datetime, interval_h: int = 8) -> float:
 def us_open_utc(now: datetime) -> datetime:
     """09:30 New York on the same calendar day, in UTC (13:30 in DST, 14:30 in winter)."""
     ny = now.astimezone(NY)
-    return datetime.combine(ny.date(), time(9, 30), NY).astimezone(timezone.utc)
+    return datetime.combine(ny.date(), time(9, 30), NY).astimezone(UTC)
 
 
 def minutes_to_day_close(now: datetime) -> float:
@@ -69,7 +69,7 @@ def execution_guard(now: datetime, interval_h: int = 8) -> str | None:
 
 
 def clock(now: datetime | None = None, interval_h: int = 8) -> dict[str, Any]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     uo = us_open_utc(now)
     if (uo - now).total_seconds() < -30 * 60:   # today's open is over: count to the next one
         uo = us_open_utc(now + timedelta(days=1))

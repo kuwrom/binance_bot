@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from ..patterns import align
@@ -166,7 +166,7 @@ def false_break(rows: list[dict], i: int, look: int = 24) -> bool:
 def features(m: Market, coin: Coin, i: int) -> dict[str, Any]:
     rows, r = coin.rows, coin.rows[i]
     t_close = r["ts"] + H
-    dt = datetime.fromtimestamp(t_close / 1000, timezone.utc)
+    dt = datetime.fromtimestamp(t_close / 1000, UTC)
     v24 = sum(x["qv"] for x in rows[max(0, i - 23):i + 1])
     oi = r.get("oi")
     beta, corr = m.beta_corr(coin, i)

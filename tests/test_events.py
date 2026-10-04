@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -10,7 +10,7 @@ from tests.test_signals import FakeCtx
 
 
 def in_days(d):
-    return (datetime.now(timezone.utc) + timedelta(days=d)).isoformat()
+    return (datetime.now(UTC) + timedelta(days=d)).isoformat()
 
 
 def test_store_requires_source_and_valid_recipient(tmp_path):

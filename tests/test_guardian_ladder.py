@@ -5,7 +5,7 @@ lane's loud failure) and the Telegram leg of the `setup_ladder_stop` rows other 
 import json
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from shortbot import guardian
@@ -148,7 +148,7 @@ async def test_a_stop_row_reaches_telegram_exactly_once_and_is_not_journalled_ag
     sent = telegram(h)
     stopped(h)                                          # the MCP server's sizing saw the stop: a row, no Telegram
     stopped(live)                                       # the live account's stop is not this guardian's
-    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(timespec="seconds")
+    old = (datetime.now(UTC) - timedelta(days=30)).isoformat(timespec="seconds")
     h.j.db.execute("INSERT INTO alerts (ts, kind, message, mode) VALUES (?, 'setup_ladder_stop', 'ancient', 'demo')",
                    (old,))
     h.j.db.commit()

@@ -8,6 +8,7 @@ above with w = n/(n+30), so thin samples stay humble. 'unclassified' coins get n
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from .profile import shrink
@@ -71,7 +72,7 @@ def layered_evidence(rows: list[dict], symbol: str, arch: str) -> dict[str, Any]
 
 
 async def read_coin(ex, journal, symbol: str) -> dict[str, Any]:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from .scanner import coin_snapshot
     from .sessions import session_bucket
@@ -81,7 +82,7 @@ async def read_coin(ex, journal, symbol: str) -> dict[str, Any]:
     stage, labels = f.get("lifecycle_stage") or "unknown_stage", f.get("controller_labels") or ["unlabelled"]
     game = (snap.get("tape") or {}).get("state", "no_edge")
     arch = archetype_of(f)
-    sess = session_bucket(datetime.now(timezone.utc))
+    sess = session_bucket(datetime.now(UTC))
     ses = (sweep_report(journal).get("by_session") or {}).get(sess, {})
     rows = [r for r in journal.candidates(labelled_only=True) if r.get("short_ret_24h") is not None]
     return {

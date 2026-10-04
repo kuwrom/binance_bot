@@ -5,8 +5,17 @@ import pytest
 
 from shortbot.config import RiskLimits, Settings
 from shortbot.exchange import Exchanges
-from shortbot.risk import (FALLBACK_MAINT_MARGIN_PCT, AccountState, RiskViolation, ShortRequest, bracket_for,
-                           check_open_short, est_liquidation_distance_pct, liquidation_price, max_leverage_for_stop)
+from shortbot.risk import (
+    FALLBACK_MAINT_MARGIN_PCT,
+    AccountState,
+    RiskViolation,
+    ShortRequest,
+    bracket_for,
+    check_open_short,
+    est_liquidation_distance_pct,
+    liquidation_price,
+    max_leverage_for_stop,
+)
 from tests.fake_engine import BRACKETS
 from tests.fakes import SYM, FakeCcxt
 

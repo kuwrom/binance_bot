@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import functools
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Callable
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError

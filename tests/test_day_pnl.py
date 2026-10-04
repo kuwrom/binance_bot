@@ -6,7 +6,7 @@ open position is not today's; a deposit or a withdrawal moves none of them."""
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -36,7 +36,7 @@ def desk(equity=10_000.0, mark=None, carried=0.0):
     fake = FakeCcxt(equity=equity)
     g = guardian_with(fake)
     g.j.set(ks.HEARTBEAT_KEY, str(time.time()))
-    for kind, (key, start) in em.period_starts(datetime.now(timezone.utc)).items():
+    for kind, (key, start) in em.period_starts(datetime.now(UTC)).items():
         g.j.set(f"eq_mark:{kind}:{key}", json.dumps({"equity": mark or equity, "ts": start + 60_000,
                                                      "unrealized": carried}))
     g.j.set(em.KV_PEAK, str(mark or equity))
@@ -63,7 +63,7 @@ async def consumers(g):
     except RiskViolation as e:
         blocked = any("daily loss" in r for r in e.reasons)
     gov = (await gather_inputs(tr, "favorable")).gov
-    peak = float(g.j.get(f"day_peak:{datetime.now(timezone.utc).date().isoformat()}") or 0)
+    peak = float(g.j.get(f"day_peak:{datetime.now(UTC).date().isoformat()}") or 0)
     return (blocked, ks.read(g.j)["state"], any("daily loss cap" in r for r in gov["reasons"]),
             any("give-back" in r for r in gov["reasons"]), peak)
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import cluster_se as C
@@ -55,7 +55,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts USING fts5(kind, ref, text);
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def ensure(db) -> None:

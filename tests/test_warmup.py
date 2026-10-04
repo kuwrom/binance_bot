@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from shortbot.journal import Journal
 from shortbot.market.calendar import WINDOWS, blocking, parse_bls_ics, parse_ff
 from shortbot.sessions import clock, execution_guard, minutes_to_funding, session_label, us_open_utc
 from shortbot.warmup import desk_state, drop_reasons, gate
 
-NOW = datetime(2026, 9, 30, 10, 5, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 30, 10, 5, tzinfo=UTC)
 
 
 def j_with_trade(closed_h_ago: float) -> Journal:
@@ -52,18 +52,18 @@ def test_drop_reasons():
 
 
 def test_clock():
-    assert session_label(datetime(2026, 9, 30, 7, 30, tzinfo=timezone.utc)) == "asia+europe"
-    assert session_label(datetime(2026, 9, 30, 14, tzinfo=timezone.utc)) == "europe+us"
-    assert minutes_to_funding(datetime(2026, 9, 30, 15, 30, tzinfo=timezone.utc)) == 30
-    assert minutes_to_funding(datetime(2026, 9, 30, 23, 30, tzinfo=timezone.utc)) == 30
-    assert minutes_to_funding(datetime(2026, 9, 30, 15, 30, tzinfo=timezone.utc), 1) == 30
-    assert us_open_utc(datetime(2026, 9, 30, 12, tzinfo=timezone.utc)).hour == 13        # DST
-    assert us_open_utc(datetime(2026, 12, 2, 12, tzinfo=timezone.utc)).hour == 14        # winter
-    assert execution_guard(datetime(2026, 9, 30, 15, 59, tzinfo=timezone.utc))
-    assert execution_guard(datetime(2026, 9, 30, 11, 0, 30, tzinfo=timezone.utc))
-    assert execution_guard(datetime(2026, 9, 30, 11, 7, tzinfo=timezone.utc)) is None
-    assert clock(datetime(2026, 9, 28, 3, 23, tzinfo=timezone.utc))["min_to_us_open"] == 607
-    c = clock(datetime(2026, 10, 2, 8, 10, tzinfo=timezone.utc))
+    assert session_label(datetime(2026, 9, 30, 7, 30, tzinfo=UTC)) == "asia+europe"
+    assert session_label(datetime(2026, 9, 30, 14, tzinfo=UTC)) == "europe+us"
+    assert minutes_to_funding(datetime(2026, 9, 30, 15, 30, tzinfo=UTC)) == 30
+    assert minutes_to_funding(datetime(2026, 9, 30, 23, 30, tzinfo=UTC)) == 30
+    assert minutes_to_funding(datetime(2026, 9, 30, 15, 30, tzinfo=UTC), 1) == 30
+    assert us_open_utc(datetime(2026, 9, 30, 12, tzinfo=UTC)).hour == 13        # DST
+    assert us_open_utc(datetime(2026, 12, 2, 12, tzinfo=UTC)).hour == 14        # winter
+    assert execution_guard(datetime(2026, 9, 30, 15, 59, tzinfo=UTC))
+    assert execution_guard(datetime(2026, 9, 30, 11, 0, 30, tzinfo=UTC))
+    assert execution_guard(datetime(2026, 9, 30, 11, 7, tzinfo=UTC)) is None
+    assert clock(datetime(2026, 9, 28, 3, 23, tzinfo=UTC))["min_to_us_open"] == 607
+    c = clock(datetime(2026, 10, 2, 8, 10, tzinfo=UTC))
     assert any("Deribit" in w for w in c["soft_warnings"])
 
 
@@ -74,7 +74,7 @@ ICS = ("BEGIN:VEVENT\r\nDTSTART;TZID=US-Eastern:20261014T083000\r\nDURATION:PT0M
 def test_calendar_parsers_and_windows():
     ev = parse_bls_ics(ICS)
     assert len(ev) == 1 and ev[0][2] == "tier1"
-    assert datetime.fromtimestamp(ev[0][0] / 1000, timezone.utc).hour == 12            # 08:30 EDT = 12:30 UTC
+    assert datetime.fromtimestamp(ev[0][0] / 1000, UTC).hour == 12            # 08:30 EDT = 12:30 UTC
     ff = parse_ff([{"title": "Core PCE Price Index m/m", "country": "USD", "date": "2026-09-30T08:30:00-04:00",
                     "impact": "High"}, {"title": "x", "country": "EUR", "date": "2026-09-30T08:30:00-04:00",
                                         "impact": "High"}])
@@ -103,7 +103,7 @@ def test_session_signal_vetoes_inside_macro_window():
 
 def test_session_buckets_follow_ny_dst():
     from shortbot.sessions import session_bucket
-    d = lambda *a: datetime(*a, tzinfo=timezone.utc)  # noqa: E731
+    d = lambda *a: datetime(*a, tzinfo=UTC)  # noqa: E731
     assert session_bucket(d(2026, 9, 28, 4, 45)) == "asia"        # ONDO fake-out
     assert session_bucket(d(2026, 9, 28, 7, 10)) == "london"      # ONDO flush
     assert session_bucket(d(2026, 9, 28, 13, 29)) == "london"

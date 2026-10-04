@@ -1,6 +1,6 @@
 """Third-party text reaches the agent only inside {"untrusted_text", "source"} wrappers, cleaned (#22)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -56,7 +56,7 @@ def test_safe_url():
 
 @pytest.fixture
 def evil_feeds(monkeypatch):
-    now = datetime.now(timezone.utc).isoformat(timespec="minutes")
+    now = datetime.now(UTC).isoformat(timespec="minutes")
     raw_ann = [{"catalog": "Delisting", "title": f"Binance Will Delist QNT {EVIL}", "time": now,
                 "url": "https://www.binance.com/en/support/announcement/detail/abc"}]
     raw_rss = [{"source": "CoinDesk", "title": f"QNT {EVIL}", "time": now,
@@ -187,8 +187,9 @@ class _Feeds:
 
 
 async def test_a_headline_whose_link_fails_safe_url_still_alerts_on_an_open_short(monkeypatch):
+    from tests.fakes import SYM as POS
+    from tests.fakes import FakeCcxt
     from tests.test_guardian import guardian_with, open_trade
-    from tests.fakes import FakeCcxt, SYM as POS
     monkeypatch.setattr(news.httpx, "AsyncClient", _Feeds)
     monkeypatch.setattr(news, "_cache", {})
     g = guardian_with(FakeCcxt())

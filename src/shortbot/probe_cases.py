@@ -4,7 +4,7 @@ returns {"observed", "verdict", "matches_fake"} (the fake's assumption is quoted
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import ccxt.async_support as ccxt
@@ -124,11 +124,11 @@ async def countdown_cancel_all(p: Probe) -> dict[str, Any]:
 def _since_ms(p: Probe) -> int:
     """From 5 minutes before the oldest probe row on this symbol in the last 24 h (a row is written when its probe
     ends), else the last hour."""
-    day = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+    day = (datetime.now(UTC) - timedelta(days=1)).isoformat(timespec="seconds")
     rows = p.tr.j._rows("SELECT ts FROM decisions WHERE action='probe_result' AND symbol=? AND ts >= ? ORDER BY ts "
                         "LIMIT 1", (p.sym, day))
     at = datetime.fromisoformat(rows[0]["ts"]) - timedelta(minutes=5) if rows else \
-        datetime.now(timezone.utc) - timedelta(hours=1)
+        datetime.now(UTC) - timedelta(hours=1)
     return int(at.timestamp() * 1000)
 
 

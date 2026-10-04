@@ -41,12 +41,12 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import sqlite3
@@ -263,7 +263,7 @@ def _open(path: Path) -> tuple[int, bool]:
 
 def _describe(fd: int, action: str) -> None:
     info: dict[str, Any] = {"pid": os.getpid(), "process": _process(), "action": action,
-                            "since": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                            "since": datetime.now(UTC).isoformat(timespec="seconds")}
     try:
         os.ftruncate(fd, 0)
         os.pwrite(fd, json.dumps(info).encode(), 0)

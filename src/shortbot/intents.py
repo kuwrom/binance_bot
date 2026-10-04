@@ -35,11 +35,12 @@ import json
 import os
 import secrets
 import time
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterator
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from . import audit, clientid, errors
 from .procs import NS
@@ -116,7 +117,7 @@ def new_id() -> str:
 
 
 def now_ms() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,7 @@ def symbol_of(args: dict[str, Any]) -> str | None:
     s = args.get("symbol")
     if not isinstance(s, str) or not s:
         return None
-    from .exchange import to_symbol   # here: exchange pulls in ccxt's exchange classes
+    from .exchange import to_symbol  # here: exchange pulls in ccxt's exchange classes
     return to_symbol(s)
 
 

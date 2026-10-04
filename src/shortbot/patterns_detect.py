@@ -15,7 +15,7 @@ premium_hi   perp premium >= 0.5% over the index at the hour's close
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .sessions import session_bucket
@@ -41,7 +41,7 @@ def context(rows: list[dict], i: int) -> dict[str, Any]:
     spot = sum(x["spot_qv"] or 0 for x in rows[max(0, i - 2):i + 1])
     perp = sum(x["qv"] for x in rows[max(0, i - 2):i + 1])
     lev = ("n/a" if oi3 is None else "oi_up>10%" if oi3 >= 10 else "oi_down" if oi3 <= -3 else "oi_flat")
-    return {"session": session_bucket(datetime.fromtimestamp(r["ts"] / 1000 + 3600, timezone.utc)),
+    return {"session": session_bucket(datetime.fromtimestamp(r["ts"] / 1000 + 3600, UTC)),
             "oi_chg_3h": round(oi3, 2) if oi3 is not None else None, "leverage": lev,
             "premium_bp": round(r["prem"] * 1e4, 1) if r.get("prem") is not None else None,
             "spot_share": round(spot / (spot + perp), 3) if spot + perp and rows[i].get("spot_c") else None,

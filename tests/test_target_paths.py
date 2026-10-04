@@ -7,14 +7,16 @@ from types import SimpleNamespace
 
 import ccxt
 
-from shortbot import cmd_trade, entry_intents, killswitch as ks, killswitch_ops, targets
+from shortbot import cmd_trade, entry_intents, killswitch_ops, targets
+from shortbot import killswitch as ks
 from shortbot.config import RiskLimits
 from shortbot.entries import EntryDesk
 from shortbot.journal import Journal
 from shortbot.positioning import PositionOps
 from shortbot.trading import Trader
 from tests.fakes import SYM, FakeEx, neutral_budget, ok_prechecks
-from tests.test_entry_amend import desk as entry_desk, one
+from tests.test_entry_amend import desk as entry_desk
+from tests.test_entry_amend import one
 from tests.test_killswitch import prop
 from tests.test_target_orders import PLAN, desk, market_buys, placed_by_the_guardian, resting, target_creates
 

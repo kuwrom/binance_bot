@@ -2,7 +2,7 @@
 the brief's focus-coin lines (no third-party text) and the three tools with CLI parity."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +23,7 @@ QNT, SUI, ZRO = "QNT/USDT:USDT", "SUI/USDT:USDT", "ZRO/USDT:USDT"
 
 
 def iso(ms):
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def trade(j, sym=QNT):
@@ -185,6 +185,7 @@ async def test_update_coin_read_takes_the_ticker_price_and_refuses_a_bad_read(mo
 
 def test_the_tools_declare_the_stores_choices_and_defaults():
     import inspect
+
     from shortbot import commands
     commands.load()
     bias = next(a for a in commands.by_cli("coin-read").args if a.name == "bias")

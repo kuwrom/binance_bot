@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import IO, Any
 
 from . import audit
@@ -26,11 +26,11 @@ def _since(s: str) -> str:
     """'24h' / '7d' / '30m' or an ISO time (naive = UTC) -> the ISO text decisions.ts compares with."""
     if m := _REL.match(s.strip()):
         n, unit = float(m[1]), m[2]
-        dt = datetime.now(timezone.utc) - timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[unit]: n})
+        dt = datetime.now(UTC) - timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[unit]: n})
     else:
         dt = datetime.fromisoformat(s.strip())
-        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat(timespec="seconds")
 
 
 def _row(r: dict[str, Any]) -> dict[str, Any]:

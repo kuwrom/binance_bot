@@ -6,13 +6,12 @@ closed trades: feed_candidates) are rebuilt from the journal on every feed (regi
 
 from __future__ import annotations
 
+import inspect
 import json
 import statistics
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-import inspect
 
 from . import registry as R
 
@@ -77,7 +76,8 @@ def seed_static(db) -> int:
 
 def seed_week_study(db, coins: list[dict[str, Any]]) -> int:
     from . import patterns as P
-    from .patterns_detect import DEDUP_H, __doc__ as defs
+    from .patterns_detect import DEDUP_H
+    from .patterns_detect import __doc__ as defs
     res = P.run(coins)
     n = 0
     for kind in DEDUP_H:

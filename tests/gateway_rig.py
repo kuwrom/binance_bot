@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from unittest import mock
 
 from shortbot import audit, gateway_wire

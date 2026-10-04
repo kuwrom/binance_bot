@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC
 from typing import Any
 
 MAX_LEGS = 2
@@ -134,5 +135,5 @@ def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int,
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    from datetime import datetime
+    return datetime.now(UTC).isoformat(timespec="seconds")

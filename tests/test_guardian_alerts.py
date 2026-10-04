@@ -2,7 +2,7 @@
 the watch lane's per-symbol streak (#57): a failed squeeze input is alerted and escalates, never silently skipped."""
 
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -40,7 +40,7 @@ async def test_time_stop_alert_keeps_its_cooldown_as_the_trade_ages():
     g = guardian_with(FakeCcxt())
     tid = await open_plan(g, time_stop_hours=1)
     for age_h in (2.0, 2.1, 2.2, 2.3):   # 18 minutes of passes, well inside the 4 h cooldown
-        g.j.update_trade(tid, opened_at=(datetime.now(timezone.utc) - timedelta(hours=age_h)).isoformat())
+        g.j.update_trade(tid, opened_at=(datetime.now(UTC) - timedelta(hours=age_h)).isoformat())
         await g.check_positions()
     assert len(rows(g, "plan:time stop")) == 1
 
@@ -119,7 +119,7 @@ async def test_delisting_is_urgent_only_for_a_coin_we_are_short_or_about_to_be(m
     await open_trade(g)
     g.j._insert("INSERT INTO entries (group_id, symbol, status, created_at, expires_ms) VALUES ('g', ?, 'pending', ?,"
                 " 0)", ("ALPACA/USDT:USDT", now_iso()))
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     titles = ["Binance Futures Will Delist USDⓈ-M PUMPUSDT Perpetual Contract", "Binance Will Delist ALPACA, VIB",
               "Binance Will Delist WING, PDA"]
 

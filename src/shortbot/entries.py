@@ -39,9 +39,12 @@ from typing import Any
 
 import ccxt.async_support as ccxt
 
-from . import entries_acts  # noqa: F401 - registers the entry handlers this desk's intents run
+from . import (
+    clientid,
+    entries_acts,  # noqa: F401 - registers the entry handlers this desk's intents run
+    errors,
+)
 from . import entries_fills as fills
-from . import clientid, errors
 from .entries_amend import EntryAmend
 from .entries_cancel import EntryCancel
 from .entries_place import EntryPlacement

@@ -11,7 +11,7 @@ import json
 import math
 import statistics
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .exchange import to_symbol
@@ -24,7 +24,7 @@ def _ts(iso: str | None) -> datetime | None:
     if not iso:
         return None
     dt = datetime.fromisoformat(iso)
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def last_activity(j) -> datetime | None:
@@ -36,7 +36,7 @@ def last_activity(j) -> datetime | None:
 
 
 def desk_state(j, now: datetime | None = None) -> dict[str, Any]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if j.open_trades(include_opening=True):
         return {"cold": False, "why": "positions open: the desk is live"}
     last = last_activity(j)
@@ -138,7 +138,7 @@ class WarmUp:
         syms = [to_symbol(s) for s in symbols] if symbols else await self.default_symbols()
         snaps = await asyncio.gather(*(snapshot(self.ex, s) for s in syms))
         btc = await btc_15m_return(self.ex)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cur = self.j.db.execute(
             "INSERT INTO warmups (started_at, t0_ms, symbols, snap0, status) VALUES (?,?,?,?,?)",
             (now.isoformat(timespec="seconds"), int(now.timestamp() * 1000), json.dumps(syms),
@@ -147,7 +147,7 @@ class WarmUp:
         note = "snapshot taken on a burst minute (:00-:01/:15/:30/:45); fine, but prefer :02-:13" \
             if now.minute % 15 < 2 else None
         return {"warmup_id": cur.lastrowid, "symbols": syms, "check_after": datetime.fromtimestamp(
-            now.timestamp() + WARMUP_MIN * 60, timezone.utc).isoformat(timespec="minutes"), "note": note,
+            now.timestamp() + WARMUP_MIN * 60, UTC).isoformat(timespec="minutes"), "note": note,
             "study": "read the tape meanwhile: regime, governor, clock/macro, charts of these coins"}
 
     async def check(self, warmup_id: int | None = None) -> dict[str, Any]:
@@ -169,7 +169,7 @@ class WarmUp:
             verdicts[s1["symbol"]] = {"persisted": not reasons, "drop_reasons": reasons,
                                       "move_pct": round((s1["last"] / by0[s1["symbol"]]["last"] - 1) * 100, 2)
                                       if s1.get("last") and by0.get(s1["symbol"], {}).get("last") else None}
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        now = datetime.now(UTC).isoformat(timespec="seconds")
         self.j.db.execute("UPDATE warmups SET snap1=?, verdicts=?, checked_at=?, status='done' WHERE id=?",
                           (json.dumps({"coins": snaps1, "btc_ret_15m": btc}), json.dumps(verdicts), now, row["id"]))
         self.j.db.commit()

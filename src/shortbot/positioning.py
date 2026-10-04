@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import clientid, errors, exposure, killswitch, stops, targets_sync
@@ -68,7 +68,7 @@ def chandelier_stop(c1h: list[list[float]], n: int = 22, k: float = 3.0) -> floa
 
 def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float | None,
              budget_usd: float, now: datetime | None = None) -> dict[str, Any]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     plan = trade.get("plan") or {}
     entry, mark, qty = trade["entry_price"], pos["mark"], pos["contracts"]
     stop = pos.get("exchange_stop")

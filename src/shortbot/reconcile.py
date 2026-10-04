@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import episodes, fill_quality, targets
@@ -44,7 +44,7 @@ def iso_to_ms(iso: str) -> int:
 
 
 def ms_to_iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def floor_s(ms: int) -> int:

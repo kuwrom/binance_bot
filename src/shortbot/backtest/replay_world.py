@@ -15,6 +15,7 @@ import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import fields, replace
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -204,11 +205,11 @@ def _has(db: sqlite3.Connection, table: str) -> bool:
 
 
 def iso(ms: int) -> str:
-    from datetime import datetime, timezone
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    from datetime import datetime
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def _ms(iso: str) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
     d = datetime.fromisoformat(iso)
-    return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp() * 1000)
+    return int((d if d.tzinfo else d.replace(tzinfo=UTC)).timestamp() * 1000)

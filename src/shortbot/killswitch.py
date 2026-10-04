@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import killswitch_rearm as rearm
@@ -46,7 +46,7 @@ _KEEP = ("state", "by", "reason", "at", "cause")
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 # ------------------------------------------------------------ state
@@ -88,7 +88,7 @@ def _cas(j, old: str | None, new: dict[str, Any], also: dict[str, str] | None = 
 
 
 async def notify(j, settings, kind: str, msg: str, urgent: bool) -> None:
-    from .notify import Notifier   # Telegram when configured, always an alerts row
+    from .notify import Notifier  # Telegram when configured, always an alerts row
     await Notifier(settings, j).send(kind, msg, None, cooldown_s=0, urgent=urgent)
 
 

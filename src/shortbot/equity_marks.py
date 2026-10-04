@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import reconcile
@@ -82,7 +82,7 @@ def period_pnl(journal, equity: float, transfer_rows: list[dict[str, Any]], old_
     mark's own second count on whichever side of it B agrees with A. Never raises: any failure returns the old
     definitions with degraded=True (the kill switch calls this inside guardian hooks)."""
     try:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         now_ms = int(now.timestamp() * 1000)
         out: dict[str, Any] = {"late": {}, "pending": {}, "degraded": False}
         for kind, old in (("day", old_day), ("week", old_week)):

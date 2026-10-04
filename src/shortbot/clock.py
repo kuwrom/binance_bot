@@ -15,7 +15,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _PINNED: ContextVar[float | None] = ContextVar("shortbot_clock", default=None)
 
@@ -30,7 +30,7 @@ def now_ms() -> int:
 
 
 def now_dt() -> datetime:
-    return datetime.fromtimestamp(now_s(), timezone.utc)
+    return datetime.fromtimestamp(now_s(), UTC)
 
 
 @contextmanager

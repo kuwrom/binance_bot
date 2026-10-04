@@ -28,7 +28,7 @@ import sys
 import types
 import zlib
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,10 +38,10 @@ from .features import Market, features
 from .sim import COSTS, FREE, Costs, simulate
 
 STRESS = Costs(taker_bps=7.5, maker_bps=3.0, slip_k_bps=40.0, stop_overshoot=0.1)   # 1.5x fees, 2x slippage
-from .stats import day_of
 from . import strategies as S
-from .strategies import Trial, set_min_vol24, trials
 from .placebo import matched_signals
+from .stats import day_of
+from .strategies import Trial, set_min_vol24, trials
 from .strategies_more import RANDOM, placebo_signals
 
 H = 3_600_000
@@ -75,7 +75,7 @@ def _ms(s: str) -> int:
     """Epoch ms, or a UTC date / date-time (2026-07-27, 2026-07-27T05:00)."""
     if s.isdigit():
         return int(s)
-    return int(datetime.fromisoformat(s).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    return int(datetime.fromisoformat(s).replace(tzinfo=UTC).timestamp() * 1000)
 
 
 def window(raw: list[dict[str, Any]], t0: int | None, t1: int | None) -> list[dict[str, Any]]:
@@ -253,7 +253,7 @@ def _run(a: argparse.Namespace, given: list[str]) -> None:
     if a.round4:
         from .report_v5 import round4_markdown
         md = round4_markdown(rep, res, m, a.compare) + "\n\n" + md
-    from .register_rows import record_backtest      # every trial and split cell into the trial register (#31)
+    from .register_rows import record_backtest  # every trial and split cell into the trial register (#31)
     if a.no_save:
         print(md)
         print(f"trial register: {record_backtest(rep, res)} rows")
@@ -292,7 +292,7 @@ def label(a: argparse.Namespace) -> str:
 
 
 def _iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="minutes")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="minutes")
 
 
 def _window(m: Market, rep: dict[str, Any], a: argparse.Namespace) -> dict[str, Any]:

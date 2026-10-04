@@ -6,13 +6,14 @@ before they send; and no guardian job writes on the loop outside a unit (journal
 import asyncio
 import sqlite3
 import time
+from datetime import UTC
 from types import SimpleNamespace
 
 import pytest
 
 from shortbot import gateway, intents
-from shortbot import killswitch as ks
 from shortbot import guardian as gmod
+from shortbot import killswitch as ks
 from shortbot.guardian import Guardian
 from shortbot.intents import Intent
 from shortbot.journal import Journal
@@ -189,5 +190,5 @@ def _intents(j):
 
 
 def _iso(ts: float) -> str:
-    from datetime import datetime, timezone
-    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="milliseconds")
+    from datetime import datetime
+    return datetime.fromtimestamp(ts, UTC).isoformat(timespec="milliseconds")

@@ -10,7 +10,7 @@ import asyncio
 import calendar
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import feedparser
@@ -206,7 +206,7 @@ def _for_agent(item: dict) -> dict:
 
 
 def _iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, timezone.utc).isoformat(timespec="minutes")
+    return datetime.fromtimestamp(epoch, UTC).isoformat(timespec="minutes")
 
 
 def _strip(html: str) -> str:

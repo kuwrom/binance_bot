@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from shortbot import guardian as guardian_mod, user_stream as us
+from shortbot import guardian as guardian_mod
+from shortbot import user_stream as us
 from shortbot.guardian_positions import UNTRACKED_GRACE_S
 from shortbot.killswitch import HEARTBEAT_KEY
 from shortbot.symlock import SymbolBusy

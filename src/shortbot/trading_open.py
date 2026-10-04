@@ -34,8 +34,7 @@ from .audit import refusals
 from .entry_intents import ON_BOOK
 from .exchange import to_symbol
 from .plans import build_plan, validate_plan
-from .risk import (RiskViolation, ShortRequest, check_open_short, liquidity_tier,
-                   max_notional_for_risk)
+from .risk import RiskViolation, ShortRequest, check_open_short, liquidity_tier, max_notional_for_risk
 from .setups import resolve
 from .steps import floor_amount, too_small
 from .symlock import busy_refusal

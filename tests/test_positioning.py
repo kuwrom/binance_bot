@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from shortbot.journal import Journal
 from shortbot.positioning import PositionOps, chandelier_stop, reassess
 from shortbot.trading import Trader
 from tests.fakes import SYM, FakeCcxt, FakeEx, neutral_budget, ok_prechecks
 
-NOW = datetime(2026, 9, 28, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 28, 12, tzinfo=UTC)
 
 
 def candles(n=60, px=1.0, rng=0.02):
@@ -93,11 +93,11 @@ def test_plan_add_keeps_total_loss_at_stop_within_1R_and_shrinks_or_skips():
 
 
 def test_live_exposure_neutral_is_full_size_and_sweet_scores_scale_to_the_cap():
-    from shortbot.ladder import decide, live_exposure_target, BASE
+    from shortbot.ladder import BASE, decide, live_exposure_target
     assert live_exposure_target(0, 2.0) == 1.0 and live_exposure_target(2, 2.0) == 2.0
     assert live_exposure_target(-2, 2.0) == 0.0 and live_exposure_target(2, 1.0) == 1.0
-    from datetime import datetime, timezone
-    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    from datetime import datetime
+    now = datetime(2026, 9, 29, tzinfo=UTC)
     hist = [{"ts": "2026-09-28T00:00:00+00:00", "x_star": 2.0, "x_virtual": 1.0, "action": "hold"}]
     act, x = decide(hist, 1.0, 2.0, now, {**BASE, "x_max": 2.0})
     assert act == "add" and 1.0 < x <= 2.0

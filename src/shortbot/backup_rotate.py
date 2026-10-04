@@ -10,7 +10,7 @@ import gzip
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 STAMP = "%Y%m%dT%H%M%SZ"
@@ -30,7 +30,7 @@ def snapshots(d: Path, prefix: str) -> list[tuple[datetime, Path]]:
     out = []
     for p in d.iterdir():
         if m := pat.fullmatch(p.name):
-            out.append((datetime.strptime(m[1], STAMP).replace(tzinfo=timezone.utc), p))
+            out.append((datetime.strptime(m[1], STAMP).replace(tzinfo=UTC), p))
     return sorted(out, reverse=True)
 
 

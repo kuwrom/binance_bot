@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from shortbot.ladder import decide, evaluate_ladder, exposure_target, ladder_levels, race_with_edge, state_score
 
-NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
 
 
 def test_race_reduces_to_martingale_and_edge_helps_the_short():

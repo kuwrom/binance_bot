@@ -254,5 +254,5 @@ class StreamCollector:
 
 
 def _ssl() -> ssl.SSLContext:
-    import truststore   # the OS trust store, like market/liquidations.py
+    import truststore  # the OS trust store, like market/liquidations.py
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

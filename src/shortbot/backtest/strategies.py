@@ -12,6 +12,7 @@ import itertools
 import statistics
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import UTC
 from typing import Any
 
 from ..tape_math import clear_above_round, next_round_above
@@ -86,10 +87,10 @@ def tradable(coin: Coin, i: int) -> bool:
 def in_session(coin: Coin, i: int, which: str | None) -> bool:
     if not which:
         return True
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from ..sessions import session_bucket
-    b = session_bucket(datetime.fromtimestamp((coin.rows[i]["ts"] + 3_600_000) / 1000, timezone.utc))
+    b = session_bucket(datetime.fromtimestamp((coin.rows[i]["ts"] + 3_600_000) / 1000, UTC))
     return b.endswith("_wknd") or b in ASIA_LATE_WKND
 
 

@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import audit, errors, weight
@@ -82,7 +82,7 @@ class Streak:
             self.since.pop(k, None)
 
     def started(self, key: str) -> str:
-        return datetime.fromtimestamp(self.since.get(key, time.time()), timezone.utc).strftime("%H:%M UTC")
+        return datetime.fromtimestamp(self.since.get(key, time.time()), UTC).strftime("%H:%M UTC")
 
 
 class Lane:

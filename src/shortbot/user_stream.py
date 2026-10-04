@@ -38,7 +38,7 @@ import ssl
 import time
 from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import user_events as ue
@@ -66,7 +66,7 @@ REMEMBER = 2000            # client ids and triggered-order ids kept for matchin
 
 
 async def open_socket(url: str):
-    import truststore   # the OS trust store, like market/liquidations.py
+    import truststore  # the OS trust store, like market/liquidations.py
     import websockets
     return await websockets.connect(url, ssl=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT), ping_interval=60,
                                     max_size=2 ** 20, open_timeout=CONNECT_S)
@@ -103,7 +103,7 @@ class UserStream:
         self.last_foreign: dict[str, dict] = {}               # symbol -> the last order event not of ours
         self.fails = self.misses_in_row = 0
         self.stats: dict[str, Any] = {
-            "since": datetime.now(timezone.utc).isoformat(timespec="seconds"), "events": Counter(), "kinds": Counter(),
+            "since": datetime.now(UTC).isoformat(timespec="seconds"), "events": Counter(), "kinds": Counter(),
             "triggers": Counter(), "reconnects": Counter(), "connects": 0, "errors": 0, "keepalives": 0,
             "keepalive_failures": 0, "hits": 0, "misses": 0, "lag_ms": {"n": 0, "sum": 0, "max": None},
             "partial_to_full_ms": []}
@@ -248,7 +248,7 @@ class UserStream:
             return
         self.last_foreign[str(hit.symbol)] = {
             "cid": hit.cid, "status": hit.status, "side": hit.side, "qty": hit.qty, "order_id": hit.order_id,
-            "at": datetime.fromtimestamp((hit.event_ms or 0) / 1000, timezone.utc).isoformat(timespec="seconds")}
+            "at": datetime.fromtimestamp((hit.event_ms or 0) / 1000, UTC).isoformat(timespec="seconds")}
         log.info("user stream: order %s on %s (%s %s %s) is not the desk's: no action; the untracked check quotes it",
                  hit.cid, hit.symbol, hit.side, hit.qty, hit.status)
 
@@ -307,5 +307,5 @@ class UserStream:
 
     def _persist(self) -> None:
         snap = {**self.stats, "up": self.up, "lanes": self.extra_stats(),
-                "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                "at": datetime.now(UTC).isoformat(timespec="seconds")}
         self.j.post(lambda j: j.set(j.mode_key(STATS_KEY), json.dumps(snap, default=str)))   # stats only: posted

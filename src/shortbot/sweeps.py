@@ -14,6 +14,7 @@ import asyncio
 import json
 import math
 import statistics
+from datetime import UTC
 from typing import Any
 
 from .tape_math import clear_above_round, round_step
@@ -132,7 +133,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 def by_session(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Does the session change how levels behave? (asia 00-07, london 07-NY open, ny, late; weekends apart)"""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from .sessions import session_bucket
     out: dict[str, dict[str, Any]] = {}
@@ -140,7 +141,7 @@ def by_session(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         ev = [e for e in events if e["kind"] == kind and e["complete"]]
         groups: dict[str, list[dict]] = {}
         for e in ev:
-            groups.setdefault(session_bucket(datetime.fromtimestamp(e["ts"] / 1000, timezone.utc)), []).append(e)
+            groups.setdefault(session_bucket(datetime.fromtimestamp(e["ts"] / 1000, UTC)), []).append(e)
         for sess, g in sorted(groups.items()):
             fm = _pcts([e.get("fakeout_mark_pct") for e in g])
             out.setdefault(sess, {})[kind] = {

@@ -17,7 +17,7 @@ Pure and unit-tested; `risk_budget.gather_inputs` supplies the live numbers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import RiskLimits
@@ -36,7 +36,7 @@ class GovInputs:
     regime: str = "unknown"
     btc_vol_now: float | None = None
     btc_vol_target: float | None = None
-    now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    now: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def next_utc_midnight(now: datetime) -> datetime:
@@ -49,7 +49,7 @@ def next_monday(now: datetime) -> datetime:
 
 def _ts(iso: str) -> datetime:
     dt = datetime.fromisoformat(iso)
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def loss_streak(results: list[tuple[str, float]], run: int = 3) -> dict[str, Any]:

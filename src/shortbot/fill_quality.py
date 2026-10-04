@@ -213,7 +213,7 @@ async def _book(ex, symbol: str) -> dict[str, Any]:
         b, m = await asyncio.wait_for(asyncio.gather(pub.fapiPublicGetTickerBookTicker({"symbol": raw}),
                                                      pub.fapiPublicGetPremiumIndex({"symbol": raw}),
                                                      return_exceptions=True), TIMEOUT_S)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return {"why": "timeout"}
     out: dict[str, Any] = {"src": "book"}
     stamps = []
@@ -233,7 +233,7 @@ async def _book(ex, symbol: str) -> dict[str, Any]:
 async def _print(ex, symbol: str, ms: int) -> dict[str, Any]:
     try:
         last = await asyncio.wait_for(_last_print(ex.public, to_raw(symbol), ms), TRADE_TIMEOUT_S)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return {"why": "timeout"}
     except Exception as e:  # noqa: BLE001 - counted, not raised
         log.info("mainnet prints for %s unreadable: %s: %s", symbol, type(e).__name__, e)
@@ -262,7 +262,7 @@ async def _vol(ex, j, tid: int, symbol: str) -> bool:
     """The mainnet 24h quote volume, once per trade (json_insert never overwrites it)."""
     try:
         v = _num((await asyncio.wait_for(ex.public.fetch_ticker(symbol), TIMEOUT_S)).get("quoteVolume"))
-    except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - the report falls back to entry_features.quote_volume
+    except (TimeoutError, Exception):  # noqa: BLE001 - the report falls back to entry_features.quote_volume
         return False
     if v:   # posted, like every write here (#79): research data, never awaited
         j.post(lambda j: j.db.execute(f"UPDATE trades SET fill_refs = json_insert({DOC}, '$.vol24_usd', ?) WHERE id=?",

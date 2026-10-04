@@ -7,7 +7,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,7 +18,7 @@ from shortbot.exchange import to_raw
 from tests.test_backtest import T0, _synthetic
 
 H = 3_600_000
-NOW = datetime(2026, 10, 2, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 2, 12, tzinfo=UTC)
 
 
 def _write_hist(path: Path, coins: list[dict]) -> None:

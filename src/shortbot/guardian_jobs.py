@@ -8,14 +8,14 @@ import importlib
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from . import killswitch as ks
 from . import entry_gates, gateway_health, news, procs, research, scan_job, setup_ladder, stream_task
+from . import killswitch as ks
 from .exchange import to_raw
-from .journal import Journal
 from .guardian_loop import guarded, send_safe
+from .journal import Journal
 from .market.regime import market_regime
 from .market.social import snapshot as social_snapshot
 from .probability.labels import label_due as label_predictions
@@ -42,7 +42,7 @@ class MarketJobs:
             key = f"ann_seen:{a['url']}"
             if self.j.get(key) is None:
                 self.j.mark(key, str(time.time()))
-                fresh = datetime.fromisoformat(a["time"]) > datetime.now(timezone.utc) - timedelta(hours=24)
+                fresh = datetime.fromisoformat(a["time"]) > datetime.now(UTC) - timedelta(hours=24)
                 if not first_run and fresh:  # never alert on old items that merely re-appear in the list
                     await self._announce(a)
         self.j.mark("ann_initialised", "1")
@@ -175,7 +175,7 @@ class MarketJobs:
         """Every 10 min (#69): setup_ladder.status() journals a `setup_ladder_stop` row in whichever process saw the
         stop first (often the MCP server sizing a trade), and nothing sends it. Send each of this account's recent
         rows to Telegram once (no second row); a failed send releases its marker for the next pass."""
-        since = (datetime.now(timezone.utc) - timedelta(seconds=LADDER_STOP_LOOKBACK_S)).isoformat(timespec="seconds")
+        since = (datetime.now(UTC) - timedelta(seconds=LADDER_STOP_LOOKBACK_S)).isoformat(timespec="seconds")
         rows = self.j.db.execute("SELECT id, symbol, message FROM alerts WHERE kind = 'setup_ladder_stop' AND mode = ? "
                                  "AND ts >= ? ORDER BY id", (self.j.mode, since)).fetchall()
         for aid, sym, msg in rows:
@@ -189,7 +189,7 @@ class MarketJobs:
     async def record_metrics(self) -> None:
         perps = await self.ex.coin_perps()
         tickers, rates = await asyncio.gather(self.ex.public.fetch_tickers(), self.ex.public.fetch_funding_rates())
-        ts = datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
+        ts = datetime.now(UTC).replace(second=0, microsecond=0).isoformat()
         movers = sorted((t for s, t in tickers.items() if s in perps),
                         key=lambda t: t.get("percentage") or 0, reverse=True)[:20]
         held = {t["symbol"] for t in self.j.open_trades()}

@@ -5,7 +5,7 @@ multiplier comparison but not the room. Only a verdict newer than the row judges
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -38,7 +38,7 @@ async def rest(g, *props, **stamps):
     r = await EntryDesk(g.app.trader, regime_fn=favorable).propose_group(list(props))
     assert r["ok"], r
     ids = [p["entry_id"] for p in r["placed"]]
-    ago = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(timespec="seconds")
+    ago = (datetime.now(UTC) - timedelta(minutes=1)).isoformat(timespec="seconds")
     for eid in ids:
         g.j.db.execute(f"UPDATE entries SET created_at=?{''.join(f', {k}=?' for k in stamps)} WHERE id=?",
                        (ago, *stamps.values(), eid))

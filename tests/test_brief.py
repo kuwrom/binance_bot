@@ -3,7 +3,7 @@ start_session acknowledges them, backup health, learning provenance (#22, #19)."
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -119,7 +119,7 @@ async def test_brief_is_read_only_and_start_session_acknowledges(monkeypatch):
 async def test_legacy_last_brief_ts_seeds_the_watermark():
     a = app()
     j = a.journal
-    old = datetime.now(timezone.utc) - timedelta(hours=5)
+    old = datetime.now(UTC) - timedelta(hours=5)
     for k in ("stop_near", "trade_closed"):
         j.db.execute("INSERT INTO alerts (ts, symbol, kind, message) VALUES (?,?,?,?)",
                      (old.isoformat(timespec="seconds"), SYM, k, "old"))
@@ -138,7 +138,7 @@ async def test_an_unreadable_watermark_shows_everything_rather_than_nothing():
 
 
 def _backup(j, hours_ago, offbox_ok=True):
-    ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+    ts = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
     j.set("backup_last_ok", json.dumps({"ts": ts, "name": "desk.db.gz", "offbox_ok": offbox_ok}))
 
 

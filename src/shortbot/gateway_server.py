@@ -27,8 +27,9 @@ import logging
 import os
 import signal
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import audit, commands, gateway_health, procs, weight
 from . import gateway_wire as wire

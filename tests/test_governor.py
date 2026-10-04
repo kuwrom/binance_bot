@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from shortbot.config import RiskLimits
 from shortbot.governor import GovInputs, daily_cap, govern, loss_streak
@@ -6,7 +6,7 @@ from shortbot.risk_budget import BudgetInputs, compute_budget, quarter_start
 from shortbot.tilts import cell_mult, conviction_mult, regime_cell, streak_test
 
 LIM = RiskLimits(risk_per_trade_pct=1.0, daily_loss_limit_pct=3.0)
-NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)   # a Wednesday
+NOW = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)   # a Wednesday
 
 
 def g(**kw):

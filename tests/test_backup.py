@@ -7,15 +7,17 @@ import time
 import types
 import zlib
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from shortbot import backup as B, backup_rotate as R, cli
+from shortbot import backup as B
+from shortbot import backup_rotate as R
+from shortbot import cli
 from shortbot.journal import Journal
 
-NOW = datetime(2026, 10, 1, 3, 17, tzinfo=timezone.utc)      # a Thursday, ISO week 40
+NOW = datetime(2026, 10, 1, 3, 17, tzinfo=UTC)      # a Thursday, ISO week 40
 
 
 @pytest.fixture(autouse=True)

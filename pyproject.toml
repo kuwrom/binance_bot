@@ -47,6 +47,9 @@ asyncio_mode = "auto"
 
 # ---------------------------------------------------------------- lint (scripts/check lint; #43)
 # https://docs.astral.sh/ruff/settings/. target-version comes from requires-python.
+[tool.ruff]
+line-length = 120   # the code's width (88, the default, is where isort would wrap imports; no E501 is selected)
+
 [tool.ruff.lint]
 # Listed, never the built-in default: ruff 0.16's is 416 rules (524 findings on 0f0f45d) and changes between releases.
 select = [
@@ -58,6 +61,8 @@ select = [
     "DTZ",      # naive datetimes
     "T10",      # a debugger left in
     "G",        # logging calls format lazily
+    "I",        # imports sorted (isort); `# noqa: I001` on a block's first line keeps an order that matters
+    "UP",       # pyupgrade, for requires-python (datetime.UTC, collections.abc, builtin TimeoutError)
 ]
 # zip() without strict= (69 sites): strict=True raises on a length mismatch, a behaviour change decided per site
 ignore = ["B905"]

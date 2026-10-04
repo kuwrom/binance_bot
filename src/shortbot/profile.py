@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .sessions import session_bucket
@@ -59,7 +59,7 @@ def session_behaviour(c1h: list[list[float]]) -> dict[str, Any]:
         if not a[4] or not b[4]:
             continue
         r = (b[4] / a[4] - 1) * 100
-        k = session_bucket(datetime.fromtimestamp(b[0] / 1000, timezone.utc))
+        k = session_bucket(datetime.fromtimestamp(b[0] / 1000, UTC))
         d = rows.setdefault(k, {"r": [], "v": []})
         d["r"].append(r)
         d["v"].append(b[5] * b[4])

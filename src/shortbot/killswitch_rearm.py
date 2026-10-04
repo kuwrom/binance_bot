@@ -12,7 +12,7 @@ Fail closed: no fresh reading, a malformed hold or any error means nothing is he
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .equity_marks import period_starts
@@ -29,7 +29,7 @@ OBS_FRESH_S = 900                          # drawdown is read every 300 s, daily
 
 
 def _now(now: datetime | None) -> datetime:
-    return now or datetime.now(timezone.utc)
+    return now or datetime.now(UTC)
 
 
 def _obj(raw: str | None) -> dict[str, Any] | None:

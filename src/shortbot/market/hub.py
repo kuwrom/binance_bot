@@ -53,7 +53,7 @@ class DataHub:
         except Exception:  # noqa: BLE001 - tests / no DB: signals simply have no data
             pass
 
-    def context(self, symbol: str, ticker: dict | None = None) -> "MarketContext":
+    def context(self, symbol: str, ticker: dict | None = None) -> MarketContext:
         return MarketContext(self, to_symbol(symbol), ticker)
 
     async def funding_tables(self) -> tuple[dict, dict]:

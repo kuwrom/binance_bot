@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .probability.baseline import short_geometry
@@ -181,7 +181,7 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
     sig = (await sigma_hourly(ctx))["used"] or 0.01
     c1h = await ctx.candles("1h", 3)
     oi = await ctx.oi_history("1h", 3)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     age_h = (now - datetime.fromisoformat(trade["opened_at"])).total_seconds() / 3600 if trade.get("opened_at") else 0
     tsh = plan.get("time_stop_hours") or 24
     entry, stop, price = pos["entry"], pos["exchange_stop"] or trade.get("stop_price"), pos["mark"]

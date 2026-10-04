@@ -193,8 +193,8 @@ def main(argv: list[str] | None = None) -> None:
         out = P.save(a.out or P.run_dir("trail5m", prov["git"]), prov, {
             "trail5m.md": md, "trail5m.json": json.dumps({**st, "provenance": prov}, indent=1, default=str)})
         md += f"\nsaved to {out}"
-    from .register_rows import trail5m_rows
     from .. import trial_register as TR
+    from .register_rows import trail5m_rows
     print(md + f"\ntrial register: {TR.record('trail5m', trail5m_rows(st), prov, out)} rows")
 
 if __name__ == "__main__":

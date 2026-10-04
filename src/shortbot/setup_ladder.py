@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
@@ -249,7 +249,7 @@ def reenable(journal, setup: str, episodes: list[dict[str, Any]], live: bool, hu
         return {**chk, "ok": False, "reason": "frozen criteria not met"}
     if live and stop["criteria"].get("live_needs_human") and not human_clear:      # "ok" last: never overridden
         return {**chk, "ok": False, "reason": "criteria pass; live mode needs a human clear"}
-    at = (now or datetime.now(timezone.utc)).isoformat()
+    at = (now or datetime.now(UTC)).isoformat()
     ev.setdefault("reenables", []).append(at)
     ev.setdefault("log", []).append({"kind": "reenable", "at": at, "evidence": chk, "human": human_clear})
     _save(journal, setup, ev)
@@ -259,7 +259,7 @@ def reenable(journal, setup: str, episodes: list[dict[str, Any]], live: bool, hu
 def reset_epoch(journal, setup: str, who: str, why: str, now: datetime | None = None) -> dict[str, Any]:
     """A journalled review: start a new ledger now. A SHADOW stop stays until re-enabled; nothing else carries over."""
     ev = events(journal, setup)
-    at = (now or datetime.now(timezone.utc)).isoformat()
+    at = (now or datetime.now(UTC)).isoformat()
     ev["epoch"] = at
     ev.setdefault("log", []).append({"kind": "epoch_reset", "at": at, "who": who, "why": why})
     _save(journal, setup, ev)

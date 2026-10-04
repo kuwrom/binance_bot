@@ -10,7 +10,7 @@ import json
 import random
 import statistics
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 MIN_MEMBERS, MIN_QVOL, COOLDOWN_MS = 4, 20e6, 4 * 3_600_000
@@ -59,7 +59,7 @@ async def detect(ex, journal) -> int:
         rows = []
         for g in lag:
             ctl = random.choice(rest) if rest else None
-            rows.append((datetime.now(timezone.utc).isoformat(timespec="seconds"), now_ms, sec, leader["symbol"],
+            rows.append((datetime.now(UTC).isoformat(timespec="seconds"), now_ms, sec, leader["symbol"],
                          leader["r4h"], g["symbol"], g["r4h"], tk[g["symbol"]]["last"], ctl and ctl["symbol"],
                          ctl and ctl["r4h"], ctl and tk[ctl["symbol"]]["last"], m["header"]["breadth_pct"]))
         if rows:   # a unit per sector, before the next sector's await (#79)
@@ -102,7 +102,7 @@ async def label(ex, journal, limit: int = 20) -> int:
                 o["control"] = outcome(ctlp, await ex.public.fetch_ohlcv(ctl, "15m", since=ts, limit=50))
         except Exception:  # noqa: BLE001
             pass
-        done.append((json.dumps(o), datetime.now(timezone.utc).isoformat(timespec="seconds"), rid))
+        done.append((json.dumps(o), datetime.now(UTC).isoformat(timespec="seconds"), rid))
     if done:   # one unit, after every fetch (#79)
         await journal.write(lambda j: j.db.executemany("UPDATE laggard_events SET outcome=?, labelled_at=? WHERE id=?",
                                                        done))

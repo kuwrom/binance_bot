@@ -1,15 +1,15 @@
 """Day/week P&L from equity marks net of transfers; equity peak moved by transfers (equity_marks.py, task #16)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from shortbot import equity_marks as em
 from shortbot.journal import Journal
 
-T0 = datetime(2026, 10, 1, 0, 5, tzinfo=timezone.utc)          # 5 min after midnight (a Thursday)
+T0 = datetime(2026, 10, 1, 0, 5, tzinfo=UTC)          # 5 min after midnight (a Thursday)
 
 
 def at(h, m=0):
-    return datetime(2026, 10, 1, h, m, tzinfo=timezone.utc)
+    return datetime(2026, 10, 1, h, m, tzinfo=UTC)
 
 
 def ms(dt):

@@ -4,7 +4,6 @@ never short still-rising attention; the fade AFTER an attention peak is the setu
 
 from __future__ import annotations
 
-
 from ..decay import decayed_points, heat
 from ..market import MarketContext
 from .base import SignalOut, signal

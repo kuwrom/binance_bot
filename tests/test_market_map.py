@@ -1,8 +1,15 @@
 import asyncio
 import math
 
-from shortbot.market.market_map import (beta, coin_row, log_returns, market_header, market_vetoes, rotation_flags,
-                                        sector_table)
+from shortbot.market.market_map import (
+    beta,
+    coin_row,
+    log_returns,
+    market_header,
+    market_vetoes,
+    rotation_flags,
+    sector_table,
+)
 from shortbot.market.sectors import base_of, primary_sector
 from shortbot.signals.sector import sector
 

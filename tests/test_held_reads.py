@@ -9,7 +9,7 @@
 
 import sqlite3
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace as NS
 
 from shortbot import entry_gates, laggard, shadow_eval, sweeps, targets, warmup
@@ -23,7 +23,7 @@ from tests.held_lock import STALL_REPORT, HeldLock
 from tests.test_entry_races import favorable, prop
 from tests.test_guardian_offloop import guardian_on
 
-NOW = datetime(2026, 10, 5, 0, 5, tzinfo=timezone.utc)   # a Monday, 5 min into the day and the week
+NOW = datetime(2026, 10, 5, 0, 5, tzinfo=UTC)   # a Monday, 5 min into the day and the week
 NOW_MS = int(NOW.timestamp() * 1000)
 
 

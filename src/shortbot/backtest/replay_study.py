@@ -24,9 +24,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import clock
+from .. import clock, research
 from .. import provenance as P
-from .. import research
 from ..exchange import to_raw
 from ..journal import Journal
 from ..market.market_map import build_map

@@ -22,9 +22,8 @@ import math
 import statistics
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
-
-from datetime import datetime, timezone
 
 from .book import book_guard, diversity_mult, measured_corr, n_eff, pending_book, slot_cap
 from .config import RiskLimits
@@ -185,7 +184,7 @@ def btc_vol_now_and_target(daily_closes: list[float]) -> tuple[float | None, flo
 
 def track_day_peak(journal, day_pnl: float, now: datetime | None = None) -> float:
     """Highest day P&L seen today (the guardian calls this every minute; arms the give-back stop)."""
-    key = journal.mode_key(f"day_peak:{(now or datetime.now(timezone.utc)).date().isoformat()}")
+    key = journal.mode_key(f"day_peak:{(now or datetime.now(UTC)).date().isoformat()}")
     peak = max(float(journal.get(key) or 0.0), float(journal.pending(key) or 0.0), day_pnl)   # its own, queued (#82)
     journal.merge(key, str(peak), _raise_day_peak, key, peak)   # #79: the pass never waits; the unit keeps the highest
     return peak
@@ -209,7 +208,7 @@ async def gather_inputs(trader, regime: str, positions: list[dict] | None = None
     effective research limits, so its governor verdict and the heat it sees match the session's (#12)."""
     global _vol_cache
     lim = limits or trader.ex.limits
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     pos = positions if positions is not None else await trader.positions()
     acct = await trader.account()
     eq = acct["equity"]

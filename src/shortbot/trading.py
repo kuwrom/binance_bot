@@ -25,7 +25,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ccxt.async_support as ccxt
@@ -59,7 +59,7 @@ def _f(x: Any, default: float = 0.0) -> float:
         return default
 
 
-async def default_budget(trader: "Trader", symbol: str, regime: str, conviction: str = "B",
+async def default_budget(trader: Trader, symbol: str, regime: str, conviction: str = "B",
                          setup: str | None = None) -> dict[str, Any]:
     from .risk_budget import compute_budget, gather_inputs
     inp = await gather_inputs(trader, regime, setup=setup, symbol=symbol)
@@ -145,7 +145,7 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
         (income view used); a late or unreadable mark keeps the old definition (old_*_pnl: realized since the period
         start + all unrealized), whichever is worse. Raises only if income can't be read: no figure is better than a
         guess (the guardian's pass fails after its stop checks)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_ms, starts = int(now.timestamp() * 1000), equity_marks.period_starts(now)
         cursor = int(self.j.get(self.j.mode_key(equity_marks.KV_CURSOR)) or now_ms)
         rows = await reconcile.income_since(self.t, min(starts["week"][1], cursor))

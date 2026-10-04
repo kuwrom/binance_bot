@@ -6,16 +6,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from . import clock
+from . import clock, news
 from . import indicators as ind
-from . import news
 from .exchange import Exchanges, to_symbol
 from .market import DataHub
 from .market.regime import market_regime
 from .risk import FALLBACK_MAINT_MARGIN_PCT, max_leverage_for_stop
 from .setups import detect_all
-from .tape import classify
 from .signals import Evaluation, evaluate
+from .tape import classify
 
 
 def _row(ev: Evaluation) -> dict[str, Any]:

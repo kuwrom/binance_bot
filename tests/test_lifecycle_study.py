@@ -1,6 +1,18 @@
 from shortbot.lifecycle_study import (
-    coin_metrics, consistent, days_below, days_to_drawdown, dead_cat_bounces, km_by, km_median, pump_window,
-    quantile, short_trade, spearman, trade_stats, value_at, volume_ratio,
+    coin_metrics,
+    consistent,
+    days_below,
+    days_to_drawdown,
+    dead_cat_bounces,
+    km_by,
+    km_median,
+    pump_window,
+    quantile,
+    short_trade,
+    spearman,
+    trade_stats,
+    value_at,
+    volume_ratio,
 )
 
 DAY = 86_400_000

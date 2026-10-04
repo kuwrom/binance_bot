@@ -44,11 +44,12 @@ import logging
 import sqlite3
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import islice
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from . import wal_holder
 

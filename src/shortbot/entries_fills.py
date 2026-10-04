@@ -23,14 +23,14 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import fill_quality, reconcile
 from .entries_cancel import drop_prearm
 from .episodes import qty as _qty
 from .episodes import vwap as _vwap
-from .episodes import walk   # the one flat-to-flat walk: reconcile matches journal trades with it too
+from .episodes import walk  # the one flat-to-flat walk: reconcile matches journal trades with it too
 from .market.market_map import cached
 from .sessions import session_bucket
 
@@ -49,7 +49,7 @@ class StopNotPlaced(Exception):
 
 
 def iso(ms: int | None) -> str:
-    at = datetime.fromtimestamp(ms / 1000, timezone.utc) if ms else datetime.now(timezone.utc)
+    at = datetime.fromtimestamp(ms / 1000, UTC) if ms else datetime.now(UTC)
     return at.isoformat(timespec="seconds")
 
 
@@ -150,7 +150,7 @@ async def announce(desk, e: dict[str, Any], ev: dict[str, Any], alert: tuple[str
 def new_trade(desk, e: dict[str, Any], fill_ms: int | None, **features: Any) -> int:
     """The journal trade an entry fill opens, stamped at the fill (exchange clock), not at the poll, and attributed to
     the experiments and limits the entry was placed (sized) under: the guardian polling the fill has neither (#32)."""
-    at = datetime.fromtimestamp(fill_ms / 1000, timezone.utc) if fill_ms else datetime.now(timezone.utc)
+    at = datetime.fromtimestamp(fill_ms / 1000, UTC) if fill_ms else datetime.now(UTC)
     j = desk.j
     over = json.loads(e["overrides"]) if e.get("overrides") else {}   # a veto override at placement (#11)
     tid = j.create_trade(e["symbol"], e["setup"], e["thesis"], e["stop_price"], e["leverage"], e["plan"],

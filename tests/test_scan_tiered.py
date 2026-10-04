@@ -4,6 +4,7 @@ window's trigger counts are logged; alerts are deduplicated across restarts."""
 
 import json
 import time
+from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -312,12 +313,12 @@ def test_replay_skips_tier2_scans(tmp_path):
 
 # ------------------------------------------------------------------ tier-1 context and an end-to-end window
 async def test_context_has_listing_ages_delistings_unlocks_and_intervals(tmp_path):
-    from shortbot.exchange import NO_DELIVERY
-    from datetime import datetime, timezone
+    from datetime import datetime
 
+    from shortbot.exchange import NO_DELIVERY
     from shortbot.market.events import EventStore
     now = int(time.time() * 1000)   # the event store is point-in-time (added_at <= now): live time here
-    when = datetime.fromtimestamp(now / 1000 + 9 * 86400, timezone.utc).isoformat()
+    when = datetime.fromtimestamp(now / 1000 + 9 * 86400, UTC).isoformat()
     EventStore(tmp_path / "j.db").add_unlock("CCC", when, 4.0, "team", "https://example.org/x")
     seen = []
 

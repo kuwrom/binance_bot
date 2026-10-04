@@ -15,7 +15,7 @@ import logging
 import sqlite3
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ccxt.async_support as ccxt
@@ -36,7 +36,7 @@ MAX_TTL_H = 24.0
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class EntryPlacement:
@@ -192,7 +192,7 @@ class EntryPlacement:
         check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0), maint),
                          acct, lim)
         c1h = await tr.ex.public.fetch_ohlcv(sym, "1h", limit=30)   # every read comes BEFORE the intent: a failure
-        from .indicators import atr                                   # up to here leaves nothing on the exchange
+        from .indicators import atr  # up to here leaves nothing on the exchange
         a = atr(c1h) or 0.0
         if blocked := await killswitch.gate(tr, "limit entry"):   # a trip while this group was being placed: no row
             raise ValueError(blocked["error"])
@@ -249,7 +249,7 @@ class EntryPlacement:
         return {**odds, "entry_id": eid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
                 "risk_usdt": round(amount * (stop - px), 2), "leverage": lev, "prearmed_stop": bool(prearm_id),
                 "client_id": cid, **({"overrides": overrides} if overrides else {}),
-                "expires": datetime.fromtimestamp(expires_ms / 1000, timezone.utc).isoformat(timespec="minutes")}
+                "expires": datetime.fromtimestamp(expires_ms / 1000, UTC).isoformat(timespec="minutes")}
 
     async def _prearm(self, eid: int, sym: str, amount: float, stop: float) -> str | None:
         """Reduce-only stop resting from the first fill instant, journalled like its limit: client id first, then the

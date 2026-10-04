@@ -136,8 +136,8 @@ def test_feed_candidates_adds_live_episodes_to_hierarchy_nodes():
 
 
 def test_refresh_is_due_weekly():
-    from shortbot.journal import Journal
     from shortbot import refresh
+    from shortbot.journal import Journal
     j = Journal(":memory:")
     assert refresh.due(j, 1_000_000)
     j.set(refresh.KV_KEY, str(1_000_000))
@@ -146,6 +146,7 @@ def test_refresh_is_due_weekly():
 
 def test_refresh_steps_never_raise():
     import sys
+
     from shortbot import refresh
     r = refresh._run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=1)
     assert r["rc"] == -1 and "timeout" in r["error"]

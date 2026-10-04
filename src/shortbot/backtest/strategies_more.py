@@ -18,11 +18,10 @@ import statistics
 from collections.abc import Iterable
 from typing import Any
 
+from . import strategies as _S
 from .features import Coin, Market
 from .sim import H, Plan
-from . import strategies as _S
 from .strategies import WARMUP, Trial, atr_abs, plan, tradable
-
 
 
 def floor() -> float:

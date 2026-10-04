@@ -20,7 +20,7 @@ import platform
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import import_module, metadata
 from pathlib import Path
 from typing import Any
@@ -47,7 +47,7 @@ def run_dir(kind: str, git: dict[str, Any] | None = None, now: datetime | None =
     """<base>/<UTC date>-<sha7>[-dirty]/<kind>, suffixed -2, -3... rather than overwrite (not created here)."""
     g = git or git_state()
     tag = g["sha7"] if g.get("sha") else f"nogit-{code_sha()[:7]}"
-    day = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+    day = (now or datetime.now(UTC)).strftime("%Y-%m-%d")
     return unique((base or data_dir() / "research") / f"{day}-{tag}{'-dirty' if g.get('dirty') else ''}" / kind)
 
 
@@ -196,7 +196,7 @@ def config(command: str, argv: list[str] | None, **extra: Any) -> dict[str, Any]
 
 def stamp(config: dict[str, Any], inputs: dict[str, dict], window: dict | None = None, seeds: dict | None = None,
           upstream: dict | None = None, git: dict | None = None, now: datetime | None = None) -> dict[str, Any]:
-    return {"schema": SCHEMA, "created_utc": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
+    return {"schema": SCHEMA, "created_utc": (now or datetime.now(UTC)).isoformat(timespec="seconds"),
             "git": git or git_state(), "code_sha": code_sha(), "env": environment(), "config": config,
             "inputs": inputs, "window": window, "seeds": seeds, "upstream": upstream}
 

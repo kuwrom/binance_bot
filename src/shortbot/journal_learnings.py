@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 from .journal_research import add_columns
@@ -71,7 +71,7 @@ def fts_query(text: str | None) -> str:
 
 
 def _day(today: date | None) -> str:
-    return (today or datetime.now(timezone.utc).date()).isoformat()
+    return (today or datetime.now(UTC).date()).isoformat()
 
 
 def _current(t: str = "") -> str:

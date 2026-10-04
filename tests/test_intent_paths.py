@@ -9,8 +9,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from shortbot import (audit, cli, cli_cmds, cmd_book, cmd_desk, cmd_kill, cmd_research, cmd_trade, commands,
-                      entry_intents, gateway, intents)
+from shortbot import (
+    audit,
+    cli,
+    cli_cmds,
+    cmd_book,
+    cmd_desk,
+    cmd_kill,
+    cmd_research,
+    cmd_trade,
+    commands,
+    entry_intents,
+    gateway,
+    intents,
+)
 from shortbot.commands import build_parser
 from shortbot.entries import EntryDesk
 from shortbot.gateway import LocalGateway

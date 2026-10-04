@@ -3,7 +3,7 @@ bounds income by a fill, an open, a close or a mark. A trade's own COMMISSION / 
 against its fills; rows without one (funding, insurance) by time, from the second it opened."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -115,7 +115,7 @@ async def test_income_pages_that_end_inside_a_second_lose_no_row(monkeypatch):
 # ------------------------------------------------------------ day / week P&L (trading.account, equity_marks)
 async def test_day_pnl_keeps_a_fill_just_after_midnight_in_today(monkeypatch):
     t, fake = setup(monkeypatch)
-    day0 = em.period_starts(datetime.now(timezone.utc))["day"][1]
+    day0 = em.period_starts(datetime.now(UTC))["day"][1]
     fake.income += [{"symbol": "PUMPUSDT", "incomeType": "REALIZED_PNL", "income": "-7", "asset": "USDT",
                      "time": day0, "tranId": 1, "tradeId": "1"},          # a fill at 00:00:00.400
                     {"symbol": "PUMPUSDT", "incomeType": "COMMISSION", "income": "-3", "asset": "USDT",
@@ -123,7 +123,7 @@ async def test_day_pnl_keeps_a_fill_just_after_midnight_in_today(monkeypatch):
     assert (await t.account())["realized_today"] == pytest.approx(-7)
 
 
-T0 = datetime(2026, 10, 1, 0, 5, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 1, 0, 5, tzinfo=UTC)
 
 
 def _row(kind, usdt, ms):

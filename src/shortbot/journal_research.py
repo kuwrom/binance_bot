@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC
 from typing import Any
 
 RESEARCH_SCHEMA = """
@@ -114,12 +115,12 @@ class ResearchStore:
         """kind: 'bracket' (short: target before stop within hours) or 'touch' (price touches `target` level
         within hours, e.g. a limit fill)."""
         import time as _t
-        from datetime import datetime, timezone
+        from datetime import datetime
         ms = ts_ms or int(_t.time() * 1000)
         return self._insert(
             "INSERT INTO predictions (ts, ts_ms, source, ref_id, symbol, entry, stop, target, hours, kind, p_model,"
             " p_mc, p_analyst, sigma_h, context) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds"), ms, source, ref_id,
+            (datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds"), ms, source, ref_id,
              symbol, entry, stop, target, hours, kind, p_model, p_mc, p_analyst, sigma_h,
              json.dumps(context or {}, default=str)))
 

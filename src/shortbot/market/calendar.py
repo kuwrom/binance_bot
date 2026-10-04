@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import ssl
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -111,7 +111,7 @@ class MacroCalendar:
             (now_ms - 2 * 3_600_000, now_ms + int(hours * 3_600_000))).fetchall()]
         for r in rows:
             r["minutes_to"] = round((r["ts_ms"] - now_ms) / 60_000, 1)
-            r["utc"] = datetime.fromtimestamp(r["ts_ms"] / 1000, timezone.utc).isoformat(timespec="minutes")
+            r["utc"] = datetime.fromtimestamp(r["ts_ms"] / 1000, UTC).isoformat(timespec="minutes")
         return rows
 
 

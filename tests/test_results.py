@@ -15,6 +15,7 @@ from shortbot.results import Result
 from shortbot.symlock import AccountBusy, SymbolBusy
 from tests import fake_errors as err
 from tests.fakes import SYM, FakeCcxt
+
 CID = "sb-cQNT-1f2e3d4c"
 
 

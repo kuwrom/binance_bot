@@ -6,7 +6,7 @@ investor mild, ecosystem slightly positive; larger unlocks fall harder."""
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +38,12 @@ class EventStore:
             raise ValueError("a source (URL or document) is required for every unlock")
         dt = datetime.fromisoformat(date)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         cur = self.db.execute(
             "INSERT INTO unlocks (base, unlock_ts_ms, pct_supply, recipient, source, notes, added_at)"
             " VALUES (?,?,?,?,?,?,?)", (base.upper().removeprefix("1000"), int(dt.timestamp() * 1000), pct_supply,
                                        recipient, source, notes,
-                                       datetime.now(timezone.utc).isoformat(timespec="seconds")))  # wall-clock: added
+                                       datetime.now(UTC).isoformat(timespec="seconds")))  # wall-clock: added
         self.db.commit()
         return int(cur.lastrowid)
 
@@ -58,5 +58,5 @@ class EventStore:
         rows = [dict(r) for r in self.db.execute(q + " ORDER BY unlock_ts_ms", args).fetchall()]
         for r in rows:
             r["days_to_unlock"] = round((r["unlock_ts_ms"] - now) / 86_400_000, 2)
-            r["date"] = datetime.fromtimestamp(r["unlock_ts_ms"] / 1000, timezone.utc).isoformat(timespec="minutes")
+            r["date"] = datetime.fromtimestamp(r["unlock_ts_ms"] / 1000, UTC).isoformat(timespec="minutes")
         return rows

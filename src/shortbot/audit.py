@@ -29,10 +29,11 @@ import os
 import re
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from .procs import code_version
 from .redact import redact
@@ -168,7 +169,7 @@ def _trade_id(res: Any) -> int | None:
 def _symbol(s: Any) -> str | None:
     if not isinstance(s, str) or not s:
         return None
-    from .exchange import to_symbol   # here: journal imports this module, and exchange pulls in ccxt
+    from .exchange import to_symbol  # here: journal imports this module, and exchange pulls in ccxt
     return to_symbol(s)
 
 

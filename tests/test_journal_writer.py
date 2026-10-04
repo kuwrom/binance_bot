@@ -217,7 +217,7 @@ async def test_a_unit_that_loses_the_whole_transaction_fails_its_batch_and_the_r
     with HeldLock(tmp_path / "j.db", 0.3):
         first = asyncio.create_task(j.write(Journal.set, "first", "1"))
         await asyncio.sleep(0)
-        j.post(lambda j: j.db.execute("PRAGMA max_page_count=%d" % (pages + 1)))   # the disk is full from here
+        j.post(lambda j: j.db.execute(f"PRAGMA max_page_count={pages + 1}"))   # the disk is full from here
         j.post(Journal.set, "huge", "x" * 100_000)                   # SQLITE_FULL: SQLite rolls the batch back
         j.post(lambda j: j.db.execute("PRAGMA max_page_count=1000000"))
         after = asyncio.create_task(j.write(Journal.set, "after", "1"))

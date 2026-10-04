@@ -15,8 +15,8 @@ import logging
 import time
 from datetime import datetime
 
-from . import killswitch as ks
 from . import entry_gates, entry_intents, errors, intents, reconcile, resolver, stops
+from . import killswitch as ks
 from .exchange import to_raw
 from .gateway import handler
 from .guardian_loop import guarded, send_safe

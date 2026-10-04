@@ -30,11 +30,12 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any
 
 from .backup_rotate import STAMP, SUFFIX, manifest_of, rotate, rotate_log
 from .commands import Arg, add_arguments
@@ -66,7 +67,7 @@ class BackupConfig:
     offbox: str                   # command template, run once per new file ('' = local copies only)
 
     @classmethod
-    def from_env(cls) -> "BackupConfig":
+    def from_env(cls) -> BackupConfig:
         return cls(Path(os.getenv("SHORTBOT_BACKUP_DIR", "data/backups")),
                    int(os.getenv("SHORTBOT_BACKUP_KEEP_DAILY", 7)), int(os.getenv("SHORTBOT_BACKUP_KEEP_WEEKLY", 4)),
                    os.getenv("SHORTBOT_BACKUP_OFFBOX", "").strip())
@@ -276,7 +277,7 @@ def run(dbs: Sequence[Path], cfg: BackupConfig, rotate_logs: Sequence[Path] = ()
         alert: Callable[[str, str], None] = _alert) -> dict[str, Any]:
     """Back up each database (own copy, manifest, rotation), then copytruncate the given logs. ok=False on any error;
     a missing kv mark is only a warning (the copy is verified)."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     cfg.dir.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {"ok": True, "dir": str(cfg.dir.resolve()), "copies": [], "errors": [], "warnings": []}
     try:

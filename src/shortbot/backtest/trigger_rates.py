@@ -1,6 +1,8 @@
 """Replay scan_triggers' move and volume rules on real 15m bars (data/hist5m.db): coins triggered per 15m window.
 Results: docs/SCANNING.md "Measured trigger rates". Run: python -m shortbot.backtest.trigger_rates [hist5m.db]"""
-import sqlite3, sys
+import sqlite3
+import sys
+
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view as sw
 

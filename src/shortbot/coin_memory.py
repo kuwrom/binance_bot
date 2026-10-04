@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .exchange import to_symbol
@@ -62,7 +62,7 @@ def _rows(db: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict[str, 
 
 
 def _iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def _ago(ms: int) -> str:

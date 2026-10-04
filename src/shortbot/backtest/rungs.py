@@ -126,8 +126,8 @@ def run_hourly() -> dict[str, Any]:
 
 
 def run_daily(db: Path) -> dict[str, Any]:
-    from .carry_regime import STABLES, daily_funding
     from ..histdaily import load
+    from .carry_regime import STABLES, daily_funding
     data = load(str(db))
     results = []
     for s, bars in data["bars"].items():
@@ -166,8 +166,8 @@ def main(argv: list[str] | None = None) -> None:
         prov = P.stamp(P.config("shortbot.backtest.rungs", given), fp)
         print("saved to", out := P.write_json("rungs_daily" if a.daily else "rungs", prov, res, None))
     print(json.dumps(res, indent=1))
-    from .register_rows import rungs_rows
     from .. import trial_register as TR
+    from .register_rows import rungs_rows
     study = "rungs_daily" if a.daily else "rungs"
     print(f"trial register: {TR.record(study, rungs_rows(res, study), prov, out)} rows")
 

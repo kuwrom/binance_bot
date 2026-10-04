@@ -18,7 +18,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .. import clock as market_clock   # market time (a replay pins it)
+from .. import clock as market_clock  # market time (a replay pins it)
 from .streams import DB_PATH, DERIVED, TF_MS, raw_id
 
 

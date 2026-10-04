@@ -4,7 +4,7 @@ queue, and a check that read only the journal repeated its alert on every pass (
 hold). Journal.mark keeps this process's markers readable until they land."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from shortbot import guardian_jobs, guardian_watch, reconcile
 from shortbot.config import RiskLimits, Settings
@@ -74,7 +74,7 @@ async def test_a_news_item_on_a_short_is_alerted_once_across_held_passes(tmp_pat
 @STALL_REPORT
 async def test_a_listing_announced_during_a_held_first_run_is_announced_once(tmp_path, monkeypatch):
     g = guardian_on(tmp_path / "j.db")
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     old = {"catalog": "New Listing", "url": "https://example.com/old", "title": "FOOUSDT perpetual", "time": now}
     new = {**old, "url": "https://example.com/new", "title": "BARUSDT perpetual"}
     seen = iter([[old]] + [[old, new]] * 4)                          # the first run only marks what is listed

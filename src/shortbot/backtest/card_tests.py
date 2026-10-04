@@ -38,7 +38,6 @@ from .. import provenance as P
 from .carry_regime import DAY, STABLES, daily_funding
 
 
-
 def _t(xs: list[float]) -> float | None:
     if len(xs) < 3 or statistics.stdev(xs) == 0:
         return None
@@ -276,8 +275,8 @@ def main(argv: list[str] | None = None) -> None:
         prov = P.stamp(P.config("shortbot.backtest.card_tests", given), fp)
         print("saved to", out := P.write_json("card_tests_hourly" if a.hourly else "card_tests_daily", prov, res, None))
     print(json.dumps(res, indent=1, default=str))
-    from .register_rows import card_rows
     from .. import trial_register as TR
+    from .register_rows import card_rows
     print(f"trial register: {TR.record('card_tests', card_rows(res), prov, out)} rows")
 
 

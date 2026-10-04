@@ -2,7 +2,7 @@
 says so in one line, and both stay cheap (only setups with trades in their epoch or a recorded stop; a 1 h cache that
 a closed trade or a ladder write invalidates at once)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -85,7 +85,7 @@ def test_setups_without_trades_in_their_epoch_are_not_replayed(monkeypatch):
     j.closed_results = closed(SHADOW_PF, NORMAL_FH)
     V.ladders(j)                                                   # records pump_fade's stop
     from shortbot import setup_ladder as L
-    L.reset_epoch(j, "funding_hi", "human", "rule change", now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    L.reset_epoch(j, "funding_hi", "human", "rule change", now=datetime(2026, 11, 1, tzinfo=UTC))
     V._cache.clear()
     calls = []
     monkeypatch.setattr(risk_budget, "_ladder", lambda jj, s: calls.append(s) or {"state": "NORMAL", "mult": 1.0})

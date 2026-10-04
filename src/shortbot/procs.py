@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -245,7 +245,7 @@ def audit(rows: dict[int, dict], live: dict[int, Proc], disk: dict[str, str | No
         else:
             why, detail = "unregistered", ("unregistered: it runs code from before process registration (#58), or "
                                            "failed to register, and may ignore the kill switch and per-symbol locks")
-        since = datetime.fromtimestamp(now - p.age_s, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        since = datetime.fromtimestamp(now - p.age_s, UTC).strftime("%Y-%m-%d %H:%M UTC")
         findings.append({"pid": pid, "role": p.role, "age_s": p.age_s, "why": why,
                          "text": f"shortbot-{p.role} pid {pid}, up {age(p.age_s)} (since {since}): {detail}. "
                                  f"Fix: {HINT[p.role]}."})

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ccxt.async_support as ccxt
@@ -77,7 +77,7 @@ def _plan(tr, symbol: str, trade: dict | None, pos: dict | None, on_book: dict, 
     waiting = {r["target"] for r in rows if r["status"] in ("placing", "unknown") and r["trade_id"] == tid}
     held = {(r["target"], r["price"], r["qty"]) for r in targets.rows(
         tr.j, "symbol=? AND trade_id=? AND status='rejected' AND updated_at >= ?",
-        (symbol, tid, datetime.fromtimestamp(time.time() - REJECT_HOLD_S, timezone.utc).isoformat(timespec="seconds")))}
+        (symbol, tid, datetime.fromtimestamp(time.time() - REJECT_HOLD_S, UTC).isoformat(timespec="seconds")))}
     place = [w for w in want if id(w) not in kept and w["target"] not in waiting
              and (w["target"], w["price"], w["qty"]) not in held]
     return cancel, place

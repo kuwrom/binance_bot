@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .features import Coin, Market
 from .sim import H, Plan
@@ -90,7 +90,7 @@ def discount(m: Market, coin: Coin, i: int) -> bool:
 
 
 def weekend(m: Market, coin: Coin, i: int) -> bool:
-    return datetime.fromtimestamp((coin.rows[i]["ts"] + H) / 1000, timezone.utc).weekday() >= 5
+    return datetime.fromtimestamp((coin.rows[i]["ts"] + H) / 1000, UTC).weekday() >= 5
 
 
 def liquid(m: Market, coin: Coin, i: int) -> bool:

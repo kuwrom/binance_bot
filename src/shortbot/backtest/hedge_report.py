@@ -223,8 +223,8 @@ def main(argv: list[str] | None = None) -> None:
         out = P.save(a.out or P.run_dir("hedge", prov["git"]), prov, {
             "hedge.md": text, "hedge.json": json.dumps({**js, "provenance": prov}, indent=1, default=str)})
         text += f"\nsaved to {out}"
-    from .register_rows import hedge_rows
     from .. import trial_register as TR
+    from .register_rows import hedge_rows
     print(text + f"\ntrial register: {TR.record('hedge', hedge_rows(js), prov, out)} rows")
 
 

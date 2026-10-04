@@ -21,7 +21,7 @@ close or a re-finalised trade can't count twice.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from . import alerts_view
@@ -46,7 +46,7 @@ TRADE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,14}) #(\d+)\b|\b[Tt]rades? #(\d+)\b|\
 
 
 def _today(today: date | None) -> date:
-    return today or datetime.now(timezone.utc).date()
+    return today or datetime.now(UTC).date()
 
 
 def _citations(row: dict[str, Any]) -> list[tuple[str | None, int]]:

@@ -7,11 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from shortbot import audit, cli, cmd_research, cmd_trade, stale_guard
+from shortbot import audit, cli, cmd_research, cmd_trade, commands, stale_guard
 from shortbot.commands import build_parser
 from shortbot.config import ResearchBounds, RiskLimits, Settings
 from shortbot.journal import Journal
-from shortbot import commands
 from shortbot.mcp_server import TOOLS
 from shortbot.params import ResearchParams
 
@@ -117,7 +116,7 @@ def _effect(j: Journal) -> dict:
         rows = j._rows(f"SELECT * FROM {t}")
         if t == "kv":
             rows = [r for r in rows if not r["k"].startswith("proc:")]
-        out[t] = sorted((json.dumps(_norm(r), sort_keys=True, default=str) for r in rows))
+        out[t] = sorted(json.dumps(_norm(r), sort_keys=True, default=str) for r in rows)
     return out
 
 

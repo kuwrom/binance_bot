@@ -1,8 +1,7 @@
 import pytest
 
 from shortbot.config import RiskLimits
-from shortbot.risk import (AccountState, RiskViolation, ShortRequest, check_open_short,
-                           max_notional_for_risk)
+from shortbot.risk import AccountState, RiskViolation, ShortRequest, check_open_short, max_notional_for_risk
 
 LIMITS = RiskLimits()
 ACCT = AccountState(equity=10_000, open_symbols=(), total_open_notional=0, day_pnl=0)

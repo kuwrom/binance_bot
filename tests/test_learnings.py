@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from shortbot import learnings_view as lv
 from shortbot import cmd_research
+from shortbot import learnings_view as lv
 from shortbot.cli_brief import brief
 from shortbot.journal import Journal
 from shortbot.research import report

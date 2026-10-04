@@ -7,8 +7,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from shortbot import guardian_jobs as gj
 from shortbot import entry_gates, intents, refresh, registry_seed, research, sweeps
+from shortbot import guardian_jobs as gj
 from shortbot import killswitch as ks
 from shortbot.journal import Journal
 from shortbot.market import calendar, market_map, social, supply

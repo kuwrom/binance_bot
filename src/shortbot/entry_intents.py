@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ccxt.async_support as ccxt
@@ -257,8 +257,8 @@ def explained_symbols(desk) -> set[str]:
     """Symbols where a position the journal doesn't know (yet) is expected: an order of ours that is or may be on the
     book (the fill poll or the reconciler journals it), a send rejected in the last LATE_S (it may still have run:
     the sweep adopts its fill), or an external order that filled (already alerted)."""
-    since = datetime.fromtimestamp(time.time() - LATE_S, timezone.utc).isoformat(timespec="seconds")
-    from .probes import active_symbols   # a live demo probe's position (#55); an expired row counts as absent
+    since = datetime.fromtimestamp(time.time() - LATE_S, UTC).isoformat(timespec="seconds")
+    from .probes import active_symbols  # a live demo probe's position (#55); an expired row counts as absent
     ours = {r["symbol"] for r in desk._rows("status IN ('pending','placing','unknown','external','external_filled')"
                                             " OR (status='rejected' AND created_at >= ?)", (since,))}
     return ours | active_symbols(desk.j)

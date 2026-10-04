@@ -15,7 +15,7 @@ another process, reads it (posted, it could still wait in the writer's queue). t
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -39,7 +39,7 @@ def still_due(fraction: float, orig: float, size: float) -> float:
 
 def recent_change(j, symbol: str, trade: dict | None, now: datetime | None = None) -> dict[str, Any] | None:
     """The newest size-changing decision on this trade within RECENT_CHANGE_S, if any."""
-    since = ((now or datetime.now(timezone.utc)) - timedelta(seconds=RECENT_CHANGE_S)).isoformat(timespec="seconds")
+    since = ((now or datetime.now(UTC)) - timedelta(seconds=RECENT_CHANGE_S)).isoformat(timespec="seconds")
     opened = (trade or {}).get("opened_at") or ""   # a previous trade's exits on this symbol are not this one's
     rows = j._rows(f"SELECT ts, action, reasoning, snapshot FROM decisions WHERE symbol=? AND ts > ? AND ts >= ? AND "
                    f"action IN ({','.join('?' * len(SIZE_EVENTS))}) ORDER BY id DESC LIMIT 1",

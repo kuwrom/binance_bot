@@ -2,7 +2,7 @@
 period ends or the loss recovers (killswitch_rearm.py, task #63). Baseline limits: daily 3%, dd_stop 12%."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -12,7 +12,7 @@ from shortbot.journal import Journal
 from shortbot.killswitch import ACTIVE, HALTED, REDUCING
 from tests.test_killswitch import SETTINGS
 
-NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)   # a Thursday
+NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)   # a Thursday
 
 
 def later(minutes=0, days=0):

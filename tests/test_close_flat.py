@@ -196,8 +196,8 @@ async def test_a_remainders_cover_racing_to_flat_raises_no_naked_alert():
 
 
 async def test_a_fills_stop_meeting_a_flat_position_is_no_instant_naked_alert():
-    from tests.test_entries import desk, prop
     from tests import fake_errors as err
+    from tests.test_entries import desk, prop
     d, t, fake = desk(price=1.0)
     eid = (await d.propose_group([prop(1.04)]))["placed"][0]["entry_id"]
     real = fake.create_order

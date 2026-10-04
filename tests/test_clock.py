@@ -4,7 +4,7 @@ history as of that moment, never after it (task #29)."""
 import ast
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from shortbot import clock
@@ -25,7 +25,7 @@ def test_default_is_the_wall_clock():
 def test_at_pins_and_restores():
     with clock.at(T):
         assert clock.now_ms() == T
-        assert clock.now_dt() == datetime.fromtimestamp(T / 1000, timezone.utc)
+        assert clock.now_dt() == datetime.fromtimestamp(T / 1000, UTC)
         with clock.at(T + 5):
             assert clock.now_ms() == T + 5
         assert clock.now_ms() == T

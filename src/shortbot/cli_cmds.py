@@ -33,7 +33,8 @@ async def study(name: str, fetch: bool = False) -> dict[str, Any]:
         from .shadow_eval import evaluate as ev_ladder
         res, rows = ev_ladder(app.journal), RR.ladder_rows
     elif name == "patterns":
-        from . import patterns as pt, patterns_data as ptd
+        from . import patterns as pt
+        from . import patterns_data as ptd
         fetched = await ptd.fetch_all(app.ex, app.journal, days=10) if fetch else None
         res, rows = {"fetch": fetched, **pt.report(pt.run(ptd.load(app.journal)))}, RR.patterns_rows
     elif name == "laggard":
@@ -91,6 +92,7 @@ async def registry(action: str, arg: str | None = None, status: str | None = Non
     Arg("kind", "--kind", choices=("tier1", "tier2", "fomc", "maintenance")), Arg("source", "--source")))
 async def macro_add(name: str, when: str, kind: str, source: str) -> dict[str, Any]:
     from datetime import datetime
+
     from .market.calendar import MacroCalendar
     MacroCalendar(get_app().settings.db_path).add(int(datetime.fromisoformat(when).timestamp() * 1000), name, kind,
                                                   source)

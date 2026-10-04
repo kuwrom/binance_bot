@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from statistics import NormalDist
 from typing import Any
 
@@ -28,7 +28,7 @@ SQUEEZE_OVERRUN_R = 2.0   # stopped out by a bar that ran >= 2R past entry: a sq
 
 
 def day_of(ts: int) -> str:
-    return datetime.fromtimestamp(ts / 1000, timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
 
 
 def sharpe(xs: list[float]) -> float | None:

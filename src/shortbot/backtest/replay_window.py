@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +39,7 @@ def periods(a_ms: int, b_ms: int, today_ms: int) -> list[str]:
     out: list[str] = []
     d, end = a_ms // DAY * DAY, min(b_ms, today_ms // DAY * DAY)
     while d < end:
-        day = datetime.fromtimestamp(d / 1000, timezone.utc)
+        day = datetime.fromtimestamp(d / 1000, UTC)
         nxt = day.replace(day=1, month=day.month % 12 + 1, year=day.year + (day.month == 12), hour=0, minute=0)
         month_end = int(nxt.timestamp() * 1000)
         if month_end + MONTHLY_AFTER <= today_ms:

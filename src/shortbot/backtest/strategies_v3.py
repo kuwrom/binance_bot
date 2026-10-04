@@ -30,9 +30,8 @@ from dataclasses import replace
 from .features import Coin, Market
 from .sim import Plan, simulate
 from .strategies import WARMUP, Trial, atr_abs, plan, r_targets, tradable
-from .strategies_v2 import BASE, discount
+from .strategies_v2 import BASE, discount, variant
 from .strategies_v2 import ledger as ledger_v2
-from .strategies_v2 import variant
 
 # ---------------------------------------------------------------- Q1: breakdown entry types
 BD_DROPS = (-15, -8)                  # round 0's bounce_fade grid; -8 is the live `breakdown` detector

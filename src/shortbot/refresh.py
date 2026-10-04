@@ -22,7 +22,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 KV_KEY = "research_refresh_at"
@@ -100,7 +100,7 @@ def main() -> int:
     if data.name == "data":
         os.chdir(data.parent)       # relative defaults elsewhere ("data/scripts_catalog.json") point into it too
     from .journal import Journal
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     day, git = now.strftime("%Y-%m-%d"), P.git_state()
     run_dir = P.run_dir("refresh", git, now)
     run_dir.mkdir(parents=True, exist_ok=True)

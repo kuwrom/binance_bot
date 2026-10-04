@@ -14,9 +14,10 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request

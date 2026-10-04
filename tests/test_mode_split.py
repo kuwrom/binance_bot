@@ -2,7 +2,7 @@
 history, positions, resting entries or account state (equity peak, period marks, day peak, research overrides)."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,7 +19,7 @@ from shortbot.trading import Trader
 from tests.fakes import FakeCcxt, FakeEx, neutral_budget, ok_prechecks
 from tests.test_entries import favorable, prop
 
-T0 = datetime(2026, 10, 1, 0, 5, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 1, 0, 5, tzinfo=UTC)
 
 
 def pair(tmp_path):

@@ -10,7 +10,7 @@ import asyncio
 import json
 import math
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import clientid, errors
@@ -85,7 +85,7 @@ class Probe:
 
     # ------------------------------------------------------------ recording
     async def call(self, label: str, fn, *args, secret: tuple[str, ...] = (), **kw) -> tuple[bool, Any]:
-        row: dict[str, Any] = {"call": label, "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds")}
+        row: dict[str, Any] = {"call": label, "at": datetime.now(UTC).isoformat(timespec="milliseconds")}
         t0 = time.monotonic()
         try:
             res = await fn(*args, **kw)

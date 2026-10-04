@@ -1,6 +1,5 @@
 """Client order ids (clientid.py): Binance's format, and which send errors leave the outcome unknown."""
 
-import asyncio
 
 import ccxt
 import pytest
@@ -22,7 +21,7 @@ def test_ids_fit_binance_format_and_are_unique_per_intent():
     (ccxt.OperationFailed("-1006 / -1000"), True), (ccxt.BadResponse("garbled"), True),
     (ccxt.NetworkError("reset"), True),
     (ccxt.InvalidNonce("-1021"), True), (ccxt.RateLimitExceeded("429"), True), (ccxt.ExchangeError("unmapped"), True),
-    (asyncio.TimeoutError(), True), (ccxt.InvalidOrder("-4164 min notional"), False),
+    (TimeoutError(), True), (ccxt.InvalidOrder("-4164 min notional"), False),
     (ccxt.InsufficientFunds("-2019 margin"), False), (ccxt.OrderImmediatelyFillable("-2021"), False),
     (ccxt.BadRequest("-1102"), False)])
 def test_only_a_definite_refusal_counts_as_not_placed(err, unknown):

@@ -3,7 +3,7 @@ trade history as one closed trade; every limit trade opens at its fill (exchange
 is make-before-break and a partial fill's remainder is pulled without losing track of it. Moving `fake.price` fills
 and triggers on its own (fake_engine.py); the journal is compared with the fake's fills and income."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -15,13 +15,13 @@ from tests.test_entry_races import SYM2, desk, prop
 
 
 def iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def later(monkeypatch, seconds=5):
     """The poll runs a tick after the fills: anything stamped 'now' lands after them (income startTime is a hard
     bound, so a trade opened at the poll misses its own entry commission)."""
-    ts = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    ts = (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat(timespec="seconds")
     monkeypatch.setattr("shortbot.journal.now_iso", lambda: ts)
     monkeypatch.setattr("shortbot.tranches._now", lambda: ts)
 

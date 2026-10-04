@@ -23,9 +23,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from . import audit, fill_report, intents, journal_tables, registry
 from .journal_learnings import LEARNINGS_SCHEMA, LearningStore
@@ -83,7 +84,7 @@ T = TypeVar("T")
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _group(rows: list[dict[str, Any]], key: str, empty: str = "untagged") -> dict[str, dict[str, float]]:

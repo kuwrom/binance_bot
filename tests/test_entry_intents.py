@@ -3,7 +3,7 @@ sent, ambiguous sends are resolved by client id and never resent, and the sweep 
 
 import asyncio
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -45,7 +45,7 @@ def desk(limits=None):
 
 
 def age(d, eid, seconds=entry_intents.GRACE_S + 1):
-    ts = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    ts = (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat(timespec="seconds")
     d.j.db.execute("UPDATE entries SET created_at=? WHERE id=?", (ts, eid))
     d.j.db.commit()
 

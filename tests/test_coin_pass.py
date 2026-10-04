@@ -4,7 +4,7 @@ break_watch alerted but nothing closed, expired reads scored; the fake-out p90 f
 refresh=True runs the same pass."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from shortbot import alerts_view, clock, cmd_desk, coin_pass, guardian, weight
 from shortbot import coin_memory as cm
@@ -24,7 +24,7 @@ RISE = [1.0 + 0.0067 * k for k in range(1, 13)]          # the last hour: +8% ag
 
 
 def iso(ms):
-    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds")
 
 
 def bars(closes, step=M5, now=NOW):

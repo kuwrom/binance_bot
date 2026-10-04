@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections.abc import Callable, Hashable, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from statistics import NormalDist
 from typing import Any
 
@@ -43,7 +43,7 @@ def t975(df: int) -> float:
 
 
 def day_of(ts_ms: int | None) -> str | None:
-    return None if ts_ms is None else datetime.fromtimestamp(ts_ms / 1000, timezone.utc).strftime("%Y-%m-%d")
+    return None if ts_ms is None else datetime.fromtimestamp(ts_ms / 1000, UTC).strftime("%Y-%m-%d")
 
 
 def days_of(rows: Sequence[dict[str, Any]], ts: str = "ts_ms") -> list[Hashable]:

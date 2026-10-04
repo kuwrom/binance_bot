@@ -20,8 +20,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any
 
 from . import fill_quality
 from .close_intent import still_due

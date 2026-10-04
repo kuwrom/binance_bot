@@ -7,7 +7,7 @@ becomes an alert for the analyst and human."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .tape_math import clear_above_round, clear_below_round, round_zone
@@ -58,7 +58,7 @@ def plan_actions(trade: dict[str, Any], pos: dict[str, Any], now: datetime | Non
     stop = pos.get("exchange_stop")
     ex = excursions(trade, mark)
     pnl, acts = ex["pnl_pct"], []
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     age_h = (now - datetime.fromisoformat(trade["opened_at"])).total_seconds() / 3600
 
     # funding budget (round 2/3, learning #22): shorts paying funding must earn it. Once funding paid reaches
