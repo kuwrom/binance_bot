@@ -53,13 +53,17 @@ alert() {   # kind message: once per (kind, commit) when $3 is a commit
   return 0
 }
 
-health() {  # the guardian beats after the restart and the web console answers, within 3 minutes
-  local deadline=$(( $(date +%s) + 180 )) hb
+health() {  # the guardian beats after the restart, the web console answers and the order gateway (when the compose
+            # file has one) beats, within 3 minutes
+  local deadline=$(( $(date +%s) + 180 )) hb gb gw=0
+  docker compose config --services 2>/dev/null | grep -qx gateway && gw=1
   while :; do
     hb=$(sqlite3 -readonly data/shortbot.db "SELECT CAST(v AS INTEGER) FROM kv WHERE k='guardian_heartbeat'" \
          2>/dev/null || echo 0)
-    if [ "${hb:-0}" -ge "$BUILT_AT" ] && { [ ! -f data/web_auth.json ] ||
-         curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:8080/; }; then
+    gb=$(sqlite3 -readonly data/shortbot.db \
+         "SELECT CAST(json_extract(v, '\$.at') AS INTEGER) FROM kv WHERE k='gateway_heartbeat'" 2>/dev/null || echo 0)
+    if [ "${hb:-0}" -ge "$BUILT_AT" ] && { [ "$gw" = 0 ] || [ "${gb:-0}" -ge "$BUILT_AT" ]; } &&
+       { [ ! -f data/web_auth.json ] || curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:8080/; }; then
       return 0
     fi
     [ "$(date +%s)" -ge "$deadline" ] && return 1

@@ -3,6 +3,7 @@ services:
     build: .
     command: shortbot-guardian
     user: "${UID:-1000}:${GID:-1000}"   # same owner as the host user so MCP + guardian share data/
+    pid: host                           # one pid table with the host's sessions (DEPLOY §4): intent sweep, process check
     env_file: .env
     environment:
       SHORTBOT_DB: /app/data/shortbot.db
@@ -19,6 +20,7 @@ services:
     build: .
     command: shortbot-web serve
     user: "${UID:-1000}:${GID:-1000}"
+    pid: host
     env_file: .env
     environment:
       SHORTBOT_DB: /app/data/shortbot.db
@@ -33,6 +35,24 @@ services:
       - ./CLAUDE.md:/app/repo/CLAUDE.md:ro
       - ./README.md:/app/repo/README.md:ro
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # The order gateway (docs/GATEWAY.md, DEPLOY §4a): the sessions' order writes over data/run/gateway-<mode>.sock.
+  # It runs whatever SHORTBOT_GATEWAY says; the sessions use it only when SHORTBOT_GATEWAY=1 in .env.
+  gateway:
+    build: .
+    command: shortbot-gateway
+    user: "${UID:-1000}:${GID:-1000}"
+    pid: host
+    env_file: .env
+    environment:
+      SHORTBOT_DB: /app/data/shortbot.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    stop_grace_period: 45s              # it drains running intents for up to 30 s on SIGTERM
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
