@@ -38,7 +38,7 @@ cd ~/binance_bot
 docker compose up -d --build
 docker compose logs -f guardian     # expect "Guardian online (demo)" and a Telegram ping
 ```
-It restarts automatically (`restart: unless-stopped`). After code changes, run `deploy/sync.sh`, then `docker compose up -d --build`.
+It restarts automatically (`restart: unless-stopped`). After code changes: on the desk server, push to master and it deploys itself (§10); on a server without §10, run `deploy/sync.sh`, then `docker compose up -d --build`.
 The same command starts the web console and Caddy (docs/WEB.md). Both need a one-time setup: `shortbot-web passwd` and `data/web.env`.
 
 **One user for every process.** The guardian, every Claude Code session (its MCP server), the CLI and the backup job must run as the same user, the one that owns `data/`, including `data/locks`. Never use `sudo`. docker compose already runs the guardian as your UID and GID. If a lock file was created by another user, the others lock it read-only. That still excludes them (flock(2) works whatever the open mode), but the holder info that a busy symbol reports is lost, and the log warns once per process. On NFS an exclusive flock needs write access, so keep `data/` on a local disk.
@@ -200,6 +200,47 @@ launchctl print gui/$(id -u)/com.shortbot.backup | grep -i "last exit"
   - For uv, also update `UV_VERSION` and both sums in `bootstrap.sh` from the release's `uv-<arch>-unknown-linux-gnu.tar.gz.sha256` files, and `version` and the x86_64 `checksum` in `.github/workflows/ci.yml`.
   - `uv lock --check` with the laptop's uv confirms it still reads the lock.
 - **The pinned image is untested.** The commit that added these pins didn't build it; only the lock was verified (scratch venv, full suite). After the first `docker compose up -d --build`, check `docker compose run --rm guardian python -c "import ccxt; print(ccxt.__version__)"` prints `4.5.84`.
+
+## 10. Continuous delivery: push to master, the server deploys
+The desk server deploys itself. You push to `master`; GitHub CI runs lint, types and tests; on a green run the
+`promote` job fast-forwards the `deploy` branch to that commit (`.github/workflows/ci.yml`). On the server, cron runs
+`deploy/autodeploy.sh` every 5 minutes. When `deploy` has moved, it:
+1. fast-forwards the checkout (`~/binance_bot` is a git checkout on branch `deploy`);
+2. runs `uv sync --locked --extra dev`, then the full test suite **on the server** (it catches what only this box
+   shows, like a slower disk);
+3. runs `docker compose up -d --build`, which rebuilds the guardian and the web console, and prunes dangling images;
+4. checks that the guardian beats again and that the web console answers, within 3 minutes.
+
+If a step fails, it rolls back: the commit that was running, its venv and, if a new image was already built, its
+images. It sends one urgent `deploy_failed` alert (Telegram and the brief) and doesn't retry that commit; the next
+push gets a fresh try. It never deploys over local changes to tracked files, or to a `deploy` branch that was
+rewritten. Either case sends `deploy_blocked`, once per commit, and every run checks again.
+
+Expect about 8 minutes from push to running: CI takes ~3 minutes, the poll up to 5, and the tests on the server ~5
+while the old guardian keeps running. The restart itself takes seconds, and exchange-side stops protect open positions
+through it. After a deploy, Claude sessions on the server reconnect `shortbot` via `/mcp` (their writes are refused on
+stale code, #68).
+
+**Setup on the server**, done once on 2026-10-04:
+```bash
+ssh-keygen -t ed25519 -N "" -C "shortbot-desk read-only deploy" -f ~/.ssh/binance_bot_deploy
+# GitHub's host keys, from its API over HTTPS
+curl -fsS https://api.github.com/meta | python3 -c "import json,sys; [print('github.com '+k) for k in json.load(sys.stdin)['ssh_keys']]" >> ~/.ssh/known_hosts
+# from the laptop: the public key as a READ-ONLY deploy key (it is tied to that gh login's token)
+gh repo deploy-key add binance_bot_deploy.pub --repo kuwrom/binance_bot --title "shortbot-desk EC2 (read-only, autodeploy)"
+# in ~/binance_bot: a git checkout of the commit that is running (data/, .env and .venv are gitignored)
+git init -b deploy && git remote add origin git@github.com:kuwrom/binance_bot.git
+git config core.sshCommand "ssh -i ~/.ssh/binance_bot_deploy -o IdentitiesOnly=yes"
+git fetch origin master && git reset <running sha>          # git status must be clean
+crontab -e   # */5 * * * *  $HOME/binance_bot/deploy/autodeploy.sh >> $HOME/binance_bot/data/logs/deploy.log 2>&1
+```
+- **Logs**: `data/logs/deploy.log` (one line per step), `data/logs/deploy-tests.log` (the last test run),
+  `data/logs/autodeploy.state` (the last commit deployed, failed or alerted).
+- **Deploy by hand** (e.g. after a `deploy_blocked`): `cd ~/binance_bot && deploy/autodeploy.sh`. After a rewrite,
+  first `git fetch origin && git reset --hard origin/deploy`.
+- **Pause deploys**: comment out the cron line. `deploy/sync.sh` refuses a server that is a git checkout: copying
+  files over it would block every later deploy (`--force` to copy anyway).
+- The key is read-only. Code written on the server reaches the desk only through GitHub.
 
 ## Cost
 Roughly $25–35/month for a t4g.medium, gp3 disk and the Elastic IP (public IPv4 is billed). Check current AWS pricing.

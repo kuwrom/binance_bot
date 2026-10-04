@@ -42,3 +42,28 @@ jobs:
       - name: test (pytest)
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: scripts/check test
+
+  # Continuous delivery (deploy/DEPLOY.md §10): a master commit that passed `check` moves the `deploy` branch, which the
+  # desk server polls (deploy/autodeploy.sh). A plain push, never forced, so it only fast-forwards: an older run that
+  # finishes late can't move it back. A push made with GITHUB_TOKEN starts no workflow run, so this can't loop.
+  promote:
+    needs: check
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: fast-forward deploy to this commit
+        run: |
+          if git push origin "${GITHUB_SHA}:refs/heads/deploy"; then exit 0; fi
+          git fetch origin deploy
+          if git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "deploy is already at a newer commit: nothing to do"
+          else
+            echo "::error::deploy and ${GITHUB_SHA} have diverged (master rewritten?): move deploy by hand (deploy/DEPLOY.md §10)"
+            exit 1
+          fi

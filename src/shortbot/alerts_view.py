@@ -19,7 +19,7 @@ URGENT_KINDS = (
     "stop_missing", "stop_restore_failed", "stop_failed", "widen_undone", "position_flip", "bridge_left",
     "bridge_swept", "unexpected_long", "untracked_position", "fill_unresolved", "entry_cancel_failing",
     "zombie_order", "external_order", "daily_loss_limit", "governor_halt", "squeeze_risk", "price_spike",
-    "funding_hourly", "backup_failed", "plan_stop_unreachable", "adl_risk_persistent", "margin_not_isolated",
+    "funding_hourly", "backup_failed", "deploy_failed", "deploy_blocked", "plan_stop_unreachable", "adl_risk_persistent", "margin_not_isolated",
     "margin_asset", "margin_thin", "margin_check_error", "multi_assets_mode", "target_cancel_failed",
     "prearm_left", "stop_left", "orphan_stop_*", "unexpected_error",   # #37: stops left behind, order-path bugs
     "break_watch",   # an open short's break score reached 2 of #81's checks (guardian_coins.py); alerts never exit
