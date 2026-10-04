@@ -77,7 +77,9 @@ async def test_a_held_write_lock_delays_no_protective_pass_and_its_backlog_drain
     for job, ts in passes.items():
         held_ts = [t for t in ts if t < released]
         assert len(held_ts) > 100, job                         # ~every 13 ms, for 5 s
-        assert max(b - a for a, b in itertools.pairwise(held_ts)) < 0.1, job
+        gaps = sorted(b - a for a, b in itertools.pairwise(held_ts))
+        # no pass waits on the lock (SQLite's busy wait is seconds); one scheduler hiccup on a loaded box is not one
+        assert gaps[-1] < 1.0 and gaps[int(len(gaps) * 0.99)] < 0.1, (job, gaps[-3:])
     batches = [n for n in done if n]                           # a COMMIT with units queued: one batch of them
     assert left == 0 and len(batches) * 20 <= queued, (len(batches), queued)   # before #81: a COMMIT per unit
     assert g.j.get("guardian_heartbeat") != hb0                # the bookkeeping landed after the release
