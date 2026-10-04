@@ -175,7 +175,7 @@ def wilson(k: float, n: float, z: float = Z975) -> tuple[float, float]:
     return (round(max(0.0, c - h), 4), round(min(1.0, c + h), 4))
 
 
-def clustered_wilson(hits: Sequence[bool | int], clusters: Sequence[Hashable]) -> dict[str, Any]:
+def clustered_wilson(hits: Sequence[float], clusters: Sequence[Hashable]) -> dict[str, Any]:   # hits: 0/1, or bools
     """Share of hits with a Wilson 95% CI on the df-adjusted effective n: n* = n_eff (z / t_{G-1})^2 with n_eff
     = p(1-p) / V truncated at n (Dean & Pagano 2015 §2-3). ci95 is None with fewer than 2 clusters."""
     ys = [1.0 if h else 0.0 for h in hits]

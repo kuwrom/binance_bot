@@ -79,9 +79,9 @@ def put_metrics(db, raw: str, hourly: dict[int, dict], start_ms: int, merge: boo
 
 
 def put_funding(db, raw: str, rows: list[list], start_ms: int) -> int:
-    rows = [(raw, int(t), float(r)) for t, r in rows if t >= start_ms]
-    db.executemany("INSERT OR REPLACE INTO funding VALUES (?,?,?)", rows)
-    return len(rows)
+    fresh = [(raw, int(t), float(r)) for t, r in rows if t >= start_ms]
+    db.executemany("INSERT OR REPLACE INTO funding VALUES (?,?,?)", fresh)
+    return len(fresh)
 
 
 def _last(db, raw: str) -> dict[str, int | None]:

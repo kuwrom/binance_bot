@@ -82,12 +82,12 @@ def detect(rows: list[dict], funding: list[list[float]] | None = None) -> list[t
         if r.get("prem") is not None and r["prem"] >= 0.005:
             raw.append(("premium_hi", i))
     for ts, rate in funding or []:
-        i = _index_at(rows, ts)
-        if i is not None and i >= 72:
+        at = _index_at(rows, ts)
+        if at is not None and at >= 72:
             if rate >= 0.0005:
-                raw.append(("funding_hi", i))
+                raw.append(("funding_hi", at))
             elif rate <= -0.0005:
-                raw.append(("funding_neg", i))
+                raw.append(("funding_neg", at))
     raw += [("pump_fail", j) for j in _pump_fail(rows, [i for k, i in raw if k == "pump_kk"])]
     return _dedup(raw)
 
@@ -102,7 +102,7 @@ def _pump_fail(rows: list[dict], pumps: list[int]) -> list[int]:
     return out
 
 
-def _index_at(rows: list[dict], ts: int) -> int | None:
+def _index_at(rows: list[dict], ts: float) -> int | None:
     """Hour whose CLOSE is at or just before ts (a funding print at ts is known from then on)."""
     lo, hi = 0, len(rows) - 1
     if not rows or ts < rows[0]["ts"] + 3_600_000:
@@ -117,7 +117,8 @@ def _index_at(rows: list[dict], ts: int) -> int | None:
 
 
 def _dedup(raw: list[tuple[str, int]]) -> list[tuple[str, int]]:
-    out, last = [], {}
+    out: list[tuple[str, int]] = []
+    last: dict[str, int] = {}   # kind -> its last kept hour
     for kind, i in sorted(set(raw), key=lambda x: (x[0], x[1])):
         if i - last.get(kind, -10_000) >= DEDUP_H[kind]:
             out.append((kind, i))

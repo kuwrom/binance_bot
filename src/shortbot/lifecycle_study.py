@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from typing import Any
+from typing import Any, TypedDict
 
 HORIZONS = (7, 14, 30, 60, 90, 180)
 DRAWDOWNS = (0.3, 0.5, 0.7, 0.9)
@@ -103,7 +103,12 @@ def days_below(closes: list[float], anchor: float, level: float) -> int | None:
     return next((i for i, c in enumerate(closes) if c <= anchor * (1 - level)), None)
 
 
-def pump_window(opens: list[float], highs: list[float]) -> dict[str, float | int]:
+class PumpWindow(TypedDict):
+    ath_day: int          # days from listing to the all-time high
+    ath_vs_open: float    # the ATH's size vs the first open
+
+
+def pump_window(opens: list[float], highs: list[float]) -> PumpWindow:
     """Days from listing to the all-time high (wick) and the ATH's size vs the first open."""
     i = max(range(len(highs)), key=lambda k: highs[k])
     return {"ath_day": i, "ath_vs_open": highs[i] / opens[0] - 1}

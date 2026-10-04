@@ -52,7 +52,7 @@ async def tail(ex, pacer: Pacer, raw: str, spot_raw: str | None, last: dict[str,
     out: dict[str, Any] = {"errors": {}}
 
     def since(k: str) -> int:
-        return (last.get(k) + HOUR) if last.get(k) else start_ms
+        return (ts + HOUR) if (ts := last.get(k)) else start_ms
 
     async def kl(k: str, fn, sym: str) -> None:
         s = since(k)

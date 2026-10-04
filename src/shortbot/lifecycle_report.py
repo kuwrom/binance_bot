@@ -279,7 +279,7 @@ def predictors(coins) -> str:
 
 def report(coins) -> str:
     new = [c for c in coins if c["spot"] != "spot_old"]
-    q = defaultdict(int)
+    q: defaultdict[str, int] = defaultdict(int)   # quarter -> coins
     for c in coins:
         q[c["quarter"]] += 1
     parts = [f"coins: {len(coins)} (new tokens {len(new)}); delisted {sum(c['delisted'] for c in coins)}; "

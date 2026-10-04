@@ -147,7 +147,7 @@ def parse_metrics(text: str) -> list[dict[str, Any]]:
     out = []
     for line in lines:
         r = line.split(",")
-        row = {"ts": _ms(r[ti])}
+        row: dict[str, Any] = {"ts": _ms(r[ti])}
         row.update({k: (_f(r[i]) if i < len(r) else None) for k, i in idx.items()})
         out.append(row)
     return sorted(out, key=lambda x: x["ts"])
@@ -251,6 +251,8 @@ async def list_series(f: Fetcher, kind: str, raw: str, start_ms: int) -> tuple[l
 async def first_day_ms(f: Fetcher, raw: str) -> int | None:
     """Midnight of the first daily perp kline file ever archived (listing proxy for the onboard date)."""
     _, dp, _ = series_prefixes("perp", raw)
+    if dp is None:   # never: perp klines have daily files (series_prefixes)
+        raise ValueError(f"{raw}: no daily perp prefix")
     keys, _ = await f.list(dp, max_keys=1)
     if not keys:
         return None

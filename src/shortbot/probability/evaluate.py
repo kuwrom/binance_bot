@@ -89,7 +89,7 @@ def report(journal) -> dict[str, Any]:
     bss = None
     if both:
         bm, ba = brier(both, "p_model"), brier(both, "p_analyst")
-        bss = round(1 - ba["brier"] / bm["brier"], 3) if bm and bm["brier"] else None
+        bss = round(1 - ba["brier"] / bm["brier"], 3) if ba and bm and bm["brier"] else None   # (ba: never None here)
     ctx = lambda k: (lambda r: r["context"].get(k, "n/a"))  # noqa: E731
     days = len({d for d in days_of(rows) if isinstance(d, str)})
     return {

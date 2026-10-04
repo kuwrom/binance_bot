@@ -49,6 +49,7 @@ def monthly_prefix(kind: str, raw: str) -> tuple[str, str]:
 
 
 def put(db, kind: str, raw: str, text: str) -> int:
+    rows: list[tuple[Any, ...]]   # bars (7 columns) or funding (3)
     if kind == "bars":
         rows = [(raw, b["ts"], b["o"], b["h"], b["l"], b["c"], b["qv"]) for b in V.parse_klines(text)]
         db.executemany("INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?,?)", rows)

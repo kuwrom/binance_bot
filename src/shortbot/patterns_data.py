@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any
+from typing import Any, TypeGuard
 
 from .exchange import to_raw
 
@@ -23,15 +23,21 @@ def _kl(rows: list) -> list[dict[str, float]]:
              "qv": float(r[7]), "n": int(r[8]), "tbq": float(r[10])} for r in rows]
 
 
+def _ok(x: object) -> TypeGuard[Any]:
+    """A gather(return_exceptions=True) answer that is not an exception (ccxt's answers are Any)."""
+    return not isinstance(x, BaseException)
+
+
 async def fetch_coin(ex, sym: str, hours: int, info: dict[str, Any]) -> dict[str, Any]:
     raw = to_raw(sym)
     lim = min(hours, 1500)
-    perp, oi, prem, fund = await asyncio.gather(
+    answers = await asyncio.gather(
         ex.public.fapiPublicGetKlines({"symbol": raw, "interval": "1h", "limit": lim}),
         ex.public.fapiDataGetOpenInterestHist({"symbol": raw, "period": "1h", "limit": min(hours, 500)}),
         ex.public.fapiPublicGetPremiumIndexKlines({"symbol": raw, "interval": "1h", "limit": lim}),
         ex.public.fapiPublicGetFundingRate({"symbol": raw, "limit": 100}),
         return_exceptions=True)
+    perp, oi, prem, fund = answers   # a separate unpack: unpacked in place, mypy can't type these (has-type)
     if isinstance(perp, BaseException):
         raise perp
     spot_raw, mult = await ex.spot_symbol(sym)
@@ -41,13 +47,12 @@ async def fetch_coin(ex, sym: str, hours: int, info: dict[str, Any]) -> dict[str
             spot = _kl(await ex.spot.publicGetKlines({"symbol": spot_raw, "interval": "1h", "limit": lim}))
         except Exception:  # noqa: BLE001 - spot is optional context
             spot = []
-    ok = lambda x: not isinstance(x, BaseException)  # noqa: E731
     return {
         "symbol": sym, "onboard_ms": int(info.get("onboardDate") or 0), "tags": info.get("underlyingSubType") or [],
         "perp": _kl(perp),
-        "oi": {int(r["timestamp"]): float(r["sumOpenInterestValue"]) for r in oi} if ok(oi) else {},
-        "premium": {int(r[0]): float(r[4]) for r in prem} if ok(prem) else {},
-        "funding": [[int(r["fundingTime"]), float(r["fundingRate"])] for r in fund] if ok(fund) else [],
+        "oi": {int(r["timestamp"]): float(r["sumOpenInterestValue"]) for r in oi} if _ok(oi) else {},
+        "premium": {int(r[0]): float(r[4]) for r in prem} if _ok(prem) else {},
+        "funding": [[int(r["fundingTime"]), float(r["fundingRate"])] for r in fund] if _ok(fund) else [],
         "spot": [{**b, "c": b["c"] * mult} for b in spot], "spot_mult": mult,
     }
 

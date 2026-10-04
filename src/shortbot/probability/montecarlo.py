@@ -10,6 +10,7 @@ Residuals are de-meaned: no drift is assumed (this is the no-edge baseline with 
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 
@@ -84,6 +85,7 @@ def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: l
         at = price[rows, np.minimum(t_idx + 1, steps)]
         return np.maximum(at, level) if upper else np.minimum(at, level)
 
+    out: dict[str, Any]
     out = {"ok": True, "paths": n_paths, "hours": hours, "sigma_hourly": sigma_hourly,
            "p_stop_within_T": float(np.mean(t_stop <= steps)), "targets": []}
     for tgt in sorted(targets, reverse=True):

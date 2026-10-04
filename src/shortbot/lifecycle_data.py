@@ -24,6 +24,7 @@ import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -96,7 +97,8 @@ def _s3_list(c: httpx.Client, prefix: str) -> tuple[list[str], list[str]]:
         keys += re.findall(r"<Key>([^<]+\.zip)</Key>", t)
         if "<IsTruncated>true" not in t:
             return dirs, keys
-        marker = re.search(r"<NextMarker>(.*?)</NextMarker>", t).group(1) if "<NextMarker>" in t else keys[-1]
+        nxt = re.search(r"<NextMarker>(.*?)</NextMarker>", t)
+        marker = nxt.group(1) if nxt else keys[-1]
 
 
 def _s3_symbols(c: httpx.Client) -> list[str]:
@@ -113,7 +115,7 @@ def _s3_recover(c: httpx.Client, db: sqlite3.Connection, sym: str, since: float)
     first = datetime.strptime(keys[0][-11:-4], "%Y-%m").replace(tzinfo=UTC).timestamp() * 1000
     if first < since - 31 * DAY_MS:
         return
-    bars = []
+    bars: list[tuple[Any, ...]] = []   # klines rows: (symbol, ts, o, h, l, c, v, quote volume)
     for k in keys:
         z = zipfile.ZipFile(io.BytesIO(_get(c, VISION + k).content))
         for line in z.read(z.namelist()[0]).decode().splitlines():
