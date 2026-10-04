@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
-from . import origin, weight
+from . import origin, weight, write_guard
 from .config import Settings
 from .risk import bracket_for
 
@@ -57,6 +57,8 @@ class _Guarded:
         call = _CALL.get()
         if call and call["limited"]:
             raise call["limited"]   # ccxt retrying a 418/429: the same answer, nothing sent
+        if why := write_guard.refusal(method, url):   # #36 step 7: no write bypasses the order gateway
+            raise write_guard.WriteRefused(None, why)
         await weight.admit(url, method, call["cost"] if call else 1)
         try:
             return await super().fetch(url, method, headers, body)

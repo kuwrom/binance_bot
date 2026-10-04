@@ -36,7 +36,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import audit, commands, gateway, gateway_health, origin, procs, weight
+from . import audit, commands, gateway, gateway_health, origin, procs, weight, write_guard
 from . import gateway_wire as wire
 from .gateway import LocalGateway
 from .intents import Intent
@@ -219,7 +219,7 @@ class GatewayServer:
         cls = cmd.weight if cmd is not None else weight.PROTECTIVE
         gw = self.gw_guardian if gateway.CTX.get(it.kind) == "guardian" else self.gw
         with audit.on_behalf(it.actor, claude_session if isinstance(claude_session, str) else None), \
-                weight.tagged(cls, wait_s=weight.ENTRY_WAIT_S), self.run_for(process):
+                weight.tagged(cls, wait_s=weight.ENTRY_WAIT_S), self.run_for(process), write_guard.writing("gateway"):
             return await gw.submit(it, on_start=accepted)
 
     def run_for(self, process: Any) -> contextlib.AbstractContextManager[None]:

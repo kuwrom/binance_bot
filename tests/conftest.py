@@ -130,6 +130,28 @@ _TESTS = str(Path(__file__).resolve().parent)
 _WRITES = {"create_order": 0, "cancel_order": 1, "edit_order": 1, "cancel_all_orders": 0,
            "set_margin_mode": 1, "set_leverage": 1, "set_position_mode": None}
 _RAW_WRITE = re.compile(r"^(fapi|sapi|dapi)?[Pp]rivate(Post|Put|Delete)")   # implicit endpoints that write
+# #36 step 7: the request each write is, for write_guard's rule (GuardedUSDM.fetch applies it to the real client)
+_REQUEST = {"create_order": ("POST", "/fapi/v1/order"), "cancel_order": ("DELETE", "/fapi/v1/order"),
+            "edit_order": ("PUT", "/fapi/v1/order"), "cancel_all_orders": ("DELETE", "/fapi/v1/allOpenOrders"),
+            "set_margin_mode": ("POST", "/fapi/v1/marginType"), "set_leverage": ("POST", "/fapi/v1/leverage"),
+            "set_position_mode": ("POST", "/fapi/v1/positionSide/dual")}
+
+
+def _request(name: str) -> tuple[str, str]:
+    """A raw implicit write's request: fapiPrivatePostListenKey -> POST /fapi/v1/listenKey."""
+    if name in _REQUEST:
+        return _REQUEST[name]
+    m = re.match(r"^(?:fapi|sapi|dapi)?[Pp]rivate(Post|Put|Delete)(\w+)$", name)
+    assert m, name
+    return m.group(1).upper(), "/fapi/v1/" + m.group(2)[0].lower() + m.group(2)[1:]
+
+
+def _write_guard(name: str) -> None:
+    """The fake refuses what the real client would (write_guard.refusal), before the request."""
+    from shortbot import write_guard
+    method, path = _request(name)
+    if why := write_guard.refusal(method, "https://demo-fapi.binance.com" + path):
+        raise write_guard.WriteRefused(None, why)
 
 
 # Trader's send primitives (#36 step 0) and withdraw(): their callers hold the locks, so a test may drive them directly
@@ -218,6 +240,7 @@ def order_lock_audit(monkeypatch):
                 bad.append(f"{what} outside an intent (from {root})")
             if why := not_orders(what):
                 bad.append(why)
+            _write_guard(name)
             return await real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name, at in _WRITES.items():
@@ -231,6 +254,7 @@ def order_lock_audit(monkeypatch):
                 bad.append(f"{name} outside an intent (from {root})")
             if why := not_orders(name):
                 bad.append(why)
+            _write_guard(name)
             return await real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, audited)
     for name in [n for n in dir(FakeCcxt) if _RAW_WRITE.match(n)]:
@@ -302,6 +326,14 @@ def sent(monkeypatch):
             return await _real(self, *a, **k)
         monkeypatch.setattr(FakeCcxt, name, spy)
     return out
+
+
+@pytest.fixture(autouse=True)
+def write_role(monkeypatch):
+    """Every test starts in the local role (write_guard: in-process writes, as with the gateway off); a test that
+    builds an app as an MCP server or the guardian with the flag on gets the client role it would have."""
+    from shortbot import write_guard
+    monkeypatch.setattr(write_guard, "_role", "local")
 
 
 @pytest.fixture(autouse=True)

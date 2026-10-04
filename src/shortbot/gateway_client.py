@@ -16,7 +16,8 @@ LocalGateway, behind SHORTBOT_GATEWAY.
   - risk-adding kinds fail closed: the refusal is journalled here;
   - BREAKGLASS kinds (killswitch.ALLOWED: close, partial close, move_stop (tighten only), cancelling entries, flatten;
     plus halts, whose withdrawal is a cancel) run in this process under the symbol flock, actor
-    `breakglass:<the caller's actor>`, with an urgent gateway_down_breakglass alert (D3);
+    `breakglass:<the caller's actor>`, with an urgent gateway_down_breakglass alert (D3); their exchange writes leave
+    the process inside write_guard.writing("breakglass") (step 7);
   - if the gateway had already journalled it, both find its row and answer it (stored, or still running: never
     resend), so it never runs twice.
 - A stale client (D5, step 5: an MCP server on code older than the disk's, `stale` = its stale_guard refusal) sends
@@ -34,7 +35,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from . import audit, commands
+from . import audit, commands, write_guard
 from . import gateway_wire as wire
 from .gateway import Gateway, LocalGateway
 from .intents import Intent
@@ -197,7 +198,7 @@ class RemoteGateway:
         ran: list[bool] = []
         log.warning("gateway unavailable (%s): %s %s runs here as break-glass", why, intent.kind, intent.id)
         try:
-            with audit.acting(actor):
+            with audit.acting(actor), write_guard.writing("breakglass"):
                 return await local.submit(dataclasses.replace(intent, actor=actor), on_start=lambda: ran.append(True))
         finally:
             if ran:

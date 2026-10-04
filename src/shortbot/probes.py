@@ -33,6 +33,7 @@ from . import probe_cases as pc
 from . import probe_kit as kit
 from . import probe_stream as ps
 from . import probe_trades as pt
+from . import write_guard
 from .exchange import to_symbol
 from .journal import now_iso
 from .symlock import SymbolBusy
@@ -267,7 +268,8 @@ async def run(tr, name: str, symbol: str = DEFAULT_SYMBOL) -> dict[str, Any]:
         async with tr.symbol_lock(sym, f"probe {name}"):
             if why := await _inside(tr, sym, name):
                 return {"ok": False, "refused": True, **head, "error": why}
-            out, err, cleanup = await _body(p, case)
+            with write_guard.writing("probe"):   # raw, demo-only (_outside): their own context (#36 step 7)
+                out, err, cleanup = await _body(p, case)
     except SymbolBusy as e:
         return {"ok": False, "refused": True, **head, "error": str(e)}
     except Exception as e:  # noqa: BLE001 - a check that couldn't run: nothing was sent

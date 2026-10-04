@@ -31,6 +31,8 @@ def get_app(research: bool = True) -> App:
     global _app
     if _app is None:
         s = Settings.from_env()
+        from . import audit, write_guard
+        write_guard.configure(audit.process_kind(), s)   # #36 step 7: where this process's exchange writes may go
         ex = Exchanges(s)
         j = Journal(s.db_path, s.mode)
         params = ResearchParams(s, j) if research else None
