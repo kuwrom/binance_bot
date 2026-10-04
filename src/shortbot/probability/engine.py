@@ -64,6 +64,7 @@ class ProbabilityEngine:
             flow = await ctx.flow_candles("5m", MC_HISTORY_5M)
             sim = simulate_short([c[4] for c in flow], entry, stop, targets, hours, s)
             if sim.get("ok"):
+                out["mc_hours_simulated"] = sim["hours_simulated"]   # < hours when the memory cap cut the horizon
                 by_t = {x["target"]: x for x in sim["targets"]}
                 for row in out["targets"]:
                     m = by_t.get(row["target"])

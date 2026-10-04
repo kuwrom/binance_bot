@@ -40,6 +40,22 @@ def stationary_bootstrap(z: np.ndarray, n_paths: int, n_steps: int, mean_block: 
     return z[idx]
 
 
+# Memory cap: every (paths x steps) array costs ~100 B/cell across the temporaries (int64 index, shocks, log paths,
+# prices, bridge draws). A 750 h unlock time stop at 10k paths was 90M cells (~5 GB) and the host OOM-killed the
+# gateway mid-entry (2026-10-04, KITE). Paths shrink first (down to MC_MIN_PATHS), then the horizon is cut; the
+# closed-form baseline (baseline.py) still covers the full horizon.
+MC_MAX_CELLS = 5_000_000
+MC_MIN_PATHS = 2_000
+
+
+def mc_grid(n_paths: int, steps: int) -> tuple[int, int]:
+    """(paths, steps) with paths * steps <= MC_MAX_CELLS: fewer paths first, then a shorter horizon."""
+    if n_paths * steps <= MC_MAX_CELLS:
+        return n_paths, steps
+    n_paths = max(min(n_paths, MC_MIN_PATHS), MC_MAX_CELLS // steps)
+    return n_paths, max(1, min(steps, MC_MAX_CELLS // n_paths))
+
+
 def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: list[float], hours: float,
                    sigma_hourly: float, n_paths: int = 10_000, mean_block: float = 1.0,
                    seed: int | None = 7, bridge: bool = True) -> dict:
@@ -50,6 +66,8 @@ def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: l
         return {"ok": False, "error": "not enough 5m history for simulation"}
     rng = np.random.default_rng(seed)
     steps = max(1, int(round(hours * BARS_PER_HOUR_5M)))
+    n_paths, steps = mc_grid(n_paths, steps)
+    hours_simulated = steps / BARS_PER_HOUR_5M
     sig_step = sigma_hourly / math.sqrt(BARS_PER_HOUR_5M)
     shocks = stationary_bootstrap(z, n_paths, steps, mean_block, rng) * sig_step
     # exact price-martingale correction for the EMPIRICAL residuals: E[exp(shock − c)] = 1. (−σ²/2 is only right
@@ -86,7 +104,8 @@ def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: l
         return np.maximum(at, level) if upper else np.minimum(at, level)
 
     out: dict[str, Any]
-    out = {"ok": True, "paths": n_paths, "hours": hours, "sigma_hourly": sigma_hourly,
+    out = {"ok": True, "paths": n_paths, "hours": hours, "hours_simulated": round(hours_simulated, 2),
+           "horizon_capped": hours_simulated < hours - 1e-9, "sigma_hourly": sigma_hourly,
            "p_stop_within_T": float(np.mean(t_stop <= steps)), "targets": []}
     for tgt in sorted(targets, reverse=True):
         t_tgt = first_hit(math.log(tgt / entry), False)

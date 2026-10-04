@@ -73,3 +73,28 @@ def test_vol_scaled_bracket_positive_at_extreme_vol():
     from shortbot.probability import vol_scaled_bracket
     stop, target = vol_scaled_bracket(100.0, 0.25, 24)      # 25%/h: linear bracket would go negative
     assert target > 0 and stop > 100 and b.short_geometry(100, stop, target, 0.25, 24)["p_target"] > 0
+
+
+def test_mc_grid_caps_memory_paths_first_then_horizon():
+    from shortbot.probability.montecarlo import MC_MAX_CELLS, MC_MIN_PATHS, mc_grid
+    assert mc_grid(8000, 576) == (8000, 576)                  # 48 h: under the cap, untouched
+    p, s = mc_grid(10_000, 600)                               # just over: fewer paths, full horizon
+    assert s == 600 and p * s <= MC_MAX_CELLS and p >= MC_MIN_PATHS
+    p, s = mc_grid(10_000, 750 * 12)                          # KITE's 750 h unlock time stop (2026-10-04 OOM)
+    assert p == MC_MIN_PATHS and p * s <= MC_MAX_CELLS and s < 750 * 12
+
+
+def test_long_time_stop_simulates_capped_horizon_without_blowing_memory():
+    import tracemalloc
+
+    import numpy as np
+
+    from shortbot.probability.montecarlo import simulate_short
+    rng = np.random.default_rng(5)
+    closes = list(np.exp(np.cumsum(rng.normal(0, 0.004, 2000))))
+    tracemalloc.start()
+    r = simulate_short(closes, 1.0, 1.07, [0.90, 0.80], 750.0, 0.01)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert r["ok"] and r["horizon_capped"] and r["hours_simulated"] < 750
+    assert peak < 1_000_000_000                               # uncapped: ~5 GB
