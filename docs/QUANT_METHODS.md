@@ -13,6 +13,19 @@ A gap analysis against the open-source state of the art, by stage of the researc
 
 No single repo has it all. Jansen's ML4T is the best single map of the workflow. pysystemtrade is the best on sizing. skfolio and arch are the best libraries for portfolio statistics and validation.
 
+## Design principle: these methods inform the AI, they don't replace it (2026-10-04)
+The desk's measured edge is the AI's judgement, not any rule set. From the demo journal (Mac copy retired 2026-10-03; anecdote-level, one regime):
+- **Exits:** the AI's 9 discretionary exits banked +0.19R. Replaying each trade's own plan on 1m candles gives −2.21R, so the AI added **+2.40R** (7 of 9 positive).
+- **Declines:** the 15 high-score candidates it declined would have lost a short 3.0% over 24h, with 4 squeezes above 10%.
+- **Per trade:** AI trades made +0.29R/trade (n 14, t 1.55). The same pipeline traded mechanically in the replay made −0.07R.
+- **Miss:** early profit-taking (0G left +0.64R).
+
+**So:**
+- Everything below (vetoes, hazards, regime probabilities, meta-label scores, forecast sizing, factor reports) feeds the AI's brief and defaults. The AI can decline or override with a written reason. These methods never become hard gates on its entries or exits.
+- The exceptions are the existing safety rails: kill switch, risk limits, governor, never working around a rejection.
+- The AI's own decisions are measured against counterfactuals (task: AI decision attribution). That protects its authority with evidence and finds its failure modes.
+- Backtests of rules remain the way to test *ideas*. They are not a substitute for the decision-maker.
+
 ## The gap matrix
 Status: ✅ have · ◐ partial · ✗ missing. Fit: how much it would help this desk, given what our studies found.
 
