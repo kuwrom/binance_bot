@@ -90,8 +90,9 @@ def candidates(labelled: bool = True, limit: int = 5000) -> list[dict]:
     return journal().candidates(labelled_only=labelled, limit=limit)
 
 
-def trades(limit: int = 500) -> list[dict]:
-    return journal().trades(limit)
+def trades(limit: int = 500, drills: bool = False) -> list[dict]:
+    """Newest first; the plumbing drills' trades (#46) only with drills=True."""
+    return journal().trades(limit, drills=drills)
 
 
 def metrics(symbol: str, limit: int = 1000) -> list[dict]:

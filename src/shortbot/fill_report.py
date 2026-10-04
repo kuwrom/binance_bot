@@ -29,6 +29,7 @@ from typing import Any
 
 from . import research_stats as rs
 from .backtest.sim import COSTS, Costs
+from .journal_tables import NOT_DRILL
 
 MAX_LAG_MS = 5_000
 MIN_TRADES = 30
@@ -94,8 +95,8 @@ def _json(x: Any) -> dict[str, Any]:
 
 def _trades(j, all_modes: bool) -> list[dict[str, Any]]:
     m, args = j._in_mode(all_modes)
-    rows = j._rows(f"SELECT id, symbol, setup, status, entry_features, fill_refs FROM trades WHERE {m} ORDER BY id",
-                   args)
+    rows = j._rows(f"SELECT id, symbol, setup, status, entry_features, fill_refs FROM trades WHERE {m} AND {NOT_DRILL}"
+                   " ORDER BY id", args)   # a plumbing drill's fills are no evidence (#46)
     for r in rows:   # the doc's `orders` are the trade's order ids (order_ids.py, #76): a doc of only those has none
         refs = {k: v for k, v in _json(r.pop("fill_refs")).items() if k != "orders"}
         has = any(refs.get(k) for k in ("fills", "missed", "vol24_usd"))

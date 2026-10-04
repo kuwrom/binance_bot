@@ -301,3 +301,15 @@ async def test_a_stop_fill_seen_before_its_algo_update_is_not_left_as_a_foreign_
         hub.push(algo("sb-s41-0a0b0c0d", "FINISHED", ai="88001"))
         await until(lambda: hits)
     assert s.last_foreign == {} and [h.job for h in hits] == ["positions"]
+
+
+async def test_each_connect_is_written_to_kv_at_once_with_its_time():
+    s, fake, hub, _ = build()   # STATS_S stays 10 min: only the connect writes it
+    async with running(s):
+        await until(lambda: s.up and s.j.get(us.STATS_KEY))
+        first = json.loads(s.j.get(us.STATS_KEY))
+        hub.push(expired_event(fake, KEY))
+        await until(lambda: json.loads(s.j.get(us.STATS_KEY))["connects"] == 2)
+    got = json.loads(s.j.get(us.STATS_KEY))
+    assert (first["connects"], first["up"]) == (1, True) and got["last_connect_at"] >= first["last_connect_at"]
+    assert got["since"] == first["since"] and got["reconnects"] == {"listenKeyExpired": 1}

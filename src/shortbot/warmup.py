@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeGuard
 
 from .exchange import to_symbol
+from .journal_tables import NOT_DRILL
 
 COLD_AFTER_H = 6.0
 WARMUP_MIN = 15.0
@@ -29,8 +30,8 @@ def _ts(iso: str | None) -> datetime | None:
 
 
 def last_activity(j) -> datetime | None:
-    """Latest trade open/close or completed warm-up."""
-    row = j.db.execute("SELECT MAX(COALESCE(closed_at, opened_at)) FROM trades").fetchone()
+    """Latest trade open/close or completed warm-up. A plumbing drill's trade is no activity (#46)."""
+    row = j.db.execute(f"SELECT MAX(COALESCE(closed_at, opened_at)) FROM trades WHERE {NOT_DRILL}").fetchone()
     wu = j.db.execute("SELECT MAX(checked_at) FROM warmups WHERE status='done'").fetchone()
     stamps = [t for t in (_ts(row[0]), _ts(wu[0])) if t]
     return max(stamps) if stamps else None

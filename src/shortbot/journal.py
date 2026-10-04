@@ -282,21 +282,23 @@ class Journal(ResearchStore, LearningStore):
         return [self._trade(r) for r in self._rows(f"SELECT * FROM trades WHERE status IN {st} AND {m} ORDER BY id",
                                                    args)]
 
-    def trades(self, limit: int = 50, all_modes: bool = False) -> list[dict[str, Any]]:
+    def trades(self, limit: int = 50, all_modes: bool = False, drills: bool = True) -> list[dict[str, Any]]:
+        """Newest first. drills=False: without the plumbing drills' trades (statistics, journal_tables.NOT_DRILL)."""
         m, args = self._in_mode(all_modes)
+        m += "" if drills else f" AND {journal_tables.NOT_DRILL}"
         return [self._trade(r) for r in self._rows(f"SELECT * FROM trades WHERE {m} ORDER BY id DESC LIMIT ?",
                                                    (*args, limit))]
 
     def closed_results(self, all_modes: bool = False) -> list[dict[str, Any]]:
         """Closed trades oldest first, with R = net pnl / initial risk at the stop (governor + tilts input; the
         registry's forward feed), the limits each was sized under (entry_features.limits, JSON text) and the
-        learnings its plan cited (uses_learnings: learnings_view.scores)."""
+        learnings its plan cited (uses_learnings: learnings_view.scores). Never a plumbing drill's (#46)."""
         m, args = self._in_mode(all_modes)
         rows = self._rows(
             "SELECT id, symbol, setup, experiment, conviction, regime_cell, opened_at, closed_at, pnl, mae_pct,"
             " mfe_pct, entry_price, initial_stop, amount, plan, CASE WHEN json_valid(entry_features)"
             " THEN json_extract(entry_features, '$.limits') END AS limits"
-            f" FROM trades WHERE status='closed' AND pnl IS NOT NULL AND {m}"
+            f" FROM trades WHERE status='closed' AND pnl IS NOT NULL AND {m} AND {journal_tables.NOT_DRILL}"
             " ORDER BY closed_at", args)
         for r in rows:
             plan = json.loads(r.pop("plan") or "{}") or {}
@@ -317,11 +319,13 @@ class Journal(ResearchStore, LearningStore):
             g["param_sets"] = len({r["limits"] for r in rows if (r["experiment"] or "baseline") == name
                                    and r["limits"]})
         other = {} if all_modes else dict(self.db.execute(
-            "SELECT mode, COUNT(*) FROM trades WHERE status='closed' AND mode!=? GROUP BY mode", (self.mode,)))
+            f"SELECT mode, COUNT(*) FROM trades WHERE status='closed' AND mode!=? AND {journal_tables.NOT_DRILL}"
+            " GROUP BY mode", (self.mode,)))
         return {"mode": "all" if all_modes else self.mode, "closed_trades": len(rows),
                 "total_pnl": round(sum(r["pnl"] for r in rows), 2), "by_setup": _group(rows, "setup"),
                 "by_experiment": by_exp, "by_entry_session": _group(rows, "session"),
-                "exits": exit_quality(self.trades(500, all_modes)), "fill_quality": fill_report.report(self, all_modes),
+                "exits": exit_quality(self.trades(500, all_modes, drills=False)),
+                "fill_quality": fill_report.report(self, all_modes),
                 **({"other_modes": other} if other else {})}
 
     # ------------------------------------------------------------ kv

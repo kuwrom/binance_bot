@@ -12,6 +12,7 @@ from typing import Any
 from .. import coin_memory
 from ..entry_intents import ON_BOOK
 from ..exchange import to_symbol
+from ..journal_tables import NOT_DRILL
 
 FEATURES = ("change_24h", "quote_volume", "funding_8h", "oi_value", "oi_change_24h", "rsi_1h", "vwap_z",
             "off_high_pct", "liq_tier", "lifecycle_stage", "listing_age_days")
@@ -142,7 +143,7 @@ def coin(j: Any, symbol: str, now_ms: int, hours: float = 6.0, min_volume: float
     labelled = j._rows("SELECT COUNT(*) n, AVG(short_ret_24h) avg, AVG(short_ret_24h > 0) hit FROM candidates WHERE "
                        "symbol=? AND short_ret_24h IS NOT NULL", (sym,))[0]
     closed = j._rows("SELECT id, setup, pnl, closed_at, exit_reason FROM trades WHERE symbol=? AND mode=? AND "
-                     "status='closed' ORDER BY id DESC LIMIT 5", (sym, j.mode))
+                     f"status='closed' AND {NOT_DRILL} ORDER BY id DESC LIMIT 5", (sym, j.mode))
     try:
         read = coin_memory.current_read(j.db, sym, now_ms)
     except sqlite3.OperationalError:   # no coin-memory tables yet

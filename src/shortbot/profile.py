@@ -90,7 +90,7 @@ async def build_profile(ex, journal, symbol: str) -> dict[str, Any]:
     c1h = await ex.public.fetch_ohlcv(symbol, "1h", limit=720)
     closes = [c[4] for c in c1h]
     m = cached(journal, 3600) or {}
-    trades = [t for t in journal.trades(500) if t["symbol"] == symbol and t["status"] == "closed"]
+    trades = [t for t in journal.trades(500, drills=False) if t["symbol"] == symbol and t["status"] == "closed"]
     return {
         "symbol": symbol,
         "how_to_read": "every coin number is blended with the all-coin number by w = n/(n+30); w < 0.5 means the "

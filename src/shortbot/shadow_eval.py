@@ -9,6 +9,8 @@ import math
 import statistics
 from typing import Any
 
+from .journal_tables import is_drill
+
 SIDE_COST = 0.001        # per side (fees + slippage), fraction of notional
 
 
@@ -39,6 +41,8 @@ def evaluate(journal) -> dict[str, Any]:
     per_trade: dict[int, dict[str, float]] = {}
     for tid, vs in by.items():
         t = journal.get_trade(tid) or {}
+        if is_drill(t.get("setup")):   # a plumbing drill's trade is no evidence (#46)
+            continue
         exit_px = t.get("exit_price") if t.get("status") == "closed" else None
         base = vs.get("base") or next(iter(vs.values()))
         init_r = next((x[4] for x in base if x[4]), None) or ((t.get("initial_stop") or 0) - (t.get("entry_price") or 0))

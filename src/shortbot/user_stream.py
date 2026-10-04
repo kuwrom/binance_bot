@@ -26,7 +26,8 @@ is time-boxed; a handler is Lane.trigger, which only brings a job's next run for
 alert, and one when it's back. Measured: events per type and kind, triggers per job, hits and misses, E->receive lag
 (exchange vs local clock, skew included: probe 387 saw -70 ms), entry partial->full times; the protective lane adds
 each triggered run's delay after the event and its lead over the schedule (guardian_loop.Lane.trigger). Written to kv
-`user_stream` every STATS_S."""
+`user_stream` every STATS_S and at each connect (`last_connect_at`): a restarted guardian's stream shows up at once (the
+restart drill, #46)."""
 
 from __future__ import annotations
 
@@ -150,6 +151,8 @@ class UserStream:
             self.connected_at, self.up_since_ms = self.clock(), int(time.time() * 1000)   # vs exchange fill times
             self.next_keepalive = self.connected_at + KEEPALIVE_S
             self.stats["connects"] += 1
+            self.stats["last_connect_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+            self._persist()   # posted: never waits for the journal
             log.info("user stream connected (%s, %s)", self.mode, HOSTS[self.mode])
             while True:
                 if self.reconnect_why:

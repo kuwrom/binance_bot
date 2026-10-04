@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS guardian_gaps (
 );
 CREATE INDEX IF NOT EXISTS guardian_gaps_end ON guardian_gaps (end_at);
 """
+# Plumbing drills' trades (drill.py, #46): real positions, so every reader of OPEN trades (exposure, risk, reconcile)
+# sees them; never statistics, so every reader of CLOSED results (closed_results and the rest) skips them. A NULL setup
+# is not a drill.
+DRILL_SETUP = "exp_drill"
+NOT_DRILL = "COALESCE(setup, '') NOT LIKE 'exp_drill%'"
+
+
+def is_drill(setup: object) -> bool:
+    return str(setup or "").startswith(DRILL_SETUP)
+
+
 COLUMNS: dict[str, dict[str, str]] = {
     "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL"},
 }
