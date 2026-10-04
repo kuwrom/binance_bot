@@ -25,7 +25,10 @@ shortbot-gateway process (gateway_client.RemoteGateway), which runs each through
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import importlib
 import inspect
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
@@ -76,6 +79,30 @@ def handler_for(kind: str) -> Callable[..., Awaitable[Any]]:
     run.__signature__ = inspect.Signature([  # type: ignore[attr-defined]  # inspect reads it; typeshed has no such attr
         inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD), *cmd.signature.parameters.values()])
     return run
+
+
+HANDLER_MODULES = ("entries_acts", "orphans", "guardian_positions", "guardian_margin", "guardian_plan")
+
+
+def load_handlers() -> None:
+    """Every @handler kind registered (the gateway serves them all; a client may have imported only some)."""
+    for m in HANDLER_MODULES:
+        importlib.import_module(f"{__package__}.{m}")
+
+
+def signature_of(kind: str) -> str:
+    """What a client and the gateway must agree on for an intent of `kind` (D5, gateway_wire.PROTOCOL): its
+    arguments' names, kinds, annotations and defaults (a client applies the defaults itself, commands.intent). The
+    code that runs is the gateway's; a changed signature means a client built the intent for other code."""
+    if kind not in HANDLERS and commands.by_kind(kind) is None:
+        load_handlers()
+    params = list(inspect.signature(handler_for(kind)).parameters.values())[1:]   # after ctx
+
+    def default(v: Any) -> str:
+        return "-" if v is inspect.Parameter.empty else json.dumps(v, sort_keys=True,
+                                                                    default=lambda o: f"<{type(o).__name__}>")
+    text = json.dumps([[p.name, p.kind.name, str(p.annotation), default(p.default)] for p in params])
+    return hashlib.sha256(f"{kind}:{text}".encode()).hexdigest()[:16]
 
 
 class Gateway(Protocol):

@@ -14,15 +14,16 @@ line, the peer's uid checked by the kernel's word.
 - Framing: json.dumps escapes every control character, so a message is one line; a line is at most LIMIT bytes
   (StreamReader limit: a longer one raises, and readline drops it, CPython asyncio/streams.py).
 
-Messages (`v` = PROTOCOL; a mismatch is refused, never guessed at):
+Messages (`v` = PROTOCOL; a mismatch is refused, never guessed at; v2: `sig`, `origin.process`, guardian kinds):
   -> {"v", "op": "hello", "mode"}                  <- {"op": "hello", "ok", "v", "mode", "pid", "code", "running"}
-  -> {"op": "submit", "intent": {id, kind, args, symbol, side, actor}, "origin": {"claude_session"}}
+  -> {"op": "submit", "intent": {id, kind, args, symbol, side, actor, sig}, "origin": {"claude_session", "process"}}
                                                    <- {"id", "status": "accepted"} once journalled and started, then
                                                       {"id", "status": "final", "result"} | {"id", "status": "error",
                                                       "error": {type, message}}; or at once {"id", "status": "busy"}
   -> {"op": "status", "id"}                        <- {"id", "status": "status", "answer"}   (None: never journalled)
   Any refusal: {"status": "refused", "ok": false, "error"} (a foreign uid, protocol, mode, a malformed or unserved
-  intent: nothing journalled), then the gateway closes the connection."""
+  intent: nothing journalled; `stale: true` when its `sig`, gateway.signature_of, is not the gateway's: D5), then the
+  gateway closes the connection."""
 
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ import pydantic_core
 
 from .intents import Intent
 
-PROTOCOL = 1
+PROTOCOL = 2
 LIMIT = 4 * 1024 * 1024    # bytes per line, both sides
 MAX_PATH = 103             # macOS sun_path is 104 bytes with its NUL (Linux: 108)
 
@@ -111,4 +112,6 @@ async def read(reader: asyncio.StreamReader, timeout_s: float | None) -> dict[st
 
 
 def intent_dict(it: Intent) -> dict[str, Any]:
-    return {"id": it.id, "kind": it.kind, "args": it.args, "symbol": it.symbol, "side": it.side, "actor": it.actor}
+    from .gateway import signature_of  # here: gateway pulls in the command registry
+    return {"id": it.id, "kind": it.kind, "args": it.args, "symbol": it.symbol, "side": it.side, "actor": it.actor,
+            "sig": signature_of(it.kind)}

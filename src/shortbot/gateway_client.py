@@ -18,7 +18,11 @@ LocalGateway, behind SHORTBOT_GATEWAY.
     plus halts, whose withdrawal is a cancel) run in this process under the symbol flock, actor
     `breakglass:<the caller's actor>`, with an urgent gateway_down_breakglass alert (D3);
   - if the gateway had already journalled it, both find its row and answer it (stored, or still running: never
-    resend), so it never runs twice."""
+    resend), so it never runs twice.
+- A stale client (D5, step 5: an MCP server on code older than the disk's, `stale` = its stale_guard refusal) sends
+  its intent all the same: the gateway runs it on the code on disk, after the protocol check (hello, and the intent's
+  signature: gateway.signature_of). Nothing of it ever runs here: whenever the gateway doesn't take it (down, another
+  protocol, a signature built for other code) the stale refusal is journalled instead, break-glass included."""
 
 from __future__ import annotations
 
@@ -46,15 +50,18 @@ BREAKGLASS = frozenset({"close_position", "move_stop", "cancel_entry_group", "fl
                         "kill_switch", "withdraw_entries"})
 
 
-def for_session(journal: Callable[[], Any], settings: Callable[[], Any], ctx: Any = None) -> Gateway:
+def for_session(journal: Callable[[], Any], settings: Callable[[], Any], ctx: Any = None,
+                stale: dict[str, Any] | None = None) -> Gateway:
     """Where a session's order write goes: the gateway process when SHORTBOT_GATEWAY is on, else this one."""
     if audit.intent_id() is None and audit.process_kind() in SESSIONS and settings().gateway:
-        return RemoteGateway(journal, settings, ctx)
+        return RemoteGateway(journal, settings, ctx, stale)
     return LocalGateway(journal, ctx)
 
 
-def for_command(cmd: commands.Command, journal: Callable[[], Any], settings: Callable[[], Any]) -> Gateway:
-    return for_session(journal, settings) if cmd.orders else LocalGateway(journal)
+def for_command(cmd: commands.Command, journal: Callable[[], Any], settings: Callable[[], Any],
+                stale: dict[str, Any] | None = None) -> Gateway:
+    """`stale`: this client's stale-code refusal (stale_guard.refuse), for whatever would run here (module doc)."""
+    return for_session(journal, settings, stale=stale) if cmd.orders else LocalGateway(journal)
 
 
 class Unavailable(Exception):
@@ -62,8 +69,9 @@ class Unavailable(Exception):
 
 
 class RemoteGateway:
-    def __init__(self, journal: Callable[[], Any], settings: Callable[[], Any], ctx: Any = None):
-        self._journal, self._settings, self.ctx = journal, settings, ctx
+    def __init__(self, journal: Callable[[], Any], settings: Callable[[], Any], ctx: Any = None,
+                 stale: dict[str, Any] | None = None):
+        self._journal, self._settings, self.ctx, self.stale = journal, settings, ctx, stale
 
     async def status(self, intent_id: str) -> Any | None:
         """The answer a resubmission would get (None: never journalled): from the gateway, else from the journal."""
@@ -154,6 +162,10 @@ class RemoteGateway:
     async def _without(self, intent: Intent, why: str) -> Any:
         """The gateway can't take `intent`: the journal decides under its id (module doc)."""
         local = LocalGateway(self._journal, self.ctx)
+        if self.stale is not None:   # nothing runs on stale code here (D5)
+            log.warning("gateway didn't take %s %s (%s), and this client's code is stale: refused", intent.kind,
+                        intent.id, why)
+            return await local.submit(intent, {**self.stale, "gateway": why})
         if intent.kind not in BREAKGLASS:
             log.warning("gateway unavailable (%s): %s %s refused", why, intent.kind, intent.id)
             return await local.submit(intent, {

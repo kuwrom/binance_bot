@@ -11,6 +11,9 @@ the order path included, so mcp_server.tool() asks `verdict()` before every call
   (`failed`);
 - hashing takes ~7 ms (168 files, 1.4 MB), so it runs in a thread and is cached TTL_S. A failed hash is not cached and
   fails closed for writes (code_check_failed), open for reads.
+- D5 (#36 step 5): a write sent to the order gateway runs on the gateway's code, so it is not refused here: the gateway
+  checks the protocol and the intent's signature instead (gateway_client.py). The refusal still covers whatever would
+  run in this process: journal-only writes, writes with the gateway off, and break-glass (passed as `stale`).
 The CLI (a fresh process per call) and the guardian (restarted after merges) don't come through here."""
 
 from __future__ import annotations

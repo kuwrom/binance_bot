@@ -31,7 +31,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import audit, commands, gateway_health, procs, weight
+from . import audit, commands, gateway, gateway_health, procs, weight
 from . import gateway_wire as wire
 from .gateway import LocalGateway
 from .intents import Intent
@@ -51,7 +51,11 @@ def served(kind: str) -> bool:
 
 
 class Refused(ValueError):
-    """Not taken: nothing journalled."""
+    """Not taken: nothing journalled. `stale`: the intent was built for other code than this gateway runs (D5)."""
+
+    def __init__(self, why: str, stale: bool = False):
+        super().__init__(why)
+        self.stale = stale
 
 
 class GatewayServer:
@@ -66,6 +70,7 @@ class GatewayServer:
     # ------------------------------------------------------------ life
     async def start(self) -> None:
         commands.load()
+        gateway.load_handlers()
         wire.secure_dir(self.path.parent)
         lock = self.path.with_suffix(".lock")
         fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
@@ -128,7 +133,7 @@ class GatewayServer:
                     raise Refused(f"unknown op {msg.get('op')!r}")
                 await writer.drain()
         except Refused as e:
-            self._refuse(writer, str(e))
+            self._refuse(writer, str(e), e.stale)
         except (ConnectionError, TimeoutError, ValueError) as e:
             log.debug("connection ended: %s", e)
         finally:
@@ -146,9 +151,10 @@ class GatewayServer:
         return None
 
     @staticmethod
-    def _refuse(writer: asyncio.StreamWriter, why: str) -> None:
+    def _refuse(writer: asyncio.StreamWriter, why: str, stale: bool = False) -> None:
         if not writer.is_closing():
-            writer.write(wire.encode({"status": "refused", "ok": False, "error": why}))
+            writer.write(wire.encode({"status": "refused", "ok": False, "error": why, **({"stale": True} if stale
+                                                                                       else {})}))
 
     # ------------------------------------------------------------ an intent
     def parse(self, raw: Any) -> Intent:
@@ -163,9 +169,13 @@ class GatewayServer:
         cmd = commands.by_kind(kind)
         try:
             base = cmd.intent(raw["args"]) if cmd is not None else Intent(kind, raw["args"], raw.get("symbol"))
-            return dataclasses.replace(base, id=iid, actor=actor, side=str(raw.get("side") or "short"))
+            it = dataclasses.replace(base, id=iid, actor=actor, side=str(raw.get("side") or "short"))
         except (TypeError, ValueError) as e:
             raise Refused(f"{kind}: {e}") from e
+        if (sig := raw.get("sig")) != (own := gateway.signature_of(kind)):   # D5: the protocol check for intents
+            raise Refused(f"{kind} was built for other code than this gateway runs (arguments {sig}, the gateway's "
+                          f"{own}): reconnect that session's shortbot (/mcp), or run it through the CLI", stale=True)
+        return it
 
     async def submit(self, msg: dict[str, Any], writer: asyncio.StreamWriter) -> dict[str, Any]:
         it = self.parse(msg.get("intent"))

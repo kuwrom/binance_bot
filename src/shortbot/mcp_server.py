@@ -81,17 +81,21 @@ def tool(cmd: Command):
     @functools.wraps(f)
     async def wrapper(*args, **kwargs):
         with audit.acting(f"mcp:{name}"), weight.tagged(cmd.weight, wait_s=weight.ENTRY_WAIT_S):
-            code = await stale_guard.verdict()   # #68: on stale code writes never run, reads carry a warning
+            code = await stale_guard.verdict()   # #68: on stale code nothing writes here, reads carry a warning
+            remote = False
             try:
                 if not cmd.write:
                     return stale_guard.annotate(await run(f(*args, **kwargs)), code)
-                gw = gateway_client.for_command(cmd, lambda: _app(f).journal, lambda: _app(f).settings)
+                refusal = None if code.ok or cmd.stale_exempt else await stale_guard.refuse(name, code, cmd.cli_form())
+                gw = gateway_client.for_command(cmd, lambda: _app(f).journal, lambda: _app(f).settings, refusal)
                 intent = cmd.intent(audit.bound_args(sig, args, kwargs))
-                if not code.ok and not cmd.stale_exempt:   # refused: nothing sent, the intent row says so
-                    return await gw.submit(intent, await stale_guard.refuse(name, code, cmd.cli_form()))
+                if remote := isinstance(gw, gateway_client.RemoteGateway):   # D5: it runs on the gateway's code
+                    return await run(gw.submit(intent))
+                if refusal is not None:   # refused: nothing sent, the intent row says so
+                    return await gw.submit(intent, refusal)
                 return stale_guard.annotate(await run(gw.submit(intent)), code)
             except Exception as e:  # noqa: BLE001
-                if code.stale:
+                if code.stale and not remote:
                     raise stale_guard.failed(name, e, code) from e
                 if isinstance(e, ToolError):
                     raise
