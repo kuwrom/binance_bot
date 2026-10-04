@@ -5,6 +5,10 @@
       "command": ".venv/bin/shortbot-mcp",
       "args": [],
       "timeout": 180000
+    },
+    "atomicviz": {
+      "type": "http",
+      "url": "http://127.0.0.1:3941/mcp"
     }
   }
 }

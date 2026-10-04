@@ -3,19 +3,36 @@
 The owner's browser view of the desk: `https://<elastic-ip>` (code: `src/shortbot/web/`).
 
 ## What it shows and does
-- **Overview**: the kill switch and guardian heartbeat, equity and day/week P&L, open shorts, pending entries, the
-  governor and the effective risk parameters, plus the same brief Claude gets at session start. It refreshes every
-  60 s. Like the SessionStart hook, the brief runs the guardian watchdog, so a dead guardian trips HALTED.
-- **Alerts**: the alerts table, newest first, with filters for urgent and unacknowledged.
+The page has two views, switched in the header (or the menu on a phone) and remembered per browser.
+
+**Basic** is the owner's glance: is the desk safe, how is the money, what is on the book.
+- **Overview**: a banner when something needs the owner (kill switch not ACTIVE, guardian down, a short without a
+  stop, a governor pause, old code); equity with day/week/open P&L and the realized-P&L curve; one card per open
+  short (a price ladder from targets to stop, the thesis and plan one tap away, *Move stop* and *Close*); resting
+  entries with *Cancel*; the risk room (daily loss cap, risk at the stops, exposure, drawdown); the urgent
+  unacknowledged alerts; the last closed trades. It refreshes every 60 s. `trading_state` runs the guardian
+  watchdog on each refresh, so a dead guardian trips HALTED here as it does in the SessionStart hook.
+- **Alerts**: grouped by kind (40 repeats of one guardian error read as one line), filters for new and urgent.
+- **Trades**: totals, each setup's numbers, every closed trade with its thesis, exit reason and lesson.
+- The menu: theme, auto-refresh, **Halt trading**, log out.
+
+**Advanced** adds what the agent and a researcher need:
+- on the Overview: the risk parameters (overrides beside the `.env` baseline and bounds), the governor in full, the
+  brief Claude gets at session start, and the raw JSON behind every card;
+- on Trades: the rulebook and the reports (24 h audit, research report, calibration, setups, the full journal);
 - **Commands**: every desk command, as a form generated from its `commands.py` declaration, the same one its MCP
-  tool and `shortbot` subcommand come from. It runs as actor `web:<command>` under the command's weight class.
-  - A **write** asks for confirmation, then goes through the gateway as an intent, like an MCP call. It is
-    journalled before it runs, and every veto, budget and kill-switch check applies.
-  - On code older than the code on disk, writes are refused (#68).
-  - `shortbot audit --actor web` lists what was done here.
-- **Journal**: presets for trades and learnings, the 24 h audit, the research report, calibration, setups and the
-  governor.
+  tool and `shortbot` subcommand come from. It runs as actor `web:<command>` under the command's weight class;
 - **Docs**: `CLAUDE.md`, `README.md`, `docs/**` and the skills, read-only.
+
+A button on a card (*Close*, *Move stop*, *Cancel*, *Halt trading*) opens that same command form in a sheet.
+- A **write** shows what it will send and asks once more, then goes through the gateway as an intent, like an MCP
+  call. It is journalled before it runs, and every veto, budget and kill-switch check applies.
+- On code older than the code on disk, writes are refused (#68).
+- `shortbot audit --actor web` lists what was done here.
+
+On a phone the tabs are a bottom bar and the sheet rises from the bottom. The code is plain files under
+`web/static/` (no build step): `core.js` (API, formats), `viz.js` (meter, ladder, sparkline), `cards.js` and
+`home.js` (Overview), `views.js` (Alerts, Trades), `console.js` (forms, reports, docs), `app.js` (shell).
 
 Not here, on purpose: everything in `shortbot-admin` (clearing the kill switch, resetting the equity peak, the setup
 ladder clears). These stay at a real terminal on the server, as `docs/RISK_GOVERNANCE.md` sets out. `.env` and

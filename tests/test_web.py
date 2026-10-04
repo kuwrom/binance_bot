@@ -2,6 +2,7 @@
 write run through the gateway as actor web:<command>, as the MCP server runs it."""
 
 import os
+import re
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -128,6 +129,9 @@ def test_the_page_is_public_but_every_api_needs_a_session(web):
     assert page.status_code == 200 and "Shortbot" in page.text
     assert "default-src 'self'" in page.headers["content-security-policy"]
     assert c.get("/static/app.js").status_code == 200
+    assets = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
+    assert len(assets) >= 2 and all(c.get(a).status_code == 200 for a in assets), assets
+    assert " style=" not in page.text and "<script>" not in page.text   # the CSP allows neither inline
     assert c.get("/api/commands").status_code == 401
     assert c.post("/api/run/journal", json={}, headers={"X-Shortbot": "1"}).status_code == 401
 
