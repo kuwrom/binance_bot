@@ -157,6 +157,7 @@ Ranked by how reliably each source pays:
 2. **"Specialise"** should mean specialising in a mechanism (supply, listings, funding dispersion), not in a direction. The cleanest forced flow, forced selling, is a buy. A short-only book is the sleeve pros size smallest.
 3. **"Small fixed size protects us"** is necessary but not sufficient. Tail losses came from venue mechanics (ADL, collateral marking, lockouts), which scale with leverage and alt thinness.
 4. **AI judgement is not the edge.** Move judgement into explicit, backtestable rules and keep the agent on research and execution. This does not argue for approval gates.
+   - **Superseded on our own evidence (2026-10-04):** the demo journal measured the AI's discretionary exits and declines as the desk's edge, and rule-based replays of the same pipeline lost. The owner kept the AI's full authority. Research informs the AI and never replaces it (QUANT_METHODS.md "Design principle").
 
 ## Sources
 - **1Token monthly indices** (IV Jul-2025 to XIII May-2026), the 2025 annual report, TradFi perpetual arbitrage, Crypto Fund 101 funding-fee arbitrage: https://blog.1token.tech/
