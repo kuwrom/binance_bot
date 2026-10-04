@@ -45,20 +45,28 @@ The same command starts the web console and Caddy (docs/WEB.md). Both need a one
 
 **One pid table (applied 2026-10-04: `pid: host` on the guardian, web and gateway services).** Each container has its own pid namespace. A pid read in one namespace names another process, or none, in the next. The guardian's container can't see the host's MCP servers, and the web container runs as pid 1, which in the guardian's namespace is the guardian itself. So every intent row records the pid namespace of the process that received it (`intents.ns`). The guardian's sweep asks after a pid only in its own namespace; a row from any other namespace ends only after `intents.MAX_OPEN_S` (1 h). The desk's containers run in the host's pid namespace (`pid: host` in `docker-compose.yml`), so the 60 s detection holds for every desk process. The process check (`procs.py`) then sees every desk process in one table. It judges code only within its own mount namespace, so the host's brief reports a container's code as unknown, never as stale.
 
-### 4a. The order gateway (flag on at the desk since 2026-10-04 06:08Z; demo soak until 2026-10-07)
-`shortbot-gateway` takes the sessions' order writes (docs/GATEWAY.md). It's off until `SHORTBOT_GATEWAY=1` is set in `.env`; with the flag off, nothing changes. Rollout steps 1–4 below are done on the desk; an MCP server started before the flag writes locally until its session reconnects `/mcp`.
+### 4a. The order gateway (default on since #36 steps 5-7)
+`shortbot-gateway` takes every order write: the sessions' since step 5, the guardian's since step 6 (docs/GATEWAY.md). `SHORTBOT_GATEWAY` in `.env`:
+
+| value | sessions | guardian |
+|---|---|---|
+| unset, `1`, `on` (the default) | through the gateway | through the gateway |
+| `sessions` | through the gateway | in its own process (step 6's rollback) |
+| `0`, `off` | in their own process | in its own process (step 5's rollback) |
+
+Any other value counts as the default: the processes start, the log says so and the guardian sends an urgent `config_invalid`.
 - **Where it runs:** one gateway per mode, on the desk host, as the same user as everything else. It holds `data/run/gateway-<mode>.lock` and listens on `data/run/gateway-<mode>.sock`. `data/run` must be mode 0700 and owned by that user, or the gateway refuses to start. Peers with another uid are refused.
-- **What goes through it:** the MCP, CLI and web console commands that send orders. Journal-only writes and `probe` stay in their own process. The guardian still writes directly until step 6.
-- **When it's down:** risk-adding commands are refused. Closes, stop tightening, cancels, flatten and the halt run locally under the symbol lock as break-glass, with actor `breakglass:<caller>` and an urgent `gateway_down_breakglass` alert. The brief shows the gateway's state, and the guardian sends an urgent `gateway_down` when its heartbeat is older than 15 s.
-- **Compose service (`gateway` in `docker-compose.yml`):** the same image, `command: shortbot-gateway`, the guardian's `user`, `env_file` and `./data` volume, `restart: unless-stopped`, `stop_grace_period: 45s` (it drains running intents for up to 30 s). Add `pid: host` along with the guardian and web services (One pid table, above).
-- **Rollout:**
-  1. Deploy with the flag off (continuous delivery, §10, starts the service and waits for its heartbeat).
-  2. Check `ls -ld data/run` shows `drwx------` and `docker compose logs gateway` shows it serving (the brief shows its line once the flag is on).
-  3. Set `SHORTBOT_GATEWAY=1` in `.env`.
-  4. Reconnect `/mcp` in every session, then restart the web console and the guardian.
-  5. Soak for 3 demo days (D6). Watch `finished_at - received_at` on intent rows, and for any `breakglass` or `pending` rows.
-- **Rollback:** set `SHORTBOT_GATEWAY=0` and restart the same processes.
-- **Restarts:** every deploy rebuilds and restarts the gateway; clients retry their connection for 5 s, which covers the drain.
+- **What goes through it:** the MCP, CLI and web console commands that send orders, the session watchdog's withdrawal and all 13 kinds of guardian intent. Journal-only writes and `probe` stay in their own process. Step 7 enforces it: any other exchange write raises `WriteRefused` before it is sent (`write_guard.py`). The user stream's listen key and the probes are allowed.
+- **At start:** before it listens, the gateway reconciles: it sweeps the dead intents, pulls flat targets, reconciles entries and closed trades, restores every stop, runs the HALTED sweep and resolves unknown intents. It holds the same lease as the guardian's positions pass, so the two never reconcile at once.
+- **When it's down:** risk-adding commands are refused. Closes, stop tightening, cancels, flatten, halts and every guardian action run locally under the symbol lock as break-glass (actor `breakglass:<caller>`). `gateway_down_breakglass` and `gateway_down` are urgent only after 60 s; a deploy's restart leaves only an alerts row. The guardian's 30 s check stamps kv `gateway_client:guardian`, and it sends `gateway_unreachable` when the gateway beats but the guardian can't reach it.
+- **Stale sessions (D5):** an MCP server on old code still sends its order writes, and the gateway runs them on the code on disk. It refuses an intent built for other code (the protocol version or the intent's signature), with the CLI form. Journal-only writes on stale code are refused as before.
+- **Compose service (`gateway` in `docker-compose.yml`):** the same image, `command: shortbot-gateway`, the guardian's `user`, `env_file`, `./data` volume and `pid: host`, `restart: unless-stopped`, `stop_grace_period: 45s` (it drains running intents for up to 30 s). The guardian has no `depends_on` on it on purpose: protection never waits for the gateway.
+- **Rollout of steps 5-7:**
+  1. The deploy restarts guardian, gateway and web together (§10). Its health check waits for the gateway's heartbeat and for the guardian's `gateway_client:guardian` stamp: ok, or not a client.
+  2. Reconnect `/mcp` in every session.
+  3. Check the brief's gateway line, and that `breakglass:guardian:*` intent rows appear only around restarts.
+- **Rollback:** set `SHORTBOT_GATEWAY=sessions` (guardian back in-process) or `0` (everything), then `docker compose up -d --force-recreate guardian web` and reconnect `/mcp`. Leave the gateway service running: it takes the flock per sequence, like any writer.
+- **Restarts:** every deploy rebuilds and restarts the gateway. Sessions retry their connection for 5 s, which covers the drain. The guardian tries once, breaks glass, and tries again 10 s later.
 
 ## 5. Trading sessions with Claude Code
 Run Claude Code **on the server**, so the MCP server and the guardian share `data/shortbot.db`:
@@ -223,7 +231,8 @@ The desk server deploys itself. You push to `master`; GitHub CI runs lint, types
 2. runs `uv sync --locked --extra dev`, then the full test suite **on the server** (it catches what only this box
    shows, like a slower disk);
 3. runs `docker compose up -d --build`, which rebuilds the guardian and the web console, and prunes dangling images;
-4. checks that the guardian beats again and that the web console answers, within 3 minutes.
+4. checks, within 3 minutes, that the guardian beats again, the web console answers and the order gateway beats, and that
+   the guardian reaches the gateway (kv `gateway_client:guardian`, §4a).
 
 If a step fails, it rolls back: the commit that was running, its venv and, if a new image was already built, its
 images. It sends one urgent `deploy_failed` alert (Telegram and the brief) and doesn't retry that commit; the next
@@ -232,8 +241,8 @@ rewritten. Either case sends `deploy_blocked`, once per commit, and every run ch
 
 Expect about 8 minutes from push to running: CI takes ~3 minutes, the poll up to 5, and the tests on the server ~5
 while the old guardian keeps running. The restart itself takes seconds, and exchange-side stops protect open positions
-through it. After a deploy, Claude sessions on the server reconnect `shortbot` via `/mcp` (their writes are refused on
-stale code, #68).
+through it. After a deploy, Claude sessions on the server reconnect `shortbot` via `/mcp`: on stale code their journal-only
+writes are refused (#68), and their order writes reach the gateway only while their protocol matches (D5, §4a).
 
 **Setup on the server**, done once on 2026-10-04:
 ```bash
