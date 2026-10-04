@@ -184,7 +184,7 @@ class OpenFlow:
             req = ShortRequest(symbol, notional, price, stop_price, leverage, _f(prod_ticker.get("quoteVolume")),
                                maint=await self.ex.maint_margin(symbol, notional))   # the symbol's leverage bracket
             try:   # what rests elsewhere or may still fill counts (#74); this symbol's own: refused under its lock
-                check_open_short(req, exposure.counted(self.j, acct, lim.max_position_notional, symbol=symbol,
+                check_open_short(req, exposure.counted(self.j, acct, lim.position_cap(acct.equity), symbol=symbol,
                                                   own_resting=False), lim)
             except RiskViolation as e:
                 self.j.log_decision("rejected", "; ".join(e.reasons), symbol, snapshot=req.__dict__)

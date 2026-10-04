@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from . import alerts_view, gateway_health, killswitch, procs, setup_ladder_view
+from . import alerts_view, desk_limits, gateway_health, killswitch, procs, setup_ladder_view
 from .entries import EntryDesk
 from .journal_writer import connect
 from .untrusted import clean
@@ -43,7 +43,12 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         lines.append(f"- ⚠️ setup ladder check failed: {type(e).__name__}: {e}")
     lines.append(backup_line(j))
-    lines.append(await golive_line(j, app.settings.limits))   # the go-live gate (#46): never raises, bounded
+    try:   # the human's desk limits on this desk (desk_limits.py): what the guardian and every check size under
+        lines.append(desk_limits.brief_line(app.settings, j))
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- ⚠️ desk limits unreadable: {type(e).__name__}: {e}")
+    # the go-live gate (#46): never raises, bounded; parameters vs the live desk's baseline
+    lines.append(await golive_line(j, desk_limits.baseline(app.settings, j, "live")))
     try:   # long-lived processes still on code older than the code on disk (#58)
         lines.append(await asyncio.wait_for(procs.brief_line(j), BRIEF_TIMEOUT_S))
     except Exception as e:  # noqa: BLE001

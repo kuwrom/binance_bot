@@ -13,11 +13,12 @@ from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
-from . import origin, weight, write_guard
+from . import desk_limits, origin, weight, write_guard
 from .config import Settings
 from .risk import bracket_for
 
 if TYPE_CHECKING:
+    from .journal import Journal
     from .params import ResearchParams
 
 log = logging.getLogger("shortbot.exchange")
@@ -131,12 +132,15 @@ class Exchanges:
         self._trade_tried_at = 0.0    # last load attempt, success or not
         self._brackets: dict[str, tuple[float, list[dict]]] = {}   # symbol -> (read at, bracket rows)
         self.params: ResearchParams | None = None  # set when running as the AI analyst; None = fixed baseline
+        self.journal: Journal | None = None  # the desk's journal: its desk limits (app.get_app / Trader set it)
 
     @property
     def limits(self):
-        """Effective risk limits: AI research overrides if enabled, else the fixed .env baseline (always for an intent
-        run for the guardian: origin.py)."""
-        return self.params.effective() if self.params and not origin.is_guardian() else self.settings.limits
+        """Effective risk limits: AI research overrides if enabled, else the desk baseline (defaults -> .env -> the
+        human's desk limits, desk_limits.py; always for an intent run for the guardian: origin.py)."""
+        if self.params and not origin.is_guardian():
+            return self.params.effective()
+        return desk_limits.baseline(self.settings, self.journal)
 
     @property
     def experiment(self) -> str | None:

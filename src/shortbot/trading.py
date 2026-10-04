@@ -75,6 +75,8 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
     def __init__(self, ex: Exchanges, journal: Journal, alert: Alert | None = None,
                  prechecks: Prechecks = default_prechecks, budget=default_budget):
         self.ex, self.j = ex, journal
+        if getattr(ex, "journal", False) is None:   # Exchanges without a journal: its desk limits are this one's
+            ex.journal = journal
         self._alert = alert
         self.prechecks = prechecks
         self.budget = budget  # dynamic risk budget (risk_budget.py)

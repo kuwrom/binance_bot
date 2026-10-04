@@ -1,6 +1,6 @@
 """`shortbot-admin`: the HUMAN side of the kill switch (killswitch.py) and the setup ladder (setup_ladder.py).
 Loosening lives in this separate console script because the agent's allowlist, `Bash(.venv/bin/shortbot *)`,
-auto-approves every `shortbot` subcommand, so a `shortbot` subcommand can't tell the human from the agent. Four
+auto-approves every `shortbot` subcommand, so a `shortbot` subcommand can't tell the human from the agent. Five
 loosenings live here:
 - `clear`: lowers the state, and holds the loss trips at the readings it shows (killswitch_rearm.py) so they don't
   re-fire on the loss just reviewed;
@@ -9,7 +9,8 @@ loosenings live here:
   criteria frozen at its stop pass on the shadow evidence since. Code evaluates them; the human's code is the
   sign-off live mode needs (RTS 6 / FIA), never an override. `ladder-status` lists what a clear would get now;
 - `ladder-reset --setup X`: a journalled review that starts the setup's ledger now (setup_ladder.reset_epoch;
-  docs/PROPOSALS.md P2): drawdown and high-water mark restart at 0. A SHADOW stop stays until ladder-clear.
+  docs/PROPOSALS.md P2): drawdown and high-water mark restart at 0. A SHADOW stop stays until ladder-clear;
+- `limits set|unset`: the desk's risk limits in the journal, over .env (admin_limits.py, desk_limits.py).
 All swap only what the human confirmed: if it changed meanwhile, nothing changes and they re-run.
 
 Speed bumps and a tripwire, not a security boundary (an agent with a shell can still write the SQLite file):
@@ -19,7 +20,7 @@ Speed bumps and a tripwire, not a security boundary (an agent with a shell can s
 - a real terminal: the confirmation code is read from /dev/tty, which Claude Code's Bash tool doesn't have, and
   it refuses to run when CLAUDECODE is set;
 - every change is journalled (`kill_switch_clear`, `equity_peak_reset`, `setup_ladder_clear`,
-  `setup_ladder_epoch_reset`) and alerted, so a
+  `setup_ladder_epoch_reset`, `desk_limits_changed`) and alerted, so a
   clear nobody typed gets noticed.
 """
 
@@ -127,6 +128,9 @@ async def run(args: argparse.Namespace, settings: Settings | None = None, journa
         return await ladder_clear(j, s, args.setup, args.reason)
     if args.cmd == "ladder-reset":
         return await ladder_reset(j, s, args.setup, args.reason)
+    if args.cmd == "limits":
+        from . import admin_limits
+        return await admin_limits.run(args, s, j)
     shown = j.get(ks.state_key(j))   # the exact row the human confirms; the clear swaps only that row
     st = ks.read(j)
     if ks.LEVEL[args.to] >= st["level"]:
@@ -249,8 +253,8 @@ async def ladder_reset(j: Journal, s: Settings, setup: str, reason: str) -> dict
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="shortbot-admin", description="Human-only kill-switch, equity-peak and "
-                                "setup-ladder controls. Run it in your own terminal, not through Claude.")
+    p = argparse.ArgumentParser(prog="shortbot-admin", description="Human-only kill-switch, equity-peak, "
+                                "setup-ladder and desk-limit controls. Run it in your own terminal, not through Claude.")
     p.add_argument("--mode", choices=("demo", "live"), help="the desk to act on (default: SHORTBOT_MODE from the "
                    "environment or .env); each mode has its own kill switch, peak and ladders (docs/DESKS.md)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -274,6 +278,8 @@ def parser() -> argparse.ArgumentParser:
     lr.add_argument("--setup", required=True)
     lr.add_argument("--reason", required=True, help="what you reviewed (e.g. the rules changed, the losses explained)")
     sub.add_parser("ladder-status", help="every setup ladder: state, drawdown, its stop and what a clear would get now")
+    from .admin_limits import add_parser as limits_parser
+    limits_parser(sub)
     return p
 
 

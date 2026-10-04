@@ -191,7 +191,9 @@ class EntryPlacement:
         fm = funding_mult(rate, iv)
         size_mult = min(size_mult, fm)
         share = float(p.get("risk_share", 1.0))   # a split-entry leg risks its share of ONE budget
-        notional = min(budget["risk_usd"] * size_mult * share / dist, lim.max_position_notional * share) * 0.98
+        acct = await tr.account_state()   # its equity sets the equity-relative caps (max_position_equity_x)
+        cap = lim.position_cap(acct.equity)
+        notional = min(budget["risk_usd"] * size_mult * share / dist, cap * share) * 0.98
         amount = floor_amount(tr.t, sym, notional / limit)
         if small := too_small(tr.t, sym, amount, limit):   # nothing sent (#71)
             raise ValueError(small)
@@ -202,9 +204,8 @@ class EntryPlacement:
             raise ValueError(f"at {lev}x the stop ({dist * 100:.1f}%) sits beyond liquidation minus buffer")
         px = float(tr.t.price_to_precision(sym, limit))
         from .risk import ShortRequest, check_open_short
-        acct = await tr.account_state()
         # what rests in other groups or may still fill counts as exposure (exposure.py, shared with open_short: #74)
-        acct = exposure.counted(self.j, acct, lim.max_position_notional, group=gid, symbol=sym)
+        acct = exposure.counted(self.j, acct, cap, group=gid, symbol=sym)
         prod = await tr.ex.public.fetch_ticker(sym)
         check_open_short(ShortRequest(sym, amount * px, px, stop, lev, float(prod.get("quoteVolume") or 0), maint),
                          acct, lim)

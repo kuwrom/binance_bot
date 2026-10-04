@@ -96,7 +96,8 @@ def _pair(s: str) -> tuple[str, float]:
 
 @command(cli="params")
 async def risk_params() -> dict[str, Any]:
-    """Effective risk limits, fixed .env baseline, AI overrides, research bounds and active experiment."""
+    """Effective risk limits and each one's source (default / .env / desk / research): the baseline (defaults ->
+    .env -> the human's desk limits, shortbot-admin only), AI overrides, research bounds and active experiment."""
     return _params().describe()
 
 
@@ -275,7 +276,8 @@ async def golive_report(text: bool = False) -> dict[str, Any] | str:
     adds the live probation (live fills vs the model and demo). Read-only: switching to live is the owner's (.env)."""
     from . import golive, golive_view
     app = get_app()
-    rep = golive.report(app.journal, app.settings.limits)
+    from .desk_limits import baseline
+    rep = golive.report(app.journal, baseline(app.settings, app.journal, "live"))   # what the live guardian uses
     return golive_view.text(rep) if text else rep
 
 

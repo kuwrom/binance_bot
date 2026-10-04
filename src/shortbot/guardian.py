@@ -101,7 +101,7 @@ STALL_ALERT_S = 60.0   # a journal write waiting this long for another process's
 
 
 class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs, CoinJobs):
-    """Dumb and fixed on purpose: uses only the .env baseline limits, never AI research overrides. One exception:
+    """Dumb and fixed on purpose: uses only the desk baseline (.env + desk limits), never AI research overrides. One exception:
     the kill-switch loss trips (daily loss, dd_stop) and the governor verdict (its halt withdraws resting entries,
     entry_gates.py) follow an active experiment's limits, the ones the session places and sizes under."""
 

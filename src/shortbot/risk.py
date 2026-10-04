@@ -102,7 +102,7 @@ def max_notional_for_risk(equity: float, entry: float, stop: float, limits: Risk
     dist = stop_distance_pct(entry, stop)
     if dist <= 0:
         return 0.0
-    return min(equity * limits.risk_per_trade_pct / dist, limits.max_position_notional)
+    return min(equity * limits.risk_per_trade_pct / dist, limits.position_cap(equity))
 
 
 # Liquidity tiers (learnings #13/#17/#18): below ~$5M 24h volume costs eat any edge; between tier A and B trade at
@@ -122,6 +122,13 @@ def liquidity_tier(quote_volume: float | None, oi_value: float | None) -> tuple[
 def funding_mult(rate: float | None, interval_h: int | None) -> float:
     """Shorts paying funding (negative rate or the 1h capped interval) trade at half size (learning #22)."""
     return 0.5 if (rate is not None and rate < 0) or interval_h == 1 else 1.0
+
+
+def _x_note(limits: RiskLimits, equity: float, which: str) -> str:
+    """' (Nx equity E)' when the equity-relative cap is the binding one."""
+    x, fixed = ((limits.max_position_equity_x, limits.max_position_notional) if which == "p"
+                else (limits.max_total_equity_x, limits.max_total_notional))
+    return f" ({x:g}x equity {equity:.2f})" if x and equity > 0 and x * equity < fixed else ""
 
 
 def check_open_short(req: ShortRequest, acct: AccountState, limits: RiskLimits) -> None:
@@ -148,12 +155,13 @@ def check_open_short(req: ShortRequest, acct: AccountState, limits: RiskLimits) 
             )
     if req.notional <= 0:
         reasons.append("notional must be positive")
-    if req.notional > limits.max_position_notional:
-        reasons.append(f"notional {req.notional:.2f} > per-coin max {limits.max_position_notional}")
-    if acct.total_open_notional + req.notional > limits.max_total_notional:
+    pos_cap, tot_cap = limits.position_cap(acct.equity), limits.total_cap(acct.equity)   # USDT or x equity
+    if req.notional > pos_cap:
+        reasons.append(f"notional {req.notional:.2f} > per-coin max {pos_cap:g}{_x_note(limits, acct.equity, 'p')}")
+    if acct.total_open_notional + req.notional > tot_cap:
         reasons.append(
             f"total notional would be {acct.total_open_notional + req.notional:.2f} "
-            f"> max {limits.max_total_notional}"
+            f"> max {tot_cap:g}{_x_note(limits, acct.equity, 't')}"
         )
     if req.symbol in acct.open_symbols:
         reasons.append(f"already short {req.symbol}; manage the existing position instead")
@@ -189,12 +197,13 @@ def check_add(req: AddRequest, acct: AccountState, limits: RiskLimits) -> None:
     after = req.qty + req.add_qty
     if req.add_qty <= 0:
         reasons.append("add size must be positive (the notional is below one lot)")
-    if after * req.mark > limits.max_position_notional + 1e-9:
+    pos_cap, tot_cap = limits.position_cap(acct.equity), limits.total_cap(acct.equity)
+    if after * req.mark > pos_cap + 1e-9:
         reasons.append(f"position notional would be {after * req.mark:.2f} > per-coin max "
-                       f"{limits.max_position_notional:g}")
-    if acct.total_open_notional + req.add_qty * req.mark > limits.max_total_notional + 1e-9:
+                       f"{pos_cap:g}{_x_note(limits, acct.equity, 'p')}")
+    if acct.total_open_notional + req.add_qty * req.mark > tot_cap + 1e-9:
         reasons.append(f"total notional would be {acct.total_open_notional + req.add_qty * req.mark:.2f} "
-                       f"> max {limits.max_total_notional:g}")
+                       f"> max {tot_cap:g}{_x_note(limits, acct.equity, 't')}")
     dist = stop_distance_pct(req.mark, req.stop_price)
     if dist < limits.min_stop_distance_pct:
         reasons.append(f"stop {req.stop_price:g} is {dist:.2f}% above price {req.mark:g}: inside "

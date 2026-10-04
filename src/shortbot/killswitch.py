@@ -288,11 +288,16 @@ async def gate(tr: Trader, action: str) -> dict[str, Any] | None:
 
 # ------------------------------------------------------------ auto-trips (guardian)
 def effective_limits(settings: Settings, j: Journal) -> tuple[RiskLimits, str]:
-    """(limits, source): the research override when one is active, else the .env baseline. The guardian runs
-    without research params, but its kill-switch thresholds follow the experiment (BOUND_* caps it)."""
+    """(limits, source): the research override when one is active, else the desk baseline (the human's desk limits
+    over .env: desk_limits.py). The guardian runs without research params, but its kill-switch thresholds follow the
+    experiment (BOUND_* caps it)."""
+    from .desk_limits import stored
     from .params import ResearchParams
     p = ResearchParams(settings, j)
-    src = f"research override ({p.experiment() or 'untagged'})" if p.active and p.overrides() else ".env baseline"
+    if p.active and p.overrides():
+        src = f"research override ({p.experiment() or 'untagged'})"
+    else:
+        src = "desk limits (human)" if stored(j) else ".env baseline"
     return p.effective(), src
 
 

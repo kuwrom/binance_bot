@@ -38,6 +38,7 @@ rsi, ema, atr, vwap_bands = ind.rsi, ind.ema, ind.atr, ind.vwap_bands
 def _with_ex(fn: Callable[[Exchanges], Any]) -> Any:
     async def run():
         ex = Exchanges(Settings.from_env())
+        ex.journal = journal()   # scans see the desk's limits (desk_limits.py)
         try:
             with weight.tagged(weight.RESEARCH, wait_s=weight.ENTRY_WAIT_S):   # yields to the desk and guardian (#70)
                 return await fn(ex)

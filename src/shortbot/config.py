@@ -1,7 +1,8 @@
 """Settings loaded from environment (.env).
 
-Risk limits come in layers (see params.py):
-- `RiskLimits` from .env = the fixed BASELINE. The always-on guardian (AWS) only uses these.
+Risk limits come in layers (resolved in desk_limits.py; see params.py):
+- built-in defaults, then `.env` (`RiskLimits.from_env()`, `Settings.limits`), then the human's per-desk limits in the
+  journal (`shortbot-admin limits`): together the desk's BASELINE. The always-on guardian (AWS) only uses this.
 - The AI analyst may override any RiskLimits field for research (e.g. try 5x leverage), but only
   inside `ResearchBounds`, an outer envelope that only the human changes (BOUND_* in .env).
 Every opening order is still checked by risk.check_open_short against the effective limits.
@@ -40,6 +41,12 @@ def _i(name: str, default: int) -> int:
     return int(os.getenv(name, default))
 
 
+def _opt(name: str) -> float | None:
+    """An optional limit: unset or empty = None (disabled)."""
+    v = (os.getenv(name) or "").strip()
+    return float(v) if v else None
+
+
 @dataclass(frozen=True)
 class RiskLimits:
     max_leverage: int = 3
@@ -69,6 +76,9 @@ class RiskLimits:
     min_add_r: float = 1.0                    # pyramiding: add only once the open profit is >= this x the pinned 1R
     max_add_frac: float = 0.5                 # each add <= this fraction of the initial size (plan.full_size)
     max_adds: int = 2                         # adds per trade (add_to_winner)
+    # equity-relative size caps (None = off): the per-coin / total notional cap is min(USDT cap, x * equity)
+    max_position_equity_x: float | None = None
+    max_total_equity_x: float | None = None
 
     @classmethod
     def from_env(cls) -> RiskLimits:
@@ -99,7 +109,38 @@ class RiskLimits:
             min_add_r=_f("MIN_ADD_R", cls.min_add_r),
             max_add_frac=_f("MAX_ADD_FRAC", cls.max_add_frac),
             max_adds=_i("MAX_ADDS", cls.max_adds),
+            max_position_equity_x=_opt("MAX_POSITION_EQUITY_X"),
+            max_total_equity_x=_opt("MAX_TOTAL_EQUITY_X"),
         )
+
+    def position_cap(self, equity: float | None) -> float:
+        """Per-coin notional cap: max_position_notional, or x * equity when max_position_equity_x is set and lower."""
+        return _cap(self.max_position_notional, self.max_position_equity_x, equity)
+
+    def total_cap(self, equity: float | None) -> float:
+        """Total open notional cap: max_total_notional, or x * equity when max_total_equity_x is set and lower."""
+        return _cap(self.max_total_notional, self.max_total_equity_x, equity)
+
+
+def _cap(fixed: float, x: float | None, equity: float | None) -> float:
+    return min(fixed, x * equity) if x and equity and equity > 0 else fixed
+
+
+def consistency_errors(lim: RiskLimits) -> list[str]:
+    """Combinations of limits that make no sense together (research overrides and desk limits are both checked)."""
+    errs = []
+    if lim.min_stop_distance_pct >= lim.max_stop_distance_pct:
+        errs.append("min_stop_distance_pct must be < max_stop_distance_pct")
+    if lim.dd_halve_pct >= lim.dd_stop_pct:
+        errs.append("dd_halve_pct must be < dd_stop_pct")
+    if lim.loss_streak_halve >= lim.loss_streak_pause:
+        errs.append("loss_streak_halve must be < loss_streak_pause")
+    if lim.max_position_notional > lim.max_total_notional:
+        errs.append("max_position_notional must be <= max_total_notional")
+    px, tx = lim.max_position_equity_x, lim.max_total_equity_x
+    if px is not None and tx is not None and px > tx:
+        errs.append("max_position_equity_x must be <= max_total_equity_x")
+    return errs
 
 
 # Outer envelope for AI research overrides: (low, high) per RiskLimits field. Human-only, via
@@ -131,6 +172,8 @@ DEFAULT_BOUNDS: dict[str, tuple[float, float]] = {
     "min_add_r": (0.0, 5.0),
     "max_add_frac": (0.1, 1.0),
     "max_adds": (0, 10),
+    "max_position_equity_x": (0.1, 20.0),
+    "max_total_equity_x": (0.1, 20.0),
 }
 
 
@@ -160,7 +203,7 @@ class Settings:
     db_path: Path
     telegram_token: str
     telegram_chat_id: str
-    limits: RiskLimits = field(default_factory=RiskLimits)     # fixed baseline (guardian uses only this)
+    limits: RiskLimits = field(default_factory=RiskLimits)     # defaults + .env; desk_limits.baseline adds the desk's
     bounds: ResearchBounds = field(default_factory=ResearchBounds)
     allow_ai_params_live: bool = False                         # AI overrides in live mode? human-only
     # SHORTBOT_GATEWAY (#36, GATEWAY.md §3; gateway_flag): sessions / the guardian send order writes to shortbot-gateway.

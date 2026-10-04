@@ -356,7 +356,8 @@ class PositionOps:
         req = AddRequest(symbol, add_qty, mark, stop_after, qty, float(pos["entryPrice"]), lev, initial, r1,
                          adds_done(tr.j, trade), await tr.ex.maint_margin(symbol, (qty + add_qty) * mark))
         try:
-            acct = exposure.counted(tr.j, await tr.account_state(), lim.max_position_notional, symbol=symbol)
+            acct = await tr.account_state()
+            acct = exposure.counted(tr.j, acct, lim.position_cap(acct.equity), symbol=symbol)
             check_add(req, acct, lim)   # resting entries and unknown entries count (#74)
         except RiskViolation as e:
             out += e.reasons

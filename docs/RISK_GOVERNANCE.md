@@ -16,7 +16,25 @@
 - **Conviction ("best ideas")** helps when it's measured and has a track record (Cohen-Polk-Silli), and hurts when untested.
 - **Volatility management:** use it to CUT risk only. Moreira & Muir 2017 found gains; Cederburg et al. 2020 found realistic out-of-sample versions usually earn lower Sharpe.
 
-## Rules (defaults; the effective values are in `.env` / research params)
+## Where the limits come from (owner decision 2026-10-04; `desk_limits.py`)
+- **Layers, later wins:** built-in defaults (`config.RiskLimits`) -> `.env` -> desk limits (the human's, per desk, in
+  the journal kv `desk_limits` / `desk_limits@live`) -> research overrides (`set_risk_params`; demo only, live only with
+  `AI_PARAMS_IN_LIVE=true`, inside `BOUND_*`). The first three are the desk **baseline**: the guardian, the kill
+  switch's daily-loss and drawdown trips, the governor (weekly cap, drawdown tiers, streaks), the risk budget and every
+  placement check (`check_open_short`, `check_add`, exposure counting) use it, re-read on every use (no restart).
+- **Desk limits are human-only:** `shortbot-admin [--mode live] limits status | set KEY=VALUE ... --reason | unset KEY
+  ... --reason`, in a real terminal (tty code, as `clear`). Names: the field or its `.env` name, any case. Checked: whole
+  numbers stay whole, positive, leverage >= 1, percentages in (0, 100], equity multiples in (0, 20], and the
+  combination (`config.consistency_errors`). Journalled and alerted (`desk_limits_changed`, with the diff and who).
+  Nothing in the MCP server or the `shortbot` CLI writes them (`tests/test_admin_limits.py`). A stored value that no
+  longer validates is ignored (the `.env` layer applies), never a guardian crash.
+- **Equity-relative caps** (default off): `max_position_equity_x` / `max_total_equity_x` (`.env`:
+  `MAX_POSITION_EQUITY_X`, `MAX_TOTAL_EQUITY_X`). The per-coin / total notional cap is min(USDT cap, x × current
+  equity) wherever those caps apply: open_short sizing and checks, limit-entry sizing and placement, adds, amends.
+- **Visibility:** `shortbot params` / `risk_params` list each limit's value and source (default / .env / desk /
+  research); the brief shows the desk limits.
+
+## Rules (defaults; the effective values: the desk baseline / research params)
 - **Day and week P&L** have one definition, `Trader.account()` (`equity_marks.py`, task #16). Every rule here reads it: the open-short day check, the governor and its give-back peak, and the kill switch's daily-loss trip. Each measures the loss against start-of-day equity.
   - P&L = equity now − the period's first equity mark − transfers since that mark. A loss carried over midnight in an open position is not today's, and deposits and withdrawals move nothing.
   - An equity move the income history doesn't explain yet is `pending` for 2 min, and the income view is used meanwhile.
@@ -50,7 +68,8 @@
 
 ## Resting entries (`entry_gates.py`, #12)
 - A resting limit is a trade that hasn't happened yet. While the governor halts new entries, or a market pause is on (BTC/ETH +0.8% in 15 min, a breadth squeeze), the guardian withdraws them every 5 s pass. Reasons read `governor halt: ...` and `market pause: ...`. An entry placed with a `veto_override` over that same pause stays; nothing overrides the governor.
-- The governor verdict comes from the guardian's 5-min check, under the effective limits (the research override if active, as for the kill-switch trips), so placing and withdrawing never disagree. A verdict older than 15 min, or a market map older than 15 min, cancels nothing.
+- The governor verdict comes from the guardian's 5-min check, under the effective limits (the research override if active, else the desk baseline, as for the kill-switch
+  trips), so placing and withdrawing never disagree. A verdict older than 15 min, or a market map older than 15 min, cancels nothing.
 - TTL is at most 24 h. Lowering a resting limit re-runs the budget and hard-cap checks. A split leg is never lowered.
 - **Resize (#66):** each entry is stamped with the `m_gov` and `m_ladder` it was sized under (a lowering amend re-stamps it). The guardian withdraws a resting entry when:
   - the governor's `m_gov` is now below its stamp (a drawdown tier or a loss streak halved size);
@@ -68,7 +87,7 @@
   - Resting plan targets (reduce-only BUY limits, #65) only ever reduce risk: REDUCING and HALTED keep them and keep them in sync. Flatten cancels them once flat.
 - **Per desk:** demo and live each have their own state, guardian heartbeat and holds in the one journal (`killswitch.state_key`, Journal.mode_key; demo keeps the bare keys). A demo drill or loss trip never halts live, and the reverse. To halt both, trip each. `shortbot-admin --mode live clear ...` clears the live desk (default: the mode in the environment).
 - **Who:** anyone may trip it (`halt_trading`, `shortbot kill-switch HALTED --reason ...`, guardian auto-trips, the session watchdog). Only a human loosens it: `.venv/bin/shortbot-admin clear --reason ...` in a real terminal (it reads a code from /dev/tty and refuses under Claude Code). That is a speed bump plus a tripwire (every change is journalled and alerted), not a security boundary.
-- **Auto-trips** (sticky until a human clears, past 00:00 UTC too): daily loss past the effective `daily_loss_limit_pct` and drawdown past `dd_stop_pct` (research override if active, else `.env`), an untracked or long position, and a day P&L unreadable for 3 guardian passes in a row (`day_pnl_unverified`: no new risk while losses can't be checked; resting entries stay; one trip per outage, so a clear made during it holds). A stale guardian heartbeat trips HALTED from any session and lifts itself (next bullet); withdrawn entries stay withdrawn.
+- **Auto-trips** (sticky until a human clears, past 00:00 UTC too): daily loss past the effective `daily_loss_limit_pct` and drawdown past `dd_stop_pct` (research override if active, else the desk baseline), an untracked or long position, and a day P&L unreadable for 3 guardian passes in a row (`day_pnl_unverified`: no new risk while losses can't be checked; resting entries stay; one trip per outage, so a clear made during it holds). A stale guardian heartbeat trips HALTED from any session and lifts itself (next bullet); withdrawn entries stay withdrawn.
   - Daily loss uses the day P&L from `Trader.account()` (Rules above), read once per guardian pass after the stop checks. Drawdown is from the transfer-adjusted peak.
 - **Guardian heartbeat** (kv `guardian_heartbeat`, #61) is when protection was last *verified*. Only the guardian's positions pass writes it (the time of its position read), and only when:
   - every held position's check completed with a closePosition stop confirmed resting (or restored, or force-closed), or the account read flat;

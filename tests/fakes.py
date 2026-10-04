@@ -22,6 +22,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 import ccxt
 
+from shortbot import desk_limits
 from shortbot.config import RiskLimits, Settings
 from tests import fake_errors as err
 from tests.fake_account import Account
@@ -339,8 +340,9 @@ class FakeEx:
         self.fake = fake
         self.public = fake.prod   # prod market data: a separate client from the demo trade one
         self.trade = fake
+        self.journal = None   # set by Trader, as on Exchanges: the desk limits the baseline reads
 
-    limits = property(lambda self: self.settings.limits)
+    limits = property(lambda self: desk_limits.baseline(self.settings, self.journal))   # as Exchanges.limits
     experiment = None
 
     def require_trade(self):

@@ -2,8 +2,8 @@
 
 Two layers
 ----------
-1. Baseline (`RiskLimits.from_env()`): the fixed values from `.env`. The guardian on AWS only ever
-   uses these; it never reads research overrides.
+1. Baseline (desk_limits.baseline): defaults -> `.env` -> the human's per-desk limits in the journal
+   (`shortbot-admin limits`). The guardian on AWS only ever uses this; it never reads research overrides.
 2. Research overrides (this module): an interactive Claude session can change any `RiskLimits`
    field with `set_risk_params` (MCP tool), e.g. try 5x leverage as an experiment. Every change needs
    a reason and an experiment name, and is written to the journal.
@@ -25,7 +25,8 @@ import json
 from dataclasses import asdict, fields, replace
 from typing import Any
 
-from .config import ResearchBounds, RiskLimits, Settings
+from . import desk_limits
+from .config import ResearchBounds, RiskLimits, Settings, consistency_errors
 from .journal import Journal
 
 KV_OVERRIDES = "research_params"       # {param: value}, flat (old processes read it as is)
@@ -50,6 +51,10 @@ class ResearchParams:
     def active(self) -> bool:
         """Overrides only apply in demo, or in live if the human explicitly allowed it."""
         return not self.s.is_live or self.s.allow_ai_params_live
+
+    def base(self) -> RiskLimits:
+        """The desk's baseline under the overrides: defaults -> .env -> the human's desk limits (desk_limits.py)."""
+        return desk_limits.baseline(self.s, self.j)
 
     def _k(self, key: str) -> str:
         return self.j.mode_key(key)
@@ -80,8 +85,8 @@ class ResearchParams:
                 dropped.append(f"{k}={v} outside the current bounds [{lo}, {hi}]")
                 continue
             keep[k] = v
-        if keep and (errs := consistency_errors(replace(self.s.limits, **keep))):
-            dropped.append(f"all overrides: inconsistent with the .env baseline ({'; '.join(errs)})")
+        if keep and (errs := consistency_errors(replace(self.base(), **keep))):
+            dropped.append(f"all overrides: inconsistent with the desk baseline ({'; '.join(errs)})")
             keep = {}
         own = {k: own[k] for k in keep}
         if dropped and not self._drop(raw, keep, own, dropped) and retry:
@@ -102,7 +107,7 @@ class ResearchParams:
                "Re-propose with set_risk_params within the current bounds if still wanted.")
         self.j.log_decision("params_dropped", msg, snapshot={
             "mode": self.s.mode, "dropped": dropped, "active": label or None, "bounds": self.s.bounds.as_dict(),
-            "after": asdict(replace(self.s.limits, **keep))})
+            "after": asdict(replace(self.base(), **keep))})
         self.j.log_alert("params_dropped", msg)
         return True
 
@@ -122,7 +127,7 @@ class ResearchParams:
         return JOIN.join(self.experiments()) or None
 
     def effective(self) -> RiskLimits:
-        base = self.s.limits
+        base = self.base()
         if not self.active:
             return base
         ov = self.overrides()
@@ -132,9 +137,12 @@ class ResearchParams:
         return {
             "mode": self.s.mode, "overrides_active": self.active, "experiment": self.experiment(),
             "experiments": self.experiments(), "effective": asdict(self.effective()),
-            "baseline_env": asdict(self.s.limits), "overrides": self.overrides(), "bounds": self.s.bounds.as_dict(),
-            "note": "Guardian (AWS) always uses baseline_env. Change with set_risk_params; reset with "
-                    "reset_risk_params. Trades carry every active experiment (joined by ' + ').",
+            "baseline_env": asdict(self.s.limits), "baseline": asdict(self.base()),
+            "desk": desk_limits.stored(self.j), "limits": desk_limits.describe(self.s, self.j, self)["fields"],
+            "overrides": self.overrides(), "bounds": self.s.bounds.as_dict(),
+            "note": "Guardian (AWS) always uses `baseline` (defaults -> .env -> desk limits, the human's, set only with "
+                    "shortbot-admin limits). `limits` shows each value's source. Change research overrides with "
+                    "set_risk_params; reset with reset_risk_params. Trades carry every active experiment.",
         }
 
     # ----------------------------------------------------------------- write
@@ -169,7 +177,7 @@ class ResearchParams:
         before = self.effective()
         current, own = self._checked()
         merged = {**current, **clean}
-        after = replace(self.s.limits, **merged)
+        after = replace(self.base(), **merged)
         errors += consistency_errors(after)
         if errors:
             raise ParamError("; ".join(errors))
@@ -186,8 +194,8 @@ class ResearchParams:
         before = self.effective()
         self._write({}, {}, "")
         self.j.log_decision("reset_params", reasoning or "reset to .env baseline", snapshot={
-            "mode": self.s.mode, "before": asdict(before), "after": asdict(self.s.limits)})
-        return {"ok": True, "effective": asdict(self.s.limits)}
+            "mode": self.s.mode, "before": asdict(before), "after": asdict(self.base())})
+        return {"ok": True, "effective": asdict(self.base())}
 
     def _write(self, overrides: dict[str, Any] | None, owners: dict[str, str], label: str) -> None:
         """One transaction: overrides (None = already written by the caller), owners and the label."""
@@ -203,17 +211,4 @@ def _label(owners: dict[str, str]) -> str:
     return JOIN.join(sorted(set(owners.values())))
 
 
-def consistency_errors(lim: RiskLimits) -> list[str]:
-    errs = []
-    if lim.min_stop_distance_pct >= lim.max_stop_distance_pct:
-        errs.append("min_stop_distance_pct must be < max_stop_distance_pct")
-    if lim.dd_halve_pct >= lim.dd_stop_pct:
-        errs.append("dd_halve_pct must be < dd_stop_pct")
-    if lim.loss_streak_halve >= lim.loss_streak_pause:
-        errs.append("loss_streak_halve must be < loss_streak_pause")
-    if lim.max_position_notional > lim.max_total_notional:
-        errs.append("max_position_notional must be <= max_total_notional")
-    return errs
-
-
-__all__ = ["ResearchParams", "ParamError", "ResearchBounds", "TUNABLE"]
+__all__ = ["ResearchParams", "ParamError", "ResearchBounds", "TUNABLE", "consistency_errors"]

@@ -27,7 +27,7 @@ FLUSH_S = 30.0   # how long an exiting process waits for its queued journal writ
 
 def get_app(research: bool = True) -> App:
     """research=True: AI analyst (MCP/CLI), risk limits tunable via params.py.
-    research=False: the always-on guardian, fixed .env baseline limits only."""
+    research=False: the always-on guardian, the desk baseline only (defaults -> .env -> desk limits)."""
     global _app
     if _app is None:
         s = Settings.from_env()
@@ -36,7 +36,7 @@ def get_app(research: bool = True) -> App:
         ex = Exchanges(s)
         j = Journal(s.db_path, s.mode)
         params = ResearchParams(s, j) if research else None
-        ex.params = params
+        ex.params, ex.journal = params, j   # the journal: the desk limits every baseline reads (desk_limits.py)
         # urgent session alerts (NAKED_POSITION, stop_failed) reach Telegram; the guardian swaps in its own adapter
         _app = App(s, ex, j, Trader(ex, j, alert=Notifier(s, j).as_session_alert), params)
     return _app

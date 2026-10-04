@@ -9,13 +9,24 @@ One checkout (`~/binance_bot`), one `.env`, one journal, two desks running side 
 | session | `claude` | `SHORTBOT_MODE=live claude` |
 | services | `guardian` (runs the market-wide jobs for both), `gateway`, `web`, `caddy` | `guardian-live` (its account only: `SHORTBOT_GUARDIAN_MARKET=0`), `gateway-live` (compose profile `live`) |
 | money | Binance Demo Trading | real |
-| limits | `.env` baseline plus research overrides (`set_risk_params`) | `.env` baseline only (`AI_PARAMS_IN_LIVE=false`) |
+| limits | desk baseline plus research overrides (`set_risk_params`) | desk baseline only (`AI_PARAMS_IN_LIVE=false`) |
+| desk limits (human) | `shortbot-admin limits set ...` | `shortbot-admin --mode live limits set ...` |
 | kill switch | its own | its own (`shortbot-admin --mode live`) |
 | code | changes it: branch, prove, merge | never changes it |
 
+**Risk limits per desk** (owner decision 2026-10-04, `desk_limits.py`). Each desk's baseline resolves as built-in
+defaults -> `.env` -> that desk's limits in the journal; research overrides go on top on demo only (bounded by
+`BOUND_*`). The guardian, its loss trips and governor, the risk budget and every placement check use the baseline.
+Only the human sets desk limits, in a real terminal: `shortbot-admin [--mode live] limits status`, `limits set
+MAX_LEVERAGE=2 MAX_TOTAL_EQUITY_X=1.5 --reason "..."`, `limits unset KEY --reason "..."` (code typed on the tty,
+journalled and alerted as `desk_limits_changed`). Nothing in the MCP server or the `shortbot` CLI writes them. With
+none set, `.env` applies unchanged. `max_position_equity_x` / `max_total_equity_x` cap the per-coin / total notional
+at that multiple of current equity, whichever of it and the USDT cap is lower. `shortbot params`, `risk_params` and
+the brief show each limit with its source.
+
 Per desk in the journal: trades, entries, intents, decisions, target orders, alerts and their acknowledgement, alert
 cooldowns, the kill switch, the guardian heartbeat, equity peak and marks, governor, setup ladders, warm-ups, coin
-events seen, symbol locks. Shared: learnings, the registry, scans, coin memory states, market data, research, and the
+events seen, symbol locks, desk limits. Shared: learnings, the registry, scans, coin memory states, market data, research, and the
 market jobs' alerts (scan, processes, social, listing heads-ups), which both sessions see.
 
 **Live depends on the demo guardian.** It runs the market jobs for both desks: the market map and its pause veto,
@@ -33,8 +44,8 @@ findings, setups and parameter experiments are tried here first.
 
 ## The live desk
 Experimental, research-based trading with real money, on code that has been proven elsewhere.
-- **Trade anything, on judgement.** Every setup is allowed; size and selection are your call within the `.env`
-  baseline. Use demo's evidence critically (next section): a finding from yesterday, a demo-only result or an
+- **Trade anything, on judgement.** Every setup is allowed; size and selection are your call within the desk
+  baseline (the human's live desk limits over `.env`). Use demo's evidence critically (next section): a finding from yesterday, a demo-only result or an
   experiment's P&L is weaker evidence for live.
 - **Never modify the project code.** No edits, commits or pushes from a live session. A bug or a rule that keeps
   blocking good trades goes to the demo desk (`SendMessage`) or the human, with the evidence.

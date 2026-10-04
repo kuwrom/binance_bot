@@ -29,7 +29,7 @@ passes. Every threshold names where it comes from (repo rule: parameters come fr
 - slippage: fill_report.calibrate on the window's trades ok (>= 30 trades with market or stop fills over >= 20 days,
   k > 0).
 - plumbing: golive_view.plumbing (drills, probes, backup drill, gateway soak; each within 30 days).
-- parameters (reported, not gated): the window's trades sized under the .env baseline the live guardian uses."""
+- parameters (reported, not gated): the window's trades sized under the baseline the live guardian uses (.env + live desk limits)."""
 
 from __future__ import annotations
 
@@ -72,7 +72,8 @@ OWNER_STEPS = (
     "1. Create the live key (DEPLOY §2); add BINANCE_LIVE_API_KEY and BINANCE_LIVE_API_SECRET to .env.",
     "2. Add LIVE_CONFIRM=I_ACCEPT_REAL_MONEY_RISK and COMPOSE_PROFILES=live; keep SHORTBOT_MODE=demo (live runs "
     "next to demo: docs/DESKS.md).",
-    "3. Keep the .env baseline limits small: MAX_POSITION_NOTIONAL, MAX_TOTAL_NOTIONAL, RISK_PER_TRADE_PCT.",
+    "3. Keep the live baseline small (.env or shortbot-admin --mode live limits set): MAX_POSITION_NOTIONAL, "
+    "MAX_TOTAL_NOTIONAL, RISK_PER_TRADE_PCT.",
     "4. `docker compose up -d` starts guardian-live and gateway-live; the live session is `SHORTBOT_MODE=live claude`.",
     f"Start at minimum size: the first {LIVE_PROBATION_N} live trades are probation (`shortbot golive` in live mode "
     "compares their fills with the model and with demo).")

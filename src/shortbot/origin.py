@@ -3,8 +3,8 @@
 The order gateway runs the sessions' intents under the research parameters and the guardian's under the .env baseline,
 in one process with one Trader. A guardian-origin intent runs inside `guardian(alert)`, a context every await inside it
 inherits (asyncio copies it into the tasks it starts):
-- limits: Exchanges.limits is the .env baseline and Exchanges.experiment None, so "the AWS guardian always uses the
-  .env baseline" holds in a shared process;
+- limits: Exchanges.limits is the desk baseline (.env + the human's desk limits: desk_limits.py) and
+  Exchanges.experiment None, so "the AWS guardian always uses the baseline" holds in a shared process;
 - alerts: Trader.alert goes to `alert`, the guardian's Notifier.as_trader_alert (its non-urgent alerts reach Telegram
   too, as they do from the guardian; a session's reach the journal only);
 - symbol locks: a busy symbol answers SymbolBusy after symlock.GUARDIAN_WAIT_S, as in the guardian: skipped this pass,
