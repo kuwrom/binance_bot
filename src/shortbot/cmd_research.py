@@ -264,6 +264,21 @@ async def research_report(min_n: int = 5) -> dict[str, Any]:
     return {**research.report(j, min_n), "forward": summary(j.db)}
 
 
+@command(cli="golive", help="the go-live gate on the demo evidence: READY only when every criterion passes "
+         "(read-only; docs/GO_LIVE.md)", args=(
+    Arg("text", "--text", "print the report as text instead of JSON", action="store_true", cli_only=True),))
+async def golive_report(text: bool = False) -> dict[str, Any] | str:
+    """The go-live gate (docs/GO_LIVE.md) on the demo evidence since max(2026-10-03, uptime_since): live-eligible
+    setups (registry forward test), independent trades (n_eff, entry days), expectancy on demo and mainnet-repriced R,
+    stress, drawdown in R and equity, guardian uptime, unprotected incidents, slippage calibration and the plumbing
+    drills. verdict READY only when every gated criterion passes; each names its threshold and source. In live mode it
+    adds the live probation (live fills vs the model and demo). Read-only: switching to live is the owner's (.env)."""
+    from . import golive, golive_view
+    app = get_app()
+    rep = golive.report(app.journal, app.settings.limits)
+    return golive_view.text(rep) if text else rep
+
+
 @command(cli="start-session", write=True, help="start a trading session; acknowledges the alerts the brief listed "
          "(start_session)", args=(Arg("notes", "--notes"),))
 async def start_session(notes: str = "") -> dict[str, Any]:

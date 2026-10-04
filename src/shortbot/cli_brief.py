@@ -36,6 +36,11 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         lines.append(f"- ⚠️ setup ladder check failed: {type(e).__name__}: {e}")
     lines.append(backup_line(j))
+    try:   # the go-live gate (#46): a light check (no bootstrap), its blockers by name
+        from .golive_view import brief_line as golive_line
+        lines.append(golive_line(j, app.settings.limits))
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- ⚠️ go-live check failed: {type(e).__name__}: {e}")
     try:   # long-lived processes still on code older than the code on disk (#58)
         lines.append(await asyncio.wait_for(procs.brief_line(j), BRIEF_TIMEOUT_S))
     except Exception as e:  # noqa: BLE001

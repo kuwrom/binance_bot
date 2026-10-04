@@ -29,7 +29,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
                "propose_entries", "cancel_entry_group", "amend_entry", "position_ladder", "ladder"),
     "Research": ("research_report", "calibration_report", "list_setups", "list_signals", "add_learning",
                  "update_learning", "learnings", "study", "sweeps", "registry", "add_unlock", "macro-add", "macro-refresh",
-                 "warmup_start", "warmup_check", "warmup", "probe", "drill"),
+                 "warmup_start", "warmup_check", "warmup", "probe", "drill", "golive_report"),
     "Risk config": ("risk_params", "set_risk_params", "reset_risk_params"),
     "Kill switch": ("kill-switch", "halt_trading", "flatten_all"),
 }
