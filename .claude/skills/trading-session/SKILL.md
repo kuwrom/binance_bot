@@ -11,6 +11,7 @@ when_to_use: User says "run a trading session", "let's trade", "check the market
 The shortbot state was injected at session start: kill switch, stale processes, open positions, entry orders, unacknowledged alerts (urgent first), the learnings rulebook and the learnings relevant now. If you don't see it, run `.venv/bin/shortbot brief`.
 
 ## 0. Start: session, kill switch, health
+- **Which desk?** The brief header (or `"mode"` in `account`). Live: follow docs/DESKS.md "The live desk" (trade on judgement, weigh demo evidence by its tags, never change the project code).
 - **`start_session` first, every session.** It acknowledges the alerts the brief listed (and returns them; until then they stay listed). It also links every later row, from the MCP tools and from this Claude session's `shortbot` CLI calls, to the session in the audit trail.
 - **Kill switch** (the brief's first line, `trading_state`, `shortbot kill-switch`):
   - Not ACTIVE: only reduce risk (close, partial close, tighten a stop, cancel entries, flatten). Entries, adds, risk-raising amends, widening and ladder opt-ins are refused. Never try to clear it or work around it. Only the human clears it, from their own terminal (`shortbot-admin clear`). A HALTED caused by a stale guardian heartbeat lifts itself once the guardian is back.

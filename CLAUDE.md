@@ -1,5 +1,6 @@
 # shortbot: an AI-run Binance futures research desk
 
+- Two desks, demo and live, run in parallel from this checkout with different mandates: read `docs/DESKS.md` before acting. On live, its rules narrow everything below.
 - Trading: use the `trading-session` skill. Reviewing what we learned or changing rules: `research-review`. Extending the code: `docs/RESEARCH.md`. Strategy ideas (incl. long/neutral): `docs/strategies/`. Methods and the AI-first design principle: `docs/QUANT_METHODS.md`.
 - Pipeline: `market/` DataHub (data) → `signals/` plug-ins → `tape.py` classifier → setups/plans → trading/entries → guardian. New logic goes into that layer, not into the scanner.
 - Orders go only through the app (the `shortbot` MCP tools or the `.venv/bin/shortbot` CLI), never ad-hoc exchange scripts.

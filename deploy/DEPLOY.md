@@ -93,13 +93,15 @@ Until it's added, `model` stays unknown. The hook prints nothing and always exit
 
 Each guardian and MCP server records the code it imported in kv `proc:<pid>`. Every hour the guardian lists the live `shortbot-mcp` and `shortbot-guardian` processes. It sends an urgent `stale_process:<pid>` alert, with the pid, the age and the fix, for each one that is unregistered (code from before this check) or whose code differs from the code on disk now, at most once per pid every 6 h. It also removes the rows of dead pids. The session brief shows the count on one line. It is detection only: nothing is signalled or killed. A guardian in a container only sees its own processes, so on Linux the brief on the host is what covers the MCP servers. Under `pid: host` (section 4) they share one process table, and each side judges only the code it can read: the other side's processes are listed as unknown, never stale.
 
-## 6. Going live (only after demo results in the journal)
-First, `.venv/bin/shortbot golive --text` must answer READY. docs/GO_LIVE.md lists the criteria, their evidence and the monthly drills (§7a). The gate only reads; the steps below are the owner's.
-1. Create the live key (step 2) and add it to `.env` as `BINANCE_LIVE_API_KEY` / `BINANCE_LIVE_API_SECRET`.
-2. Set `SHORTBOT_MODE=live` and `LIVE_CONFIRM=I_ACCEPT_REAL_MONEY_RISK`.
-3. Keep the limits small: `MAX_POSITION_NOTIONAL`, `MAX_TOTAL_NOTIONAL`, `RISK_PER_TRADE_PCT`.
-4. Run `docker compose up -d` to restart the guardian, and restart Claude Code.
-5. Start at minimum size. The first 30 live trades are probation: `shortbot golive` in live mode compares their fills with the model and with demo.
+## 6. Going live: the live desk next to demo (docs/DESKS.md)
+`.venv/bin/shortbot golive --text` reports READY or NOT READY from the demo evidence (docs/GO_LIVE.md); the gate only reads, and the steps below are the owner's. Live runs alongside demo from this checkout, `.env` and journal: every account state (kill switch, heartbeat, peak, alerts, warm-up, symbol locks) is kept per mode, and the demo guardian runs the market-wide jobs for both.
+1. Create the live key (step 2). In the one `.env`, add `BINANCE_LIVE_API_KEY` / `BINANCE_LIVE_API_SECRET`, `LIVE_CONFIRM=I_ACCEPT_REAL_MONEY_RISK` and `COMPOSE_PROFILES=live`. Keep `SHORTBOT_MODE=demo`: the live services set `SHORTBOT_MODE=live` themselves.
+2. The `.env` baseline limits are what live trades under (`AI_PARAMS_IN_LIVE=false`; demo's research overrides apply to demo only). Keep them small: `MAX_POSITION_NOTIONAL`, `MAX_TOTAL_NOTIONAL`, `RISK_PER_TRADE_PCT`.
+3. `docker compose up -d` starts `guardian-live` and `gateway-live`; `docker compose logs -f guardian-live` should show "Guardian online (live)". Autodeploy then checks both desks' heartbeats.
+4. Live session: `SHORTBOT_MODE=live claude` in the same checkout. Its MCP server, CLI and brief are live; the brief header says so.
+5. Kill switch per desk: `.venv/bin/shortbot-admin --mode live clear --reason ...` (or `status`, `equity-peak`, `ladder-*`).
+6. Start at minimum size. The first 30 live trades are probation: `shortbot golive` in live mode compares their fills with the model and with demo.
+7. To stop live: remove `COMPOSE_PROFILES=live` and run `docker compose stop guardian-live gateway-live` once the live book is flat.
 
 ## 7. Backups
 `data/shortbot.db` is the only copy of the desk's research: trades, scan candidates, decisions, predictions, learnings and alerts. It is gitignored and never synced, so it needs its own backups, off the box.

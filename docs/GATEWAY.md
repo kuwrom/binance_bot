@@ -150,7 +150,7 @@ B is the same pattern, with the guardian as one more surface. A and B share step
 | contention | one writer for intent rows | every caller writes the shared journal; on an event loop as non-waiting units (#79, journal_writer.py), off a loop with a 15 s busy timeout | as socket |
 
 ### 3.2 Protocol
-- **Socket path:** `data/run/gateway-<mode>.sock`. The mode is in the path and in every request, so a demo client can't drive a live gateway; a mismatch is refused.
+- **Socket path:** `data/run/gateway-<mode>.sock`; compose runs one per desk (`gateway`, and `gateway-live` under the `live` profile). The mode is in the path and in every request, so a demo client can't drive a live gateway; a mismatch is refused.
 - **Request:** one JSON line: `{"v":1, "op":"submit", "id":"<intent id>", "mode":"demo", "intent":{...}, "origin":{"actor":"mcp:close_position", "session":..., "pid":..., "code":"<hash>"}, "deadline_s":60}`.
 - **Replies:** `accepted` (journalled, with the queue position), then one final `{"id","status","result"|"error"}`. Two more ops:
   - `{"op":"status","id":...}` returns the stored outcome;
