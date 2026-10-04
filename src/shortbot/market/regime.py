@@ -27,7 +27,7 @@ async def market_regime(ex: Exchanges) -> dict:
     warnings = []
     if btc_chg > 3:
         warnings.append(f"BTC +{btc_chg:.1f}% 24h: alts pump with BTC, shorts get squeezed")
-    if closes and closes[-1] > ema20 > ema50:
+    if ema20 is not None and ema50 is not None and closes[-1] > ema20 > ema50:   # (the EMAs are set iff closes are)
         warnings.append("BTC 4h uptrend (price > EMA20 > EMA50)")
     if breadth and breadth > 70:
         warnings.append(f"{breadth:.0f}% of alts green: broad risk-on")

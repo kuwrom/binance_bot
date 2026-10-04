@@ -43,7 +43,7 @@ async def social(ctx: MarketContext) -> SignalOut:
     c4h = await ctx.candles("4h", 18)
     last = await ctx.last()
     low3d = min((c[3] for c in c4h), default=None)
-    extended = bool(low3d) and last >= low3d * 1.2
+    extended = bool(low3d and last >= low3d * 1.2)
     fr = (await ctx.funding()).get("rate")
     rising = False
     c1h = await ctx.candles("1h", 60)

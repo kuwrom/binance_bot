@@ -86,8 +86,8 @@ warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 
-[[tool.mypy.overrides]]          # no py.typed and no stubs: their values are Any
-module = ["ccxt", "ccxt.*", "feedparser", "mplfinance"]
+[[tool.mypy.overrides]]          # no py.typed and no stubs installed: their values are Any
+module = ["ccxt", "ccxt.*", "feedparser", "mplfinance", "pandas"]
 ignore_missing_imports = true
 
 # Strict tier: the safety-critical modules, the order path among them. `strict` is global-only, so these are its
@@ -116,7 +116,7 @@ extra_checks = true
 
 # Every other module is the lenient tier (mypy's defaults), except this debt list: the modules with errors, 106 on
 # 0f0f45d (724 errors), 90 after #83 (276; a mixin declares its host's attributes, as trading_orders.OrderFlow does),
-# 68 after #85 (243).
+# 56 after #85 (195).
 # Remove a module once `mypy` passes without it; never add one.
 [[tool.mypy.overrides]]
 module = [
@@ -129,15 +129,13 @@ module = [
     "shortbot.backtest.strategies_flow", "shortbot.backtest.strategies_long2", "shortbot.backtest.strategies_more",
     "shortbot.backtest.strategies_v2", "shortbot.backtest.strategies_v3", "shortbot.backtest.strategies_v4",
     "shortbot.backtest.trail5m", "shortbot.backtest.trials_eff", "shortbot.backtest.trigger_rates",
-    "shortbot.backtest.xs_factors", "shortbot.backtest.xs_features", "shortbot.cadence_shadow", "shortbot.charts",
-    "shortbot.fill_quality", "shortbot.fill_report", "shortbot.histdaily", "shortbot.histdata",
-    "shortbot.histdata_rest", "shortbot.histdata_vision", "shortbot.ladder", "shortbot.lifecycle_data",
-    "shortbot.lifecycle_report", "shortbot.lifecycle_study", "shortbot.market.events", "shortbot.market.market_map",
-    "shortbot.market.regime", "shortbot.mtf", "shortbot.mtf_live", "shortbot.news", "shortbot.patterns_data",
-    "shortbot.patterns_detect", "shortbot.probability.evaluate", "shortbot.probability.montecarlo", "shortbot.profile",
-    "shortbot.read", "shortbot.refresh", "shortbot.registry_forward", "shortbot.registry_seed", "shortbot.research",
-    "shortbot.research_stats", "shortbot.scan_tiered", "shortbot.scanner", "shortbot.setup_ladder",
-    "shortbot.setup_ladder_view", "shortbot.shadow_eval", "shortbot.signals.social", "shortbot.signals.tape",
-    "shortbot.sweeps", "shortbot.trial_register", "shortbot.warmup"
+    "shortbot.backtest.xs_factors", "shortbot.backtest.xs_features", "shortbot.cadence_shadow", "shortbot.fill_quality",
+    "shortbot.fill_report", "shortbot.histdaily", "shortbot.histdata", "shortbot.histdata_rest",
+    "shortbot.histdata_vision", "shortbot.ladder", "shortbot.lifecycle_data", "shortbot.lifecycle_report",
+    "shortbot.lifecycle_study", "shortbot.patterns_data", "shortbot.patterns_detect", "shortbot.probability.evaluate",
+    "shortbot.probability.montecarlo", "shortbot.profile", "shortbot.read", "shortbot.refresh",
+    "shortbot.registry_forward", "shortbot.registry_seed", "shortbot.research", "shortbot.research_stats",
+    "shortbot.setup_ladder", "shortbot.setup_ladder_view", "shortbot.shadow_eval", "shortbot.sweeps",
+    "shortbot.trial_register"
 ]
 ignore_errors = true

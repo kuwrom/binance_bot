@@ -220,9 +220,8 @@ class TieredScan:
                 events[raw] = "delisting scheduled"
         by_base = {raw[:-4].removeprefix("1000"): raw for raw in universe}
         for u in await asyncio.to_thread(self._unlocks):   # a journal read: off the loop like the rest of tier 1
-            raw = by_base.get(u["base"])
-            if raw:
-                events.setdefault(raw, f"unlock in {u['days_to_unlock']:.1f}d ({u.get('pct_supply')}% of supply)")
+            if unlocking := by_base.get(u["base"]):
+                events.setdefault(unlocking, f"unlock in {u['days_to_unlock']:.1f}d ({u.get('pct_supply')}% of supply)")
         return {"listing_age_d": ages, "events": events, "interval_h": await self._intervals()}
 
     def _unlocks(self) -> list[dict[str, Any]]:

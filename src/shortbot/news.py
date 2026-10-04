@@ -162,10 +162,11 @@ async def fear_greed() -> dict:
 async def news_for(base: str, max_items: int = 15) -> dict:
     """Announcements + headlines mentioning a coin ticker, with bearish keywords flagged. Raw: internal only (the
     guardian matches and dedupes on it); the agent gets `coin_news`."""
-    ann, rss = await asyncio.gather(binance_announcements(), rss_headlines(), return_exceptions=True)
-    errors = [n for n, v in (("binance_announcements", ann), ("rss", rss)) if isinstance(v, BaseException)]
-    ann = ann if isinstance(ann, list) else []
-    rss = rss if isinstance(rss, list) else []
+    answers = await asyncio.gather(binance_announcements(), rss_headlines(), return_exceptions=True)
+    got_ann, got_rss = answers   # a separate unpack: unpacked in place, mypy can't type these (has-type)
+    errors = [n for n, v in (("binance_announcements", got_ann), ("rss", got_rss)) if isinstance(v, BaseException)]
+    ann = got_ann if isinstance(got_ann, list) else []
+    rss = got_rss if isinstance(got_rss, list) else []
     hits_a = [a for a in ann if mentions(a["title"], base)]
     hits_r = [h for h in rss if mentions(h["title"] + " " + h["summary"], base)]
     for h in hits_a + hits_r:

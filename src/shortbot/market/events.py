@@ -45,7 +45,9 @@ class EventStore:
                                        recipient, source, notes,
                                        datetime.now(UTC).isoformat(timespec="seconds")))  # wall-clock: added
         self.db.commit()
-        return int(cur.lastrowid)
+        if (rowid := cur.lastrowid) is None:   # a plain INSERT always sets it (as journal._insert)
+            raise sqlite3.ProgrammingError("no row id after the unlock INSERT")
+        return rowid
 
     def upcoming(self, base: str | None = None, days: float = 60, include_past_days: float = 7) -> list[dict[str, Any]]:
         now = clock.now_ms()   # point in time: only events known (added) by now

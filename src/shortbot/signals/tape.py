@@ -118,7 +118,7 @@ async def crowding(ctx: MarketContext) -> SignalOut:
     f8 = rate * 8 / iv if rate is not None else None
     crowded = chg > 0 and oi_chg is not None and oi_chg >= 10 and f8 is not None and f8 >= 0.0003
     out = SignalOut(features={"crowded_longs": crowded})
-    if crowded:
+    if crowded and f8 is not None:   # (crowded needs f8)
         out.points.append((5, f"crowded longs: OI +{oi_chg:.0f}%, funding {f8 * 100:.3f}%/8h"))
     return out
 

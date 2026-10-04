@@ -64,8 +64,8 @@ def coin_row(sym: str, c1h: list[list[float]], btc_rets: list[float], btc_moves:
     rets = log_returns(closes)
     b = beta(rets, btc_rets)
     moves = {h: pct(closes, n) for h, n in (("1h", 1), ("4h", 4), ("24h", 24))}
-    resid = {h: (moves[h] - b * btc_moves[h]) if moves[h] is not None and btc_moves.get(h) is not None else None
-             for h in moves}
+    resid = {h: (m - b * bm) if m is not None and (bm := btc_moves.get(h)) is not None else None
+             for h, m in moves.items()}
     res = [r - b * x for r, x in zip(rets[-len(btc_rets):], btc_rets[-len(rets):], strict=False)] if btc_rets else []
     resid_vol = statistics.pstdev(res) * 100 if len(rets) > 24 and len(res) > 1 else None
     base_vol = statistics.fmean(qv[-170:-2]) if len(qv) > 26 else None   # [-1] is the still-forming hour
@@ -81,8 +81,8 @@ def _r(v: float | None, n: int = 2) -> float | None:
 
 
 def _med(xs: list[float | None]) -> float | None:
-    xs = [x for x in xs if x is not None]
-    return statistics.median(xs) if xs else None
+    known = [x for x in xs if x is not None]
+    return statistics.median(known) if known else None
 
 
 def market_header(rows: list[dict], btc: dict, eth: dict) -> dict[str, Any]:

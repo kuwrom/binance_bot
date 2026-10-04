@@ -111,9 +111,11 @@ async def coin_snapshot(ex: Exchanges, symbol: str) -> dict:
     symbol = to_symbol(symbol)
     ctx = DataHub(ex).context(symbol)
     ev = await evaluate(ctx)
-    c1h, c15, c4h, ls, fhist, nws, oi, tk, fund = await asyncio.gather(
-        ctx.candles("1h", 60), ctx.candles("15m", 96), ctx.candles("4h", 60), ctx.long_short(),
-        ctx.funding_history(10), ctx.news(), ctx.oi_history("1h", 25), ctx.taker_ratio("1h", 6), ctx.funding())
+    # all nine at once, as two gathers of typed results (typeshed types a gather of at most six awaitables)
+    (c1h, c15, c4h, ls, fhist), (nws, oi, tk, fund) = await asyncio.gather(
+        asyncio.gather(ctx.candles("1h", 60), ctx.candles("15m", 96), ctx.candles("4h", 60), ctx.long_short(),
+                       ctx.funding_history(10)),
+        asyncio.gather(ctx.news(), ctx.oi_history("1h", 25), ctx.taker_ratio("1h", 6), ctx.funding()))
     last = await ctx.last()
     atr1h = ind.atr(c1h) or 0
     r = lambda v, n=4: round(v, n) if isinstance(v, (int, float)) and not isinstance(v, bool) else v  # noqa: E731
@@ -123,7 +125,8 @@ async def coin_snapshot(ex: Exchanges, symbol: str) -> dict:
         dist = (price - last) / last * 100 if last else None
         ok = dist is not None and lim.min_stop_distance_pct <= dist <= lim.max_stop_distance_pct
         return {"price": r(price), "distance_pct": r(dist, 2), "method": method, "allowed": ok,
-                "max_leverage": max_leverage_for_stop(dist, lim.liq_buffer_pct, lim.max_leverage) if ok else None,
+                "max_leverage": (max_leverage_for_stop(dist, lim.liq_buffer_pct, lim.max_leverage)
+                                 if ok and dist is not None else None),   # (ok: a distance within the limits)
                 "note": None if ok else f"outside {lim.min_stop_distance_pct}-{lim.max_stop_distance_pct}% limit"}
 
     return {

@@ -84,6 +84,8 @@ def main(argv: list[str] | None = None) -> None:
     from .exchange import to_raw
     names = sys.argv[1:] if argv is None else argv
     store = R.path_for(str(db_path().parent.parent / "shortbot.db"))
+    if store is None:   # path_for answers None for an in-memory journal only
+        raise SystemExit("no stream store beside the journal")
     now = int(time.time() * 1000)   # wall-clock: a live read
     for n in names:
         v = view(store, to_raw(n), now)

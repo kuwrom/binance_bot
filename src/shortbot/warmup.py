@@ -13,7 +13,7 @@ import math
 import statistics
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeGuard
 
 from .exchange import to_symbol
 
@@ -81,34 +81,38 @@ def drop_reasons(s0: dict[str, Any], s1: dict[str, Any], btc_ret_15m: float | No
     return out
 
 
+def _ok(v: object) -> TypeGuard[Any]:
+    """A gather(return_exceptions=True) answer that is not an exception (ccxt's answers are Any)."""
+    return not isinstance(v, BaseException)
+
+
 async def snapshot(ex, symbol: str) -> dict[str, Any]:
     pub = ex.public
     tk, fr, oi, ob, c1m, c1h, intervals = await asyncio.gather(
         pub.fetch_ticker(symbol), pub.fetch_funding_rate(symbol), pub.fetch_open_interest(symbol),
         pub.fetch_order_book(symbol, limit=100), pub.fetch_ohlcv(symbol, "1m", limit=16),
         pub.fetch_ohlcv(symbol, "1h", limit=6), ex.funding_intervals(), return_exceptions=True)
-    ok = lambda v: not isinstance(v, BaseException)  # noqa: E731
     s: dict[str, Any] = {"symbol": symbol, "ts": int(time.time() * 1000)}
-    if ok(tk):
+    if _ok(tk):
         s["last"] = tk.get("last")
-    if ok(ob) and ob["bids"] and ob["asks"] and s.get("last"):   # futures 24h ticker carries no bid/ask
+    if _ok(ob) and ob["bids"] and ob["asks"] and s.get("last"):   # futures 24h ticker carries no bid/ask
         s["spread_bp"] = round((ob["asks"][0][0] - ob["bids"][0][0]) / s["last"] * 1e4, 2)
-    if ok(fr):
+    if _ok(fr):
         s.update(mark=fr.get("markPrice"), index=fr.get("indexPrice"), funding_rate=fr.get("fundingRate"))
         if fr.get("markPrice") and fr.get("indexPrice"):
             s["basis_bp"] = round((fr["markPrice"] / fr["indexPrice"] - 1) * 1e4, 2)
-    if ok(oi):
+    if _ok(oi):
         s["oi"] = oi.get("openInterestAmount")
-    if ok(ob) and s.get("last"):
+    if _ok(ob) and s.get("last"):
         lo, hi = s["last"] * 0.99, s["last"] * 1.01
         s["depth_1pct_usd"] = round(sum(p * q for p, q, *_ in ob["bids"] if p >= lo)
                                     + sum(p * q for p, q, *_ in ob["asks"] if p <= hi))
-    if ok(c1m) and len(c1m) > 2:
+    if _ok(c1m) and len(c1m) > 2:
         rets = [math.log(b[4] / a[4]) for a, b in itertools.pairwise(c1m) if a[4] and b[4]]
         s["rv_1m_pct"] = round(statistics.pstdev(rets) * 100, 4) if rets else None
-    if ok(c1h) and c1h:
+    if _ok(c1h) and c1h:
         s["high_6h"] = max(c[2] for c in c1h)
-    if ok(intervals):
+    if _ok(intervals):
         from .exchange import to_raw
         s["funding_interval_h"] = (intervals.get(to_raw(symbol)) or {}).get("interval_h") or 8
     return s
@@ -164,7 +168,7 @@ class WarmUp:
         snaps1 = await asyncio.gather(*(snapshot(self.ex, s) for s in syms))
         btc = await btc_15m_return(self.ex)
         by0 = {s["symbol"]: s for s in s0["coins"]}
-        verdicts = {}
+        verdicts: dict[str, dict[str, Any]] = {}
         for s1 in snaps1:
             reasons = drop_reasons(by0.get(s1["symbol"], {}), s1, btc)
             verdicts[s1["symbol"]] = {"persisted": not reasons, "drop_reasons": reasons,
