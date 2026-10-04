@@ -342,7 +342,7 @@ Each step merges on its own with the full suite green. Behaviour changes only wh
 
 - **Reads stay in-process everywhere.** Positions, account, stop listings, pending entries, journal, governor/budget and scans don't serialise behind the writer, which is also how NautilusTrader and Freqtrade read. Only the re-reads inside a sequence move into the gateway.
 - **The flock stays for good.** Through steps 0-5 it is the belt-and-braces guard (the gateway takes it per sequence, at microseconds). From step 6 its only job is break-glass against the gateway. It is 200 lines with tests. Retiring it would only make sense if break-glass is dropped (D3).
-- **Order against parallel work.** Step 0 after #37 (both touch the order-path modules); step 4 after #72 (guardian wiring). The resolver checks a stop's not-found Query Algo Order answer against the open conditional orders (#55 hasn't verified it).
+- **Order against parallel work.** Step 0 after #37 (both touch the order-path modules); step 4 after #72 (guardian wiring). The resolver and `Trader.find_stop` check a stop's not-found Query Algo Order answer against the open conditional orders: demo answered -2013 for a resting one (probe 8, 1 of 4 lookups, 2026-10-04; #89, fake_faults `2013_resting`).
 
 ## 9. Risks, open questions, decisions
 **Risks:**

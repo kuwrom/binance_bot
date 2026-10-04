@@ -91,8 +91,8 @@ def outcome(cid: str, o: dict[str, Any]) -> str:
 
 async def lookup(t: Client, symbol: str, cid: str, trigger: bool = False) -> dict[str, Any] | None:
     """The order behind a client id (trigger: a conditional order, by clientAlgoId), or None if Binance doesn't know it
-    (-2013). Other errors propagate: the outcome stays unknown. A conditional order's not-found answer is unverified
-    (demo probe #55): callers also check the open conditional orders."""
+    (-2013). Other errors propagate: the outcome stays unknown. A conditional order's not-found answer can be wrong
+    (demo probe 8 answered -2013 for a resting one, 2026-10-04, #89): callers also check the open conditional orders."""
     try:
         return await t.fetch_order(None, symbol, {"clientOrderId": cid, **({"trigger": True} if trigger else {})})
     except ccxt.OrderNotFound:

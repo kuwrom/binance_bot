@@ -295,8 +295,8 @@ class Trader(OpenFlow, ManageFlow, OrderFlow):
 
     async def find_stop(self, symbol: str, cid: str) -> dict | None:
         """The conditional order sent under `cid`: by its client id (Query Algo Order), else among the open conditional
-        orders (a verified shape; the lookup's not-found answer is not, #55). None when neither shows it. Found, it
-        reached the book: the running intent records it (#86), so no send it found stays in doubt."""
+        orders (a verified shape; the lookup can answer -2013 for a resting order, #89). None when neither shows it.
+        Found, it reached the book: the running intent records it (#86), so no send it found stays in doubt."""
         found = None
         try:
             o = await clientid.lookup(self.t, symbol, cid, trigger=True)

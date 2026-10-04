@@ -49,7 +49,7 @@ Equity details (`golive_equity.py`):
 
 Plumbing details:
 - **Drills:** kill-switch, restart, backup, backup-offbox (attested). `awaiting_clear` is not a pass.
-- **Probes:** every probe in `probes.ORDER`, latest result ok and clean, with `matches_fake` true. `user-stream` is observational (it reports which URL got which events), so ok and clean are enough. An inconclusive, mismatched or unclean result counts once a later `probe_explained` decision starts with the probe's name.
+- **Probes:** every probe in `probes.ORDER`, latest result ok and clean, with `matches_fake` true. `user-stream` is observational (it reports which URL got which events), so ok and clean are enough. `trigger-listing-cid` judges the trigger listing only; its lookup by clientAlgoId is reported, as it can miss a resting order (#89). An inconclusive, mismatched or unclean result counts once a later `probe_explained` decision starts with the probe's name.
 - **Soak** (last 30 days, this mode): the gateway has run. There is no `breakglass:*` intent outside a drill window, no `unknown` or `interrupted` intent, and no intent open past `intents.MAX_OPEN_S`.
 
 ## Reported, not gated
