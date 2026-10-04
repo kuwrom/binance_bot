@@ -4,3 +4,4 @@ data
 .git
 tests
 __pycache__
+ui

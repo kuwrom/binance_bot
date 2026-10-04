@@ -11,7 +11,9 @@ import asyncio
 import getpass
 import logging
 import os
+import re
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -26,7 +28,7 @@ from .. import alerts_view, audit, procs, provenance
 from ..app import close_app, get_app
 from ..commands import CommandError
 from ..redact import install_log_redaction, redact
-from . import auth, forms, runner
+from . import auth, forms, research, runner
 
 log = logging.getLogger("shortbot.web")
 
@@ -142,6 +144,25 @@ class Web:
             r["urgent"], r["acked"] = alerts_view.is_urgent(r["kind"], r["symbol"]), r["id"] <= ack
         return JSONResponse({"ack_id": ack, "alerts": rows})
 
+    async def research(self, request: Request) -> Response:
+        """Stored research state (web/research.py): candidates | coin?symbol= | book. Journal reads only."""
+        j, now_ms, q = get_app().journal, int(time.time() * 1000), request.query_params
+        view = request.path_params["view"]
+        try:
+            hours = max(0.25, min(72.0, float(q.get("hours", "6"))))
+        except ValueError:
+            return _err(400, "hours must be a number")
+        if view == "candidates":
+            return JSONResponse(runner.jsonable(research.candidates(j, now_ms, hours)))
+        if view == "book":
+            return JSONResponse(runner.jsonable(research.book(j, now_ms)))
+        if view == "coin":
+            symbol = q.get("symbol", "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9/:]{1,30}", symbol):
+                return _err(400, "symbol: letters and digits, e.g. SOL or SOL/USDT:USDT")
+            return JSONResponse(runner.jsonable(research.coin(j, symbol, now_ms, hours)))
+        return _err(404, f"no research view {view}")
+
     # ------------------------------------------------------------ files
     def doc_paths(self) -> list[str]:
         root = self.docs_root.resolve()
@@ -188,6 +209,7 @@ class Web:
             Route("/api/commands", g(self.commands)),
             Route("/api/run/{name}", g(self.run), methods=["POST"]),
             Route("/api/alerts", g(self.alerts)),
+            Route("/api/research/{view}", g(self.research)),
             Route("/api/docs", g(self.docs)),
             Route("/api/doc", g(self.doc)),
             Route("/api/png", g(self.png)),
@@ -239,8 +261,6 @@ def passwd(generate: bool) -> int:
 def serve(host: str, port: int, wait_s: float = 30.0) -> int:
     """Run the console. Without a password it waits for one (checked every wait_s) instead of exiting, so a
     container with `restart: unless-stopped` doesn't crash-loop on a fresh box."""
-    import time
-
     import uvicorn
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     while (rec := auth.load()) is None:

@@ -1,9 +1,12 @@
 """The web console (shortbot.web): login and throttle, typed forms from the command registry, the API's guards, and a
 write run through the gateway as actor web:<command>, as the MCP server runs it."""
 
+import hashlib
+import json
 import os
 import re
 import stat
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -128,7 +131,6 @@ def test_the_page_is_public_but_every_api_needs_a_session(web):
     page = c.get("/")
     assert page.status_code == 200 and "Shortbot" in page.text
     assert "default-src 'self'" in page.headers["content-security-policy"]
-    assert c.get("/static/app.js").status_code == 200
     assets = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
     assert len(assets) >= 2 and all(c.get(a).status_code == 200 for a in assets), assets
     assert " style=" not in page.text and "<script>" not in page.text   # the CSP allows neither inline
@@ -192,3 +194,58 @@ def test_docs_and_charts_serve_only_their_own_files(web, tmp_path):
     (tmp_path / "out.png").write_bytes(b"\x89PNG\r\n")
     for bad in (str(tmp_path / "out.png"), "data/charts/../../out.png", "data/shortbot.db"):
         assert c.get("/api/png", params={"path": bad}).status_code == 404
+
+
+def test_the_committed_bundle_was_built_from_the_ui_sources():
+    """web/static is `npm run build` output (ui/, docs/WEB.md), committed so the server needs no Node. ui/stamp.mjs
+    writes a hash of the sources beside it: a bundle older than ui/ fails here."""
+    ui = Path(__file__).parent.parent / "ui"
+    files = sorted([p.relative_to(ui).as_posix() for p in (ui / "src").rglob("*") if p.is_file()]
+                   + ["index.html", "package.json", "vite.config.ts"])
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.encode() + b"\0" + (ui / f).read_bytes() + b"\0")
+    stamp = json.loads((server.STATIC / "build.json").read_text())
+    assert stamp["src_hash"] == h.hexdigest(), "ui/ changed since the bundle was built: cd ui && npm run build"
+
+
+# ------------------------------------------------------------ research reads
+def test_research_shows_the_latest_scan_a_coins_standing_and_the_books_odds(web):
+    c, j = web.client, web.journal
+    assert c.get("/api/research/candidates").status_code == 401
+    login(c)
+    now = int(time.time() * 1000)
+    old, new = now - 30 * 60_000, now - 5 * 60_000
+    j.log_candidates("2026-10-03T10:00:00+00:00", old, [{"symbol": "AAA/USDT:USDT", "score": 10, "price": 1.0}], "caution")
+    j.log_candidates("2026-10-03T10:25:00+00:00", new, [
+        {"symbol": "AAA/USDT:USDT", "score": 31, "price": 1.1, "setups": ["pump_fade"], "signals": ["+10 lower high"],
+         "features": {"rsi_1h": 71.0, "secret_feature": 1}},
+        {"symbol": "BBB/USDT:USDT", "score": 44, "price": 2.0, "vetoes": ["too thin"]}], "caution")
+    j.log_prediction("scan", "AAA/USDT:USDT", 1.1, 1.2, 0.9, 24.0, "bracket", 0.31, context={"tape_state": "hype_fade"},
+                     ts_ms=new)
+    got = c.get("/api/research/candidates").json()
+    assert (got["scored"], got["n_tradable"], got["n_vetoed"]) == (2, 1, 1)   # AAA once: its newest row
+    a = got["tradable"][0]
+    assert (a["symbol"], a["score"], a["setups"], a["tape"], a["p_target"]) == \
+        ("AAA/USDT:USDT", 31, ["pump_fade"], "hype_fade", 0.31)
+    assert a["features"] == {"rsi_1h": 71.0} and got["vetoed"][0]["vetoes"] == ["too thin"]
+    assert got["symbols"] == ["AAA/USDT:USDT", "BBB/USDT:USDT"]
+    assert c.get("/api/research/candidates?hours=0.25").json()["scored"] == 2
+    assert c.get("/api/research/candidates?hours=x").status_code == 400
+
+    state = lambda s: c.get("/api/research/coin", params={"symbol": s}).json()["standing"]["state"]  # noqa: E731
+    assert [state(s) for s in ("aaa", "BBBUSDT", "ZZZ")] == ["candidate", "vetoed", "unseen"]
+    assert len(c.get("/api/research/coin", params={"symbol": "AAA"}).json()["history"]) == 2
+    assert c.get("/api/research/coin", params={"symbol": "AAA; DROP"}).status_code == 400
+    tid = j.create_trade("AAA/USDT:USDT", "pump_fade", "lower high", stop_price=1.2, leverage=2, plan={})
+    j.activate_trade(tid, 1.1, 50, 55)
+    assert state("AAA") == "position"   # the most binding standing wins
+
+    j.db.execute("INSERT INTO ladder_shadow (ts, trade_id, symbol, price, score, parts, levels, x_star, x_actual, "
+                 "x_virtual, action, variant, entry, init_r) VALUES ('2026-10-03T10:26:00+00:00', ?, 'AAA/USDT:USDT', "
+                 "1.05, 1.0, '{\"tape_with\": 1}', '[{\"target\": 1.0, \"p0\": 0.4, \"p_model\": 0.5}]', 1.0, 1.0, 1.0, "
+                 "'hold', 'base', 1.1, 0.1)", (tid,))
+    j.db.commit()
+    lad = c.get("/api/research/book").json()["ladders"]["AAA/USDT:USDT"]
+    assert lad["levels"][0]["p_model"] == 0.5 and lad["action"] == "hold" and lad["parts"] == {"tape_with": 1}
+    assert c.get("/api/research/nope").status_code == 404

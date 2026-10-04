@@ -13,6 +13,6 @@ if [ "${3:-}" != --force ] && $SSH "$HOST" 'test -d ~/binance_bot/.git'; then
 fi
 rsync -az --delete -e "$SSH" \
   --exclude .venv --exclude .env --exclude data --exclude .git --exclude __pycache__ --exclude .pytest_cache \
-  --exclude .ruff_cache --exclude '.fuse_hidden*' --exclude .claude/settings.local.json --exclude .claude/worktrees \
+  --exclude .ruff_cache --exclude node_modules --exclude '.fuse_hidden*' --exclude .claude/settings.local.json --exclude .claude/worktrees \
   "$(dirname "$0")/../" "$HOST:~/binance_bot/"
 echo "synced. On the server: cd ~/binance_bot && docker compose up -d --build"
