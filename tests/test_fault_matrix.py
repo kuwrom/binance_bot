@@ -9,7 +9,9 @@ it, and each cell asserts:
 - exactly one closePosition stop while the position is open (none once flat), no bridge left behind
 - the final state settles within the grace: the intent is final, the journal matches the exchange
 - the expected intent_resolved alert (only an intent that ENDED unknown is resolved: one whose own flow settled the
-  send by its client id ends done or failed and needs none)
+  send by its client id ends done or failed and needs none; #86: any send, cancel or edit still in doubt at its end
+  makes it unknown, so a superseded close try or a lost cancel answer is resolved too)
+- nothing left in doubt once the resolver has run (intents.unsettled)
 
 Cells (op x fault). "covered": the primitive's handling is already pinned by that test (without the intent, the
 resolver or these invariants, which this matrix adds); "new": first test of that cell; "skip": not a Binance answer.
@@ -84,11 +86,13 @@ def final(j, row: dict) -> str:
 
 
 async def settle(t: Trader, monkeypatch) -> None:
-    """What the guardian's jobs do once the grace has passed: the resolver, then reconcile ('opening' rows)."""
+    """What the guardian's jobs do once the grace has passed: the resolver, then reconcile ('opening' rows). Nothing
+    is left in doubt after it (#86)."""
     monkeypatch.setattr(reconcile, "OPENING_GRACE_S", -1)
     await resolver.resolve(t, now=time.time() + LATER)
     await reconcile.reconcile(t)
     await t.j.flush()
+    assert intents.unsettled(t.j) == []
 
 
 # ------------------------------------------------------------ open: the market SELL
@@ -143,10 +147,13 @@ async def test_stop_swap_cancel(fault, monkeypatch):
     assert res["ok"], res
     assert close_stops(fake) == [1.02] and bridges(fake) == [] and fake.prearms == {} and fake.position == 100
     # not ran: the old stop still rests, so the new one is refused (-4130, definite: nothing ran) and placed again in
-    # the second round under a new id; the entry's stop is the first id
-    assert row["status"] == "done" and len(cids(fake, "stop")) == 2 + (fault not in RAN)
+    # the second round under a new id; the entry's stop is the first id. Its first cancel's answer was lost: unknown
+    # until the resolver reads the old stop (#86)
+    assert row["status"] == "unknown" and len(cids(fake, "stop")) == 2 + (fault not in RAN)
     assert len(cids(fake, "bridge")) == 1
-    assert t.j.active_trade(SYM)["stop_price"] == 1.02 and resolutions(t.j) == []
+    await settle(t, monkeypatch)
+    assert t.j.active_trade(SYM)["stop_price"] == 1.02 and resolutions(t.j) == ["unknown -> done"]
+    assert final(t.j, row) == "done"
     assert resynced(t) is (fault == "1021_after") and fake.fired == [("cancel_order", "stop", fault)]
 
 
@@ -162,10 +169,14 @@ async def test_stop_swap_bridge(fault, monkeypatch):
     assert bridges(fake) == [] and fake.prearms == {} and fake.position == 100 and len(cids(fake, "bridge")) == 1
     if ran:   # found by its client id: the swap went on, the bridge's outcome recorded
         assert close_stops(fake) == [1.02] and row["status"] == "done" and intents.unsettled(t.j) == []
-    else:     # never placed: nothing was cancelled, the old stop stays; a bridge is never sent twice
+    else:     # never placed: nothing was cancelled, the old stop stays; a bridge is never sent twice. Unknown until the
+        # resolver finds it never landed (#86): nothing of it ran
         assert close_stops(fake) == [1.05] and "bridge stop was not placed" in res["error"]
-        assert row["status"] == "failed" and t.j.active_trade(SYM)["stop_price"] == 1.05
-    assert resolutions(t.j) == [] and fake.fired == [("create_order", "bridge", fault)]
+        assert row["status"] == "unknown" and t.j.active_trade(SYM)["stop_price"] == 1.05
+    await settle(t, monkeypatch)
+    assert final(t.j, row) == ("done" if ran else "refused") and close_stops(fake) == ([1.02] if ran else [1.05])
+    assert resolutions(t.j) == ([] if ran else ["unknown -> refused"]) and fake.fired == [("create_order", "bridge",
+                                                                                         fault)]
 
 
 # ------------------------------------------------------------ closes
@@ -175,14 +186,17 @@ async def test_close(fault, monkeypatch):
     tid = (await open_default(t))["trade_id"]
     fake.arm("create_order", fault, "close")
     res, row = await submit(t, monkeypatch, lambda: t.close(SYM, "exit", "lesson"))
-    assert res["ok"] and row["status"] == "done", res
+    ran = fault in RAN
+    # not ran: its first try stays in doubt (not found yet) while the second closes: unknown until settled (#86)
+    assert res["ok"] and row["status"] == ("done" if ran else "unknown"), res
     await settle(t, monkeypatch)
     assert fake.position == 0 and close_stops(fake) == [] and bridges(fake) == []
     # ran: found by its id, never re-sent; not ran: the whole close is sent again (reduce-only: never more than held)
-    assert len(cids(fake, "close")) == (1 if fault in RAN else 2)
+    assert len(cids(fake, "close")) == (1 if ran else 2)
     assert sum(f["amount"] for f in fake.fills if f["side"] == "buy") == 100
     tr = t.j.get_trade(tid)
-    assert tr["status"] == "closed" and tr["pnl"] is not None and resolutions(t.j) == []
+    assert tr["status"] == "closed" and tr["pnl"] is not None and final(t.j, row) == "done"
+    assert resolutions(t.j) == ([] if ran else ["unknown -> done"])
     assert fake.fired == [("create_order", "close", fault)]
 
 

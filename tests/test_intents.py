@@ -296,7 +296,7 @@ def test_unsettled_lists_a_finished_intents_sends_still_in_doubt_and_nothing_els
         if st != "running":
             intents.finish(j, it.id, Result(st, True, {"ok": True}))
         rows[st] = it.id
-    assert [(r["intent_id"], r["client_id"]) for r in intents.unsettled(j)] == [(rows["done"], "sb-cdone-1")]
+    assert [(r["intent_id"], r["ref"]) for r in intents.unsettled(j)] == [(rows["done"], "sb-cdone-1")]
 
 
 def test_an_old_journal_gets_the_new_columns_and_triggers(tmp_path):

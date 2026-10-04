@@ -28,14 +28,14 @@ from collections.abc import Awaitable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from . import audit, errors, intents
+from . import audit, clientid, errors, intents
 
 if TYPE_CHECKING:
     from .journal import Journal
 
 GRACE_S = 90.0     # entry_intents.GRACE_S: longer than any request takes; still resting by then = it never ran
 SKEW_S = 2.0       # Binance's clock against ours: closer than this, which of two cancels took the order is unknown
-FULL = ("cancelled", "off_book", "edited")
+FULL = clientid.CHANGED
 DEAD = ("canceled", "expired", "rejected")
 
 SCHEMA = """
@@ -119,6 +119,15 @@ def latest(j: Journal, symbol: str, order_id: Any, op: str = "cancel") -> dict[s
     """The newest change of ours of this order (any intent), or None."""
     got = _rows(j, "symbol=? AND order_id=? AND op=?", (symbol, str(order_id), op))
     return got[-1] if got else None
+
+
+def steps(j: Journal, intent_id: str) -> list[dict[str, Any]]:
+    """An intent's sends and changes in the order they left, each with what it did (None: still in doubt): the summary
+    its resolution is told with (resolver.py) and a resubmitted id is answered with (gateway.answer)."""
+    acts = [(o["at"], {"step": o["kind"], "ref": o["client_id"], "outcome": o["outcome"]})
+            for o in intents.orders(j, intent_id)]
+    acts += [(c["at"], {"step": c["op"], "ref": c["order_id"], "outcome": c["outcome"]}) for c in of_intent(j, intent_id)]
+    return [a for _, a in sorted(acts, key=lambda a: a[0])]
 
 
 def later_at(j: Journal, c: dict[str, Any]) -> float | None:

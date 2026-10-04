@@ -26,6 +26,13 @@ def led(*outcomes: str | None, sent: bool | None = None) -> Ledger:
     return out
 
 
+def chg(*outcomes: str | None) -> Ledger:
+    """A run that sent these cancels or edits (intent_changes.py; None: in doubt)."""
+    out = Ledger(sent=True)
+    out.changes = {f"x-{i}-0": o for i, o in enumerate(outcomes)}
+    return out
+
+
 NONE, CANCEL, ACKED, REJECTED, PART, DOUBT = led(), led(sent=True), led("filled"), led("rejected"), led("part_filled"), \
     led(None)
 
@@ -100,6 +107,16 @@ SHAPES = [
     ("add_learning (journal only)", {"ok": True, "learning_id": 3}, NONE, "done"),
     ("stale code", {"ok": False, "stale_code": True, "error": "nothing was sent"}, NONE, "refused"),
     ("busy", {"ok": False, "busy": True, "error": "another session is adding risk"}, NONE, "busy"),
+    # #86: any send or change still in doubt makes it unknown, whatever the body says; the resolver settles it
+    ("close_position: an earlier try in doubt", {"ok": True, "symbol": SYM, "closed_amount": 100.0}, led(None, "filled"),
+     "unknown"),
+    ("move_stop: its bridge not found", {"ok": False, "error": "stop not moved: its bridge stop was not placed"},
+     led(None), "unknown"),
+    ("cancel_entry_group: a cancel's answer lost", {"ok": False, "cancelled": 0, "filled_first": [],
+                                                   "cancel_failed": [3]}, chg(None), "unknown"),
+    ("cancel_entry_group: cancelled", {"ok": True, "cancelled": 1, "filled_first": [], "cancel_failed": []},
+     chg("cancelled", "cancelled"), "done"),
+    ("protect_fill: its pre-arm's cancel in doubt", {"entry_id": 1, "event": "filled"}, chg(None), "unknown"),
     ("plan_step", {"ok": True, "trade_id": 7, "done": [{"kind": "close", "result": {"ok": True}}]}, ACKED, "done"),
     ("plan_step: its stop move failed", {"ok": False, "trade_id": 7, "done": [
         {"kind": "close", "result": {"ok": True}}, {"kind": "move_stop", "result": {"ok": False}}]},
@@ -149,6 +166,9 @@ def test_every_result_shape_maps_to_its_status_and_round_trips(j, what, body, ra
     (clientid.Unknown(CID, TimeoutError()), DOUBT, "unknown", errors.OutcomeUnknown),
     (RuntimeError("market close failed (outcome unknown)"), led("rejected", None), "unknown", errors.Unexpected),
     (RuntimeError("stop not placed"), led("filled", "rejected"), "partial", errors.Unexpected),
+    (RuntimeError("no stop rests"), chg("cancelled"), "partial", errors.Unexpected),   # a cancel that ran: kept
+    (RuntimeError("no stop rests"), chg("rejected"), "failed", errors.Unexpected),
+    (RuntimeError("no stop rests"), chg(None), "unknown", errors.Unexpected),
     (asyncio.CancelledError(), DOUBT, "interrupted", errors.Unexpected),
     (asyncio.CancelledError(), NONE, "interrupted", errors.Unexpected),
 ])

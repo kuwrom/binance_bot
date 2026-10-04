@@ -8,9 +8,12 @@ and a plan target's send, each run as the desk runs it (an intent), each meeting
 "covered": the row's resolution is pinned there (without the intent, the resolver or these invariants); skip: -1008
 on a reduce-only order is not a Binance answer (test_fault_matrix.EXEMPT)."""
 
+import time
+from datetime import datetime, timedelta
+
 import pytest
 
-from shortbot import audit, entry_intents, intents, targets
+from shortbot import audit, entry_intents, intents, resolver, targets
 from shortbot.entries import EntryDesk
 from shortbot.journal import Journal
 from shortbot.trading import Trader
@@ -69,18 +72,26 @@ async def test_cancel_entry(fault, monkeypatch):
     assert e["prearm_id"] in fake.prearms
     fake.arm("cancel_order", fault, "entry")
     res, it = await submit(t, monkeypatch, lambda: d.cancel_group(r["group_id"], "level gone"))
-    assert res["cancel_failed"] == [e["id"]] and it["status"] == "failed"   # in doubt: the row and its stop stay
+    # in doubt: the row and its stop stay, and the intent is unknown until its cancel is read back (#86)
+    assert res["cancel_failed"] == [e["id"]] and it["status"] == "unknown"
     assert row(d, e["id"])["status"] == "pending" and e["prearm_id"] in fake.prearms
     ran = fault in RAN
     assert open_limits(fake) == ([] if ran else [e["order_id"]])
     await d.poll()   # the guardian's next pass: an order Binance shows dead is retired with its pre-arm
-    if not ran:      # still live: the agent was told cancel_failed and asks again
+    if not ran:      # still live: the agent was told cancel_failed and asks again, half a minute later
+        fake.advance(30)
+        real = intents.now_ms
+        monkeypatch.setattr(intents, "now_ms", lambda: (datetime.fromisoformat(real()) + timedelta(seconds=30))
+                            .isoformat(timespec="milliseconds"))
         res2, it2 = await submit(t, monkeypatch, lambda: d.cancel_group(r["group_id"], "level gone"))
         assert res2["ok"] and res2["cancelled"] == 1 and it2["status"] == "done"
     now = row(d, e["id"])
     assert now["status"] == ("expired" if ran else "cancelled") and "canceled" in fake.limits[e["order_id"]]["status"]
     assert open_limits(fake) == [] and fake.prearms == {} and fake.position == 0 and fake.stops == {}
-    assert resolutions(t.j) == [] and fake.fired == [("cancel_order", "entry", fault)]
+    await settle(t, monkeypatch)   # its cancel ran (off the book) or a later one of ours took it (missed)
+    assert intents.get(t.j, it["id"])["status"] == ("done" if ran else "refused")
+    assert resolutions(t.j) == [f"unknown -> {'done' if ran else 'refused'}"]
+    assert fake.fired == [("cancel_order", "entry", fault)]
 
 
 # ------------------------------------------------------------ a plan target's send (the guardian's pass)
@@ -106,7 +117,9 @@ async def test_target(fault, tmp_path, monkeypatch):
     assert len(cids(fake, "target")) == (2 if ran else 3)
     assert [x["status"] for x in targets.rows(g.j)][:2] == ["resting" if ran else "lost", "resting"]
     assert close_stops(fake) == [1.05] and bridges(fake) == [] and fake.position == 100
-    assert {x["status"] for x in g.j._rows("SELECT status FROM intents")} == {"done"} and resolutions(g.j) == []
+    # not ran: the pass that sent it ended unknown (#86) until the resolver finds it never landed: its plan step done
+    await resolver.resolve(g.app.trader, now=time.time() + resolver.GRACE_S + 1)
+    await g.j.flush()
+    assert {x["status"] for x in g.j._rows("SELECT status FROM intents")} == {"done"}
+    assert resolutions(g.j) == ([] if ran else ["unknown -> done"]) and intents.unsettled(g.j) == []
     assert fake.fired == [("create_order", "target", fault)]
-    if ran:   # found by its client id in the same pass: its outcome is recorded, none is left in doubt
-        assert intents.unsettled(g.j) == []

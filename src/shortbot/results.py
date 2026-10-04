@@ -11,8 +11,9 @@ its type (errors.wrap, #37). The gateway builds one per run from the body or the
   send failed and was undone (a stop swap whose new stop was refused, the old one restored).
 - partial: part of it is done: a market order part-filled (a close that filled short), or an answer that refuses yet
   says what it did and kept (_kept below).
-- unknown: a send's outcome is unknown (an `unknown` answer, or an error raised while a client id is in doubt): the
-  resolver settles it by client id (resolver.py). Never re-sent.
+- unknown: something it sent is still in doubt (a send under a client id, or a cancel or an edit: intent_changes.py),
+  whatever the body or the error says (#86), or the body itself answers `unknown`: the resolver settles it from the
+  exchange (resolver.py). Never re-sent.
 - busy (a lock was held, nothing sent: it runs again under its id), interrupted (cancelled mid-run), done.
 """
 
@@ -21,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from . import clientid, errors
+from . import errors
 from .symlock import AccountBusy, SymbolBusy
 
 if TYPE_CHECKING:
@@ -39,6 +40,16 @@ def _kept(body: dict[str, Any]) -> bool:
                                                    and d["result"].get("ok") for d in done)))
 
 
+def declares_doubt(body: Any) -> bool:
+    """A body that itself names what it couldn't settle: a send of unknown outcome (`unknown`), a group's orders that
+    may still rest (`cancel_failed`), a withdrawal's rows left for the fill poll, or withdraw's own "unknown". The
+    resolver judges such an intent by what its doubted sends did; any other body is definite about its goal."""
+    if body == "unknown":
+        return True
+    return isinstance(body, dict) and bool(body.get("unknown") or body.get("cancel_failed")
+                                           or body.get("left_for_fill_poll"))
+
+
 @dataclass(frozen=True)
 class Result:
     status: str
@@ -49,16 +60,16 @@ class Result:
 
     @classmethod
     def of(cls, body: Any, led: Ledger, side: str = "short") -> Result:
-        """A returned body: its `busy` / `unknown` / `ok` flags, then what the run sent."""
-        if isinstance(body, dict):
-            if body.get("ok") is False and body.get("busy"):
-                return cls("busy", False, body, side=side)
-            if body.get("unknown"):
-                return cls("unknown", None, body, side=side)
-            if body.get("ok") is False:
-                if not led.sent:
-                    return cls("refused", False, body, side=side)
-                return cls("partial" if led.has("part_filled") or _kept(body) else "failed", True, body, side=side)
+        """A returned body: its `busy` flag; unknown while anything the run sent is in doubt (or the body says so);
+        then its `ok` flag and what the run sent."""
+        if isinstance(body, dict) and body.get("ok") is False and body.get("busy"):
+            return cls("busy", False, body, side=side)
+        if led.doubt or (isinstance(body, dict) and body.get("unknown")):
+            return cls("unknown", None, body, side=side)
+        if isinstance(body, dict) and body.get("ok") is False:
+            if not led.sent:
+                return cls("refused", False, body, side=side)
+            return cls("partial" if led.has("part_filled") or _kept(body) else "failed", True, body, side=side)
         return cls("partial" if led.has("part_filled") else "done", led.sent, body, side=side)
 
     @classmethod
@@ -76,7 +87,7 @@ class Result:
             return cls("refused", False, None, err, side)
         if led.doubt:
             return cls("unknown", None, None, err, side)
-        return cls("partial" if led.has(*clientid.RAN) else "failed", True, None, err, side)
+        return cls("partial" if led.ran() else "failed", True, None, err, side)
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> Result:

@@ -2,7 +2,8 @@
 that matters, its queued journal writes lost) at each dangerous point of the order path, then a NEW guardian on its
 own client and its own journal connection (tests/fake_faults.View, one shared book and journal file) runs its
 start-up jobs (the protective lane's: the fill poll, the positions pass, entry_reconcile) and must reach:
-- the dead intent swept (interrupted) and, when it sent an order under a client id, resolved once, never re-sent
+- the dead intent swept (interrupted) and, when it sent an order under a client id or a cancel, resolved once, never
+  re-sent: partial, never done (#86: it stopped before its end, whatever its sends did)
 - exactly one closePosition stop on every position, every bridge and orphaned pre-arm swept
 - a trade closed by the dead process journalled closed once, from trade history, with exchange-truth PnL
 - the heartbeat stamped only by a pass that verified every position's stop
@@ -119,7 +120,7 @@ async def test_killed_after_the_open_filled_before_its_stop(tmp_path, monkeypatc
     await startup(g)
     (tr,) = g.j.open_trades()
     assert tr["status"] == "open" and tr["amount"] == 100 and close_stops(d.fake) == [STOP] and bridges(d.fake) == []
-    assert intents.get(g.j, iid)["status"] == "done" and resolutions(g.j) == ["interrupted -> done"]
+    assert intents.get(g.j, iid)["status"] == "partial" and resolutions(g.j) == ["interrupted -> partial"]
     assert len(cids(d.fake, "open")) == 1 and len(alerts(g, "intent_interrupted")) == 1
     verified(g, SYM)
 
@@ -136,7 +137,10 @@ async def test_killed_mid_stop_swap_with_the_bridge_placed_and_the_old_stop_stil
     await startup(g)
     assert close_stops(d.fake) == [STOP] and bridges(d.fake) == [] and d.fake.prearms == {} and d.fake.position == 100
     assert g.j.open_trades()[0]["stop_price"] == STOP and alerts(g, "bridge_swept")   # the journal's stop stands
-    assert intents.get(g.j, iid)["status"] == "done" and resolutions(g.j) == ["interrupted -> done"]
+    assert intents.get(g.j, iid)["status"] == "partial" and resolutions(g.j) == ["interrupted -> partial"]
+    (told,) = alerts(g, "intent_resolved")   # its steps: the bridge placed, then nothing: the stop never moved
+    assert told.endswith("bridge " + intents.orders(g.j, iid)[0]["client_id"] + " placed (it stopped there). Nothing "
+                         "was sent again")
     assert len(cids(d.fake, "bridge")) == 1 and len(cids(d.fake, "stop")) == 1
     verified(g, SYM)
 
@@ -156,7 +160,7 @@ async def test_killed_after_the_close_filled_before_the_journal_write(tmp_path, 
     assert tr["status"] == "closed" and tr["exit_price"] == 1.0
     assert tr["pnl"] == pytest.approx(sum(float(i["income"]) for i in d.fake.income))
     assert len([x for x in g.j.decisions(SYM, 100) if x["action"] == "trade_closed"]) == 1
-    assert intents.get(g.j, iid)["status"] == "done" and resolutions(g.j) == ["interrupted -> done"]
+    assert intents.get(g.j, iid)["status"] == "partial" and resolutions(g.j) == ["interrupted -> partial"]
     assert len(cids(d.fake, "close")) == 1 and d.fake.position == 0 and close_stops(d.fake) == []
     verified(g)
 
@@ -184,7 +188,7 @@ async def test_killed_after_a_limit_fill(point, tmp_path, monkeypatch):
     assert len(cids(d.fake, "stop")) == 1 and len(cids(d.fake, "entry")) == 1
     dead = [r for r in g.j._rows("SELECT * FROM intents WHERE kind='protect_fill' ORDER BY rowid")]
     if point == "after_its_stop":   # the dead protect_fill sent the stop: resolved by its id, not sent again
-        assert dead[0]["status"] == "done" and resolutions(g.j) == ["interrupted -> done"]
+        assert dead[0]["status"] == "partial" and resolutions(g.j) == ["interrupted -> partial"]
     else:
         assert resolutions(g.j) == []
     verified(g, SYM)
@@ -210,7 +214,7 @@ async def test_killed_mid_halted_withdrawal(tmp_path):
     d, g = await halted_crash(tmp_path)
     assert [o["status"] for o in d.fake.limits.values()] == ["canceled", "canceled"] and d.fake.prearms == {}
     assert {x["status"] for x in g.entries._rows()} == {"cancelled"} and ks.read(g.j)["state"] == ks.HALTED
-    assert d.fake.position == 0 and d.fake.stops == {} and resolutions(g.j) == []
+    assert d.fake.position == 0 and d.fake.stops == {} and resolutions(g.j) == ["interrupted -> partial"]   # 1 cancel
     assert len(cids(d.fake, "entry")) == 2 and len(cids(d.fake, "prearm")) == 2
     verified(g)
 

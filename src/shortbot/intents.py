@@ -215,10 +215,15 @@ class Ledger:
 
     @property
     def doubt(self) -> list[str]:
-        return [c for c, o in self.orders.items() if o is None]
+        """Its sends and changes still in doubt: while any is, the intent is unknown (results.py, #86)."""
+        return [c for c, o in (*self.orders.items(), *self.changes.items()) if o is None]
 
     def has(self, *outcomes: str) -> bool:
         return any(o in outcomes for o in self.orders.values())
+
+    def ran(self) -> bool:
+        """Something it sent took effect: an order that ran, or a cancel or edit that holds."""
+        return self.has(*clientid.RAN) or any(o in clientid.CHANGED for o in self.changes.values())
 
 
 _ledger: ContextVar[Ledger | None] = ContextVar("intent_ledger", default=None)
@@ -300,18 +305,24 @@ def orders(j: Journal, intent_id: str) -> list[dict[str, Any]]:
 
 
 def unsettled(j: Journal) -> list[dict[str, Any]]:
-    """#86's invariant: sends still without an outcome whose intent no longer waits for the resolver (it finished, or
-    was resolved). Empty when every flow records what it found by client id and every doubt makes its intent unknown."""
-    return j._rows("SELECT o.intent_id, o.client_id, o.kind, i.kind AS intent_kind, i.status FROM intent_orders o"
-                   " JOIN intents i ON i.id = o.intent_id WHERE o.outcome IS NULL AND i.status NOT IN"
-                   " ('received', 'running', 'busy', 'unknown', 'interrupted') ORDER BY o.at, o.rowid")
+    """#86's invariant: sends, cancels and edits still without an outcome whose intent no longer waits for the
+    resolver (it finished, or was resolved). Empty when every flow records what it found by client id and every doubt
+    makes its intent unknown. `ref`: a send's client id, or a change's ref."""
+    final = "('received', 'running', 'busy', 'unknown', 'interrupted')"
+    return j._rows(f"SELECT o.intent_id, o.client_id AS ref, o.kind, i.kind AS intent_kind, i.status, o.at"
+                   f" FROM intent_orders o JOIN intents i ON i.id = o.intent_id WHERE o.outcome IS NULL AND i.status"
+                   f" NOT IN {final} UNION ALL SELECT c.intent_id, c.ref, c.op, i.kind, i.status, c.at FROM"
+                   f" intent_changes c JOIN intents i ON i.id = c.intent_id WHERE c.outcome IS NULL AND i.status"
+                   f" NOT IN {final} ORDER BY at")
 
 
 # ------------------------------------------------------------ resolution (resolver.py)
 def unresolved(j: Journal) -> list[dict[str, Any]]:
-    """This mode's unknown and interrupted intents that sent orders under client ids, oldest first."""
-    return j._rows("SELECT * FROM intents WHERE status IN ('unknown', 'interrupted') AND mode=? AND EXISTS"
-                   " (SELECT 1 FROM intent_orders o WHERE o.intent_id = intents.id) ORDER BY received_at", (j.mode,))
+    """This mode's unknown and interrupted intents that sent orders under client ids, or cancels or edits, oldest
+    first."""
+    return j._rows("SELECT * FROM intents WHERE status IN ('unknown', 'interrupted') AND mode=? AND (EXISTS"
+                   " (SELECT 1 FROM intent_orders o WHERE o.intent_id = intents.id) OR EXISTS"
+                   " (SELECT 1 FROM intent_changes c WHERE c.intent_id = intents.id)) ORDER BY received_at", (j.mode,))
 
 
 def resolve(j: Journal, intent_id: str, was: str, status: str, at: str) -> bool:

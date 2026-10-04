@@ -30,7 +30,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-from . import audit, commands, intents
+from . import audit, commands, intent_changes, intents
 from .intents import Intent
 from .results import Result
 
@@ -100,7 +100,8 @@ def answer(j: Any, row: dict[str, Any]) -> Any:
         return out
     return {**{k: v for k, v in (out if isinstance(out, dict) else {"result": out}).items() if k != "unknown"},
             "status": st, "resolved": {"at": row["resolved_at"],
-                                       "orders": {o["client_id"]: o["outcome"] for o in intents.orders(j, iid)}}}
+                                       "orders": {o["client_id"]: o["outcome"] for o in intents.orders(j, iid)},
+                                       "steps": intent_changes.steps(j, iid)}}
 
 
 class LocalGateway:

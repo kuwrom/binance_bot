@@ -40,6 +40,7 @@ async def test_an_unknown_close_that_ran_resolves_done_and_nothing_is_sent_again
     assert await resolver.resolve(t) == []                                   # once
     again = gateway.answer(t.j, now)                                         # what a resubmitted id gets now
     assert (again["status"], again["resolved"]["orders"]) == ("done", {cid: "filled"}) and "unknown" not in again
+    assert again["resolved"]["steps"] == [{"step": "close", "ref": cid, "outcome": "filled"}]
 
 
 async def test_an_unknown_close_that_never_ran_waits_out_the_grace_then_resolves_refused(monkeypatch):
@@ -79,20 +80,52 @@ def o(kind: str, outcome: str | None, n: int = 0) -> dict:
     return {"client_id": f"sb-{clientid.KINDS[kind]}{n}-0", "kind": kind, "outcome": outcome}
 
 
-@pytest.mark.parametrize("orders, doubted, status", [
-    ([o("open", "filled")], {0}, "done"),
-    ([o("open", "part_filled")], {0}, "partial"),
-    ([o("open", "not_found")], {0}, "refused"),
-    ([o("open", "unfilled")], {0}, "refused"),
-    ([o("stop", "placed"), o("add", "not_found")], {1}, "partial"),        # the tighten ran, the add didn't
-    ([o("stop", "placed"), o("add", "filled")], {1}, "done"),
-    ([o("close", "not_found", 1), o("close", "filled", 2), o("close", "not_found", 3)], {0, 1, 2}, "done"),  # tries
-    ([o("close", "not_found", 1), o("close", "rejected", 2)], {0}, "refused"),
-    ([o("entry", "placed", 1), o("entry", "not_found", 2)], {1}, "partial"),  # a leg never reached the book
-    ([o("entry", "placed", 1), o("entry", "placed", 2)], {1}, "done"),
+def x(op: str, outcome: str | None, n: int = 0) -> dict:
+    """A cancel or an edit of order n (intent_changes.py)."""
+    return {"ref": f"{op[0]}-{n}-0", "op": op, "order_id": str(n), "outcome": outcome}
+
+
+RAISED, OK, FAILED, GROUP = None, {"ok": True}, {"ok": False, "error": "stop not moved: its bridge was not placed"}, \
+    {"ok": False, "cancelled": 0, "filled_first": [], "cancel_failed": [3]}
+
+
+@pytest.mark.parametrize("was, body, orders, changes, doubted, status", [
+    # raised, or a body that says what is in doubt: by the doubted units
+    ("unknown", RAISED, [o("open", "filled")], [], {0}, "done"),
+    ("unknown", RAISED, [o("open", "part_filled")], [], {0}, "partial"),
+    ("unknown", RAISED, [o("open", "not_found")], [], {0}, "refused"),
+    ("unknown", RAISED, [o("open", "unfilled")], [], {0}, "refused"),
+    ("unknown", RAISED, [o("stop", "placed"), o("add", "not_found")], [], {1}, "partial"),   # the tighten ran
+    ("unknown", RAISED, [o("stop", "placed"), o("add", "filled")], [], {1}, "done"),
+    ("unknown", RAISED, [o("close", "not_found", 1), o("close", "filled", 2), o("close", "not_found", 3)], [],
+     {0, 1, 2}, "done"),                                                                     # a close's tries: one
+    ("unknown", RAISED, [o("close", "not_found", 1), o("close", "filled", 2)], [], {0}, "done"),   # incl. a settled
+    ("unknown", RAISED, [o("close", "not_found", 1), o("close", "rejected", 2)], [], {0}, "refused"),
+    ("unknown", {"ok": True, "unknown": [{"entry_id": 2}]}, [o("entry", "placed", 1), o("entry", "not_found", 2)], [],
+     {1}, "partial"),                                                                        # a leg never landed
+    ("unknown", RAISED, [o("entry", "placed", 1), o("entry", "placed", 2)], [], {1}, "done"),
+    ("unknown", GROUP, [], [x("cancel", "cancelled")], {0}, "done"),                         # its cancel ran
+    ("unknown", GROUP, [], [x("cancel", "missed")], {0}, "refused"),
+    ("unknown", GROUP, [], [x("cancel", "filled")], {0}, "refused"),                         # it traded first
+    ("unknown", "unknown", [], [x("cancel", "off_book")], {0}, "done"),                      # cancel_entry's answer
+    # a body definite about its goal: its own status; the doubted acts were side steps
+    ("unknown", OK, [o("close", "not_found", 1), o("close", "filled", 2)], [], {0}, "done"),
+    ("unknown", {"ok": True, "done": []}, [o("close", "filled"), o("target", "not_found")], [], {1}, "done"),
+    ("unknown", OK, [o("open", "part_filled"), o("stop", "placed")], [x("cancel", "cancelled")], {2},
+     "partial"),
+    ("unknown", OK, [o("stop", "placed")], [x("cancel", "missed")], {1}, "done"),            # a bridge_left
+    ("unknown", FAILED, [o("bridge", "not_found")], [], {0}, "refused"),                     # nothing ran
+    ("unknown", FAILED, [o("bridge", "placed")], [], {0}, "partial"),                        # it did, after all
+    # interrupted: it stopped before its end, so never done
+    ("interrupted", RAISED, [o("bridge", "placed")], [], {0}, "partial"),
+    ("interrupted", RAISED, [o("close", "filled")], [], {0}, "partial"),
+    ("interrupted", RAISED, [o("open", "not_found")], [], {0}, "refused"),
+    ("interrupted", RAISED, [], [x("cancel", "cancelled")], {0}, "partial"),
+    ("interrupted", RAISED, [], [x("cancel", "missed")], {0}, "refused"),
 ])
-def test_the_verdict(orders, doubted, status):
-    assert resolver.verdict(orders, {orders[i]["client_id"] for i in doubted}) == status
+def test_the_verdict(was, body, orders, changes, doubted, status):
+    acts = resolver.acts(orders, changes)
+    assert resolver.verdict(was, body, acts, {acts[i]["ref"] for i in doubted}) == status
 
 
 async def test_an_interrupted_intent_is_settled_like_an_unknown_one():
@@ -109,8 +142,8 @@ async def test_an_interrupted_intent_is_settled_like_an_unknown_one():
     (swept,) = intents.sweep(t.j, alive=lambda pid: False)
     assert swept["status"] == "interrupted"
     (ev,) = await resolver.resolve(t)
-    assert (ev["was"], ev["status"], ev["orders"]) == ("interrupted", "done", {cid: "filled"})
-    assert intents.get(t.j, it.id)["status"] == "done"
+    assert (ev["was"], ev["status"], ev["orders"]) == ("interrupted", "partial", {cid: "filled"})   # never done
+    assert intents.get(t.j, it.id)["status"] == "partial"
 
 
 async def test_the_guardians_reconcile_job_resolves_a_sessions_unknown_intent(monkeypatch):

@@ -40,6 +40,9 @@ MARKET = ("open", "add", "close")            # kinds sent as market orders: thei
 # rejected (a definite refusal), not_found (the resolver: unknown to Binance GRACE_S after its send). In doubt: none.
 FULL = ("acked", "placed", "filled")
 RAN = (*FULL, "part_filled")
+# What a cancel or an edit did that holds (intent_changes.py, #86): it took the order off the book, found it off the
+# book, or moved it. Its other outcomes (missed, filled, triggered, rejected) changed nothing of ours.
+CHANGED = ("cancelled", "off_book", "edited")
 
 
 class Unknown(errors.OutcomeUnknown):
