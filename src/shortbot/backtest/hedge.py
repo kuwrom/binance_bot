@@ -166,7 +166,7 @@ def beta(coin: Series, refs: list[Series], t_end: int, n: int = 72, h: int = 1, 
         return None
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
     sxx = sum((x - mx) ** 2 for x in xs)
-    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx if sxx else None
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sxx if sxx else None
 
 
 def clip_ratio(b: float | None) -> float:
@@ -283,7 +283,7 @@ def _corr(a: list[float], b: list[float]) -> float | None:
     ma, mb = statistics.fmean(a), statistics.fmean(b)
     sa = math.sqrt(sum((x - ma) ** 2 for x in a))
     sb = math.sqrt(sum((y - mb) ** 2 for y in b))
-    return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / sa / sb if sa and sb else None
+    return sum((x - ma) * (y - mb) for x, y in zip(a, b, strict=True)) / sa / sb if sa and sb else None
 
 
 def summarize(rows: list[dict], mid: int) -> dict[str, Any]:

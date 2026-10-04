@@ -43,7 +43,7 @@ def ranks(xs: list[float]) -> list[float]:
 
 
 def spearman(xs: list[float | None], ys: list[float | None]) -> tuple[float | None, int]:
-    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None]
+    pairs = [(x, y) for x, y in zip(xs, ys, strict=True) if x is not None and y is not None]
     if len(pairs) < 8:
         return None, len(pairs)
     rx, ry = ranks([p[0] for p in pairs]), ranks([p[1] for p in pairs])

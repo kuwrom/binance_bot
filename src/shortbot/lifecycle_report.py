@@ -58,7 +58,7 @@ def load(path=LIFE_DB) -> list[dict[str, Any]]:
     spot = dict(db.execute("SELECT base, first_ms FROM spot").fetchall())
     sup = {b: json.loads(d) for b, d in db.execute("SELECT base, data FROM supply")}
     coins = []
-    for sym, base, onboard, status, delivery, subtypes in db.execute(
+    for sym, base, _onboard, status, delivery, subtypes in db.execute(
             "SELECT symbol, base, onboard_ms, status, delivery_ms, subtypes FROM coins"):
         bars = db.execute("SELECT ts, o, h, l, c, qv FROM klines WHERE symbol=? ORDER BY ts", (sym,)).fetchall()
         if len(bars) < 8:

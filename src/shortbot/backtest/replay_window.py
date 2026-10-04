@@ -87,7 +87,7 @@ def metrics_from_hist(store: Store, hist_db: Path | str, raws: list[str], a: int
     for raw in raws:
         rows = db.execute(f"SELECT ts, {', '.join(cols)} FROM metrics_h WHERE symbol=? AND ts>=? AND ts<?",
                           (raw, a, b)).fetchall()
-        store.put_metrics(raw, [dict(zip(("ts", *cols), r)) for r in rows])
+        store.put_metrics(raw, [dict(zip(("ts", *cols), r, strict=True)) for r in rows])
         n += len(rows)
     db.close()
     store.db.commit()

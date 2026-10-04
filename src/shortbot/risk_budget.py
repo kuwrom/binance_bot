@@ -18,6 +18,7 @@ The pure part (`compute_budget`) is unit-tested; `gather_inputs` pulls live data
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 import time
@@ -169,7 +170,7 @@ def realized_vol(closes: list[float]) -> float | None:
     """Annualised stdev of daily log returns."""
     if len(closes) < 3:
         return None
-    rets = [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+    rets = [math.log(b / a) for a, b in itertools.pairwise(closes) if a > 0 and b > 0]
     return statistics.stdev(rets) * math.sqrt(365) if len(rets) > 1 else None
 
 

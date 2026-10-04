@@ -89,7 +89,7 @@ def table(results: dict[str, list[tuple[dict[str, Any], dict[int, dict | None]]]
             coins = [c["symbol"] for c, _ in done]
             inf = CS.mean_inference(vals, days, coins)
             daily: dict[str, float] = {}
-            for v, dd in zip(vals, days):
+            for v, dd in zip(vals, days, strict=True):
                 daily[dd] = daily.get(dd, 0.0) + v
             pairs = [(c, r[d]["r"] - r[delays[0]]["r"]) for c, r in items
                      if r.get(d) and r[d].get("filled") and r.get(delays[0]) and r[delays[0]].get("filled")]

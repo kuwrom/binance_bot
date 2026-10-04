@@ -123,7 +123,7 @@ def ctrend(p: Panel, top: int = 100, window: int = 52, min_weeks: int = 26) -> l
         known = [(wk, xx, yy) for wk, xx, yy in hist if wk + 7 * DAY <= d][-window:]
         if len(known) >= min_weeks:
             beta = ridge(np.vstack([k[1] for k in known]), np.concatenate([k[2] for k in known]))
-            pred = dict(zip(uni, x @ beta))
+            pred = dict(zip(uni, x @ beta, strict=True))
             order = sorted(uni, key=pred.get)
             q = len(order) // 5
             shorts, longs = order[:q], order[-q:]

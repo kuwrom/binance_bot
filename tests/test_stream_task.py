@@ -3,6 +3,7 @@ blocking store never slows the protective lane; the liquid universe and the back
 exchange client tagged research; housekeeping prunes the store."""
 
 import asyncio
+import itertools
 import json
 import threading
 import time
@@ -47,10 +48,10 @@ async def test_liquid_universe_is_the_5m_volume_floor_tagged_research():
     assert ex.seen == [("tickers", weight.RESEARCH)]
 
 
-async def until(cond, timeout=2.0):
+async def until(cond, limit_s=2.0):
     t0 = time.monotonic()
     while not cond():
-        assert time.monotonic() - t0 < timeout, "timed out"
+        assert time.monotonic() - t0 < limit_s, "timed out"
         await asyncio.sleep(0.01)
 
 
@@ -102,7 +103,7 @@ async def test_the_real_collector_fills_the_store_from_its_thread(tmp_path):
         return S.StreamCollector(store, symbols, connect=lambda url: Socket(), backfill=backfill)
     ex, db = Ex({A: 6e6}), tmp_path / "streams.db"
     task = asyncio.create_task(T.StreamTask(ex, db, collector=collector).run())
-    await until(lambda: R.fresh_symbols("kline_15m", 90, db) == ["AAAUSDT"] and R.latest("mark", db), timeout=5)
+    await until(lambda: R.fresh_symbols("kline_15m", 90, db) == ["AAAUSDT"] and R.latest("mark", db), limit_s=5)
     await until(lambda: any(s[0] == "klines" for s in ex.seen))     # the gap backfill, via the guardian's loop
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -157,7 +158,7 @@ async def test_a_failed_universe_refresh_keeps_streaming(tmp_path):
 
 
 def lane_gaps(passes):
-    return max(b - a for a, b in zip(passes, passes[1:]))
+    return max(b - a for a, b in itertools.pairwise(passes))
 
 
 async def run_guardian_with(monkeypatch, tmp_path, collector):
@@ -202,7 +203,7 @@ async def test_a_blocking_collector_never_slows_the_protective_lane(monkeypatch,
 
         async def run(self):
             while True:
-                time.sleep(0.15)
+                time.sleep(0.15)   # noqa: ASYNC251 - the synchronous stall this test isolates, on purpose
                 await asyncio.sleep(0)
     g, passes = await run_guardian_with(monkeypatch, tmp_path, Blocking)
     assert len(passes) >= 15 and lane_gaps(passes) < 0.1

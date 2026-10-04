@@ -147,7 +147,7 @@ def _summary(vals: list[dict[str, Any]], compact: bool = False) -> dict[str, Any
     adv = [o["max_adverse_24h"] for o in obs if o.get("max_adverse_24h") is not None]
     days = rs.days_of(obs)
     raw = rs.clustered_mean(r24, days)
-    ex = [(o["excess_ret_24h"], d) for o, d in zip(obs, days) if o.get("excess_ret_24h") is not None]
+    ex = [(o["excess_ret_24h"], d) for o, d in zip(obs, days, strict=True) if o.get("excess_ret_24h") is not None]
     exc = rs.clustered_mean([e for e, _ in ex], [d for _, d in ex]) if ex else None
     net = [o["short_ret_24h"] - COST_PCT + funding_carry_24h(o.get("features") or {}) for o in obs]
     out = {"n": len(obs), "rows": len(rows), "days": raw["days"], "n_eff": _r(raw["n_eff"], 1),
@@ -248,7 +248,7 @@ def report(journal, min_n: int = 5) -> dict[str, Any]:
     if not rows:
         return {"labelled_candidates": 0, "note": "No labelled candidates yet: outcomes are labelled 72h after "
                 "each scan by the guardian. Keep scanning.", "learnings": learnings_audit(journal)}
-    for r, e in zip(rows, rs.scan_excess(rows)):
+    for r, e in zip(rows, rs.scan_excess(rows), strict=True):
         r["excess_ret_24h"] = e
     by_veto: dict[str, list] = {}
     by_setup: dict[str, list] = {}

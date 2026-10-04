@@ -43,7 +43,7 @@ def _fake_refresh(monkeypatch, tmp_path):
 
 
 async def _started(pids):
-    await until(pids.exists, timeout=10)
+    await until(pids.exists, limit_s=10)
     leader, step = map(int, pids.read_text().split())
     assert os.getpgid(step) == os.getpgid(leader) == leader != os.getpgid(0)   # its own group, the step inside it
     return leader, step
@@ -58,7 +58,7 @@ async def test_a_cancelled_guardian_leaves_no_refresh_process_and_retries_it(mon
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    await until(lambda: not alive(leader) and not alive(step), timeout=10)
+    await until(lambda: not alive(leader) and not alive(step), limit_s=10)
     assert g._refresh_proc is None
     now = time.time()
     assert not refresh.due(g.j, now) and refresh.due(g.j, now + refresh.RETRY_S + 1)   # cut short: retried in 6h

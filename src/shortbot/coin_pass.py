@@ -99,7 +99,7 @@ async def refresh(ex: Any, j: Any, entries: Any, symbols: list[str] | None = Non
                                        trade=trades.get(s), read=current_read(j.db, s, now_ms) if s in trades else None)
                                  for s in syms), return_exceptions=True)
     coins, errors = {}, {}
-    for s, r in zip(syms, got):
+    for s, r in zip(syms, got, strict=True):
         if isinstance(r, Exception):
             errors[s] = f"{type(r).__name__}: {r}"
         elif isinstance(r, BaseException):

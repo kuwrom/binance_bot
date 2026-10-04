@@ -10,6 +10,7 @@ Bars are [ts, o, h, l, c, v], the forming bar last (DataHub); flow bars add take
 
 from __future__ import annotations
 
+import itertools
 import statistics
 from collections.abc import Sequence
 from typing import Any
@@ -56,7 +57,7 @@ def blocks(bars: Sequence[Sequence[float]], ms: int = M15) -> list[list[float]]:
 
 def atr_pct(bars: Sequence[Sequence[float]]) -> float | None:
     """Mean true range over the bars, in % of each bar's close."""
-    trs = [(max(b[2], a[4]) - min(b[3], a[4])) / b[4] * 100 for a, b in zip(bars, bars[1:]) if b[4]]
+    trs = [(max(b[2], a[4]) - min(b[3], a[4])) / b[4] * 100 for a, b in itertools.pairwise(bars) if b[4]]
     return statistics.fmean(trs) if trs else None
 
 
@@ -92,7 +93,7 @@ def swing_stats(bars: Sequence[Sequence[float]], atr_mult: float = SWING_ATR_MUL
     step_min = (bars[1][0] - bars[0][0]) / 60_000
     closes = [b[4] for b in bars]
     piv = zigzag(closes, atr_mult * atr)
-    legs = [(abs(pct(a[1], b[1]) or 0), (b[0] - a[0]) * step_min) for a, b in zip(piv[:-1], piv[1:-1])]
+    legs = [(abs(pct(a[1], b[1]) or 0), (b[0] - a[0]) * step_min) for a, b in itertools.pairwise(piv[:-1])]
     out: dict[str, Any] = {"n": len(legs), "thr_pct": _r(atr_mult * atr)}
     if legs:
         out.update(median_pct=_r(statistics.median(x[0] for x in legs)),

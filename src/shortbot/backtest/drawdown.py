@@ -18,6 +18,7 @@ A threshold at a quantile q of that distribution stops a setup that truly has ed
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import random
@@ -71,7 +72,7 @@ def lag1(xs: list[float]) -> float | None:
     if len(xs) < 10:
         return None
     m = statistics.fmean(xs)
-    num = sum((a - m) * (b - m) for a, b in zip(xs, xs[1:]))
+    num = sum((a - m) * (b - m) for a, b in itertools.pairwise(xs))
     den = sum((a - m) ** 2 for a in xs)
     return round(num / den, 3) if den else None
 

@@ -144,7 +144,7 @@ def report(path: Path | str | None = None) -> dict[str, Any]:
     starts: dict[str, dict[int, list[int]]] = {r: {1: [], 15: []} for r in RULES}
     leads: dict[str, list[int]] = {r: [] for r in RULES}
     trans: dict[str, list[int]] = {r: [0, 0] for r in RULES}
-    for (s, rule), mins in by.items():
+    for (_s, rule), mins in by.items():
         lo = min(mins)
         grid = np.arange(lo, max(mins) + 1)
         flags = np.zeros(len(grid), dtype=bool)

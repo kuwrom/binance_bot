@@ -5,6 +5,7 @@ size, they never trigger a trade. Thresholds are assumptions, fixed before testi
 
 from __future__ import annotations
 
+import itertools
 import statistics
 
 from ..market import MarketContext
@@ -43,7 +44,7 @@ async def controller(ctx: MarketContext) -> SignalOut:
     d1 = (await ctx.candles("1d", 200))[-30:]
     qv = [c[5] * c[4] for c in d1]
     vol_cv = statistics.pstdev(qv) / statistics.fmean(qv) if len(qv) >= 10 and statistics.fmean(qv) else None
-    rets = [(b[4] / a[4] - 1) * 100 for a, b in zip(d1, d1[1:]) if a[4]]
+    rets = [(b[4] / a[4] - 1) * 100 for a, b in itertools.pairwise(d1) if a[4]]
     sigma = statistics.pstdev(rets) if len(rets) >= 10 else None
     unlock_soon = "unlock_ahead" in (f.get("lifecycle_tags") or [])
     labels = controller_labels(sf["float_pct"], sf["fdv_mc"], f.get("listing_age_days"), oi_mc, f7, unlock_soon,

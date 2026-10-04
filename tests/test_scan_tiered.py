@@ -72,7 +72,7 @@ class Harness:
         cols = ("ts_ms", "kind", "coins", "counts", "selected", "scored", "queued", "skipped", "tier2_weight")
         rows = self.j.db.execute(f"SELECT {', '.join(cols)} FROM scan_windows ORDER BY rowid").fetchall()
         return [{k: (json.loads(v) if k in ("counts", "selected", "scored", "queued", "skipped") else v)
-                 for k, v in zip(cols, r)} for r in rows]
+                 for k, v in zip(cols, r, strict=True)} for r in rows]
 
     def close(self):
         self.t = (self.t // M15 + 1) * M15 + ST.CLOSE_GRACE_MS

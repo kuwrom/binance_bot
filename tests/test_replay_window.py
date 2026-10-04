@@ -57,7 +57,7 @@ def test_gaps_in_hist_db_are_filled_from_the_archive_and_rest(tmp_path):
     class Client:
         calls: list = []
 
-        async def get(self, url, params=None, timeout=None):
+        async def get(self, url, params=None, timeout=None):  # noqa: ASYNC109 - httpx's AsyncClient.get
             self.calls.append(params["startTime"])
             first = params["startTime"]
             rows = [{"fundingTime": first + k * 3_600_000, "fundingRate": "0.0001"} for k in range(1000)

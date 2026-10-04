@@ -1,6 +1,7 @@
 """#62: a failed label fetch never wipes a label. Legacy labels survive relabel failures (retried with backoff, kept
 after LABEL_MAX_TRIES); never-labelled rows still end empty after the last try; the report shows the label mix."""
 
+import itertools
 import sqlite3
 
 import pytest
@@ -106,7 +107,7 @@ async def test_backoff_doubles_between_tries():
         if len(ex.public.calls) > len(seen):
             seen.append(now)
         now += H
-    assert [(b - a) // H for a, b in zip(seen, seen[1:])] == [RETRY_H * 2 ** k for k in range(LABEL_MAX_TRIES - 1)]
+    assert [(b - a) // H for a, b in itertools.pairwise(seen)] == [RETRY_H * 2 ** k for k in range(LABEL_MAX_TRIES - 1)]
 
 
 async def test_transient_failure_is_retried_and_later_succeeds():

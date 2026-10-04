@@ -66,7 +66,7 @@ def live_trades(ctx: Ctx, db_path: Path, variants=LIVE_VARIANTS) -> list[dict[st
     db.close()
     last = max(ctx.btc.bars) + H
     out = []
-    for tid, sym, setup, op, cl, ep, xp, amt, stop, pnl, status in rows:
+    for tid, sym, setup, op, cl, ep, _xp, amt, stop, pnl, status in rows:
         t_in, t_out = _ms(op), _ms(cl)
         rec: dict[str, Any] = {"id": tid, "symbol": sym, "setup": setup, "status": status, "pnl": pnl,
                                "notional": ep * amt, "risk_usd": (stop - ep) * amt if stop else None}

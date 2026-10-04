@@ -205,7 +205,7 @@ def _beta(st: Study, s: str, d: int, n: int = 60) -> float:
     if len(xs) < 30 or statistics.pvariance(xs) == 0:
         return 1.0
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
-    return sum((a - mx) * (b - my) for a, b in zip(xs, ys)) / len(xs) / statistics.pvariance(xs)
+    return sum((a - mx) * (b - my) for a, b in zip(xs, ys, strict=True)) / len(xs) / statistics.pvariance(xs)
 
 
 def rs_names(st: Study, d: int) -> list[str]:

@@ -11,6 +11,7 @@ journal proves it; conviction x cell is capped at `max_conviction_mult`.
 
 from __future__ import annotations
 
+import itertools
 import math
 import random
 import statistics
@@ -73,11 +74,11 @@ def streak_test(rs: list[float], n_perm: int = 5000, seed: int = 7) -> dict[str,
     def lag1(xs: list[float]) -> float:
         m = statistics.fmean(xs)
         den = sum((x - m) ** 2 for x in xs)
-        return sum((a - m) * (b - m) for a, b in zip(xs, xs[1:])) / den if den else 0.0
+        return sum((a - m) * (b - m) for a, b in itertools.pairwise(xs)) / den if den else 0.0
 
     def cond_gap(xs: list[float]) -> float | None:
-        aw = [b for a, b in zip(xs, xs[1:]) if a > 0]
-        al = [b for a, b in zip(xs, xs[1:]) if a <= 0]
+        aw = [b for a, b in itertools.pairwise(xs) if a > 0]
+        al = [b for a, b in itertools.pairwise(xs) if a <= 0]
         return statistics.fmean(aw) - statistics.fmean(al) if aw and al else None
 
     obs, gap = lag1(rs), cond_gap(rs)

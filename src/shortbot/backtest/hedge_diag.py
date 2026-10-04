@@ -35,7 +35,7 @@ def rho2(ctx: Ctx, t: dict, refs: list[Series]) -> float | None:
         return None
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
     sxx, syy = sum((x - mx) ** 2 for x in xs), sum((y - my) ** 2 for y in ys)
-    return (sum((x - mx) * (y - my) for x, y in zip(xs, ys)) ** 2 / sxx / syy) if sxx and syy else None
+    return (sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) ** 2 / sxx / syy) if sxx and syy else None
 
 
 def idio_stop(ctx: Ctx, t: dict) -> bool | None:

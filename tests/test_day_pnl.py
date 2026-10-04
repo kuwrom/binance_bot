@@ -192,7 +192,7 @@ async def test_the_unverified_trip_is_sticky_and_a_clear_during_the_outage_holds
     monkeypatch.setattr(reconcile, "income_since", real)
     await g.check_positions()
     monkeypatch.setattr(reconcile, "income_since", down)
-    for n in range(3):
+    for _ in range(3):
         assert ks.read(g.j)["state"] == ACTIVE        # a later outage: its own streak of three
         await g.check_positions()
     assert ks.read(g.j)["cause"] == "day_pnl_unverified"

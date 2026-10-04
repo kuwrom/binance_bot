@@ -42,7 +42,7 @@ class WatchChecks:
         rows = [p for p in await self.app.trader.raw_positions() if p.get("side") == "short"]
         shorts = [p["symbol"] for p in rows]
         adl = await self.adl_read() if rows else ({}, [], None)   # one read for every short (guardian_margin.py)
-        for p, sym in zip(rows, shorts):
+        for p, sym in zip(rows, shorts, strict=True):
             errors = []
             for name, check in (("squeeze/funding", self._squeeze_and_funding), ("news", self._news)):
                 try:   # each on its own: a dead feed never hides a squeeze

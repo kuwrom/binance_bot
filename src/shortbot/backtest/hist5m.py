@@ -103,4 +103,4 @@ def load(raw: str, db_path: str | Path = DB_PATH) -> list[dict[str, Any]]:
         rows = db.execute("SELECT ts,o,h,l,c,qv,n,tbq FROM bars5 WHERE symbol=? ORDER BY ts", (raw,)).fetchall()
     finally:
         db.close()
-    return [dict(zip(("ts", "o", "h", "l", "c", "qv", "n", "tbq"), r)) for r in rows]
+    return [dict(zip(("ts", "o", "h", "l", "c", "qv", "n", "tbq"), r, strict=True)) for r in rows]

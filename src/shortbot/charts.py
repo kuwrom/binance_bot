@@ -7,6 +7,7 @@ pending limit entries, failed-sweep marker, recorded liquidations, OI, CVD."""
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from pathlib import Path
@@ -107,7 +108,7 @@ async def render(ex, symbol: str, tf: str = "15m", bars: int = 150, out_dir: str
             level(e["stop_price"], "#d62728", "--")
 
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(out.mkdir, parents=True, exist_ok=True)
     path = out / f"{ctx.base}_{tf}_{int(time.time())}.png"
     title = f"{ctx.symbol} {tf} | tape: {tape['state']} ({tape['stance']}) | score {ev.score}"
     kw: dict[str, Any] = {"type": "candle", "style": "yahoo", "volume": True, "addplot": ap,

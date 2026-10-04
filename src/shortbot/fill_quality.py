@@ -88,13 +88,13 @@ def pending() -> int:
     return sum(1 for t in _PENDING if not t.done() and (loop is None or t.get_loop() is loop))
 
 
-async def drain(timeout: float | None = None) -> None:
+async def drain(timeout_s: float | None = None) -> None:
     """Wait for this loop's captures, a live one's span by default (a one-shot CLI before it exits; the guardian's
     shutdown is not held up longer). Never raises; what is still running is cancelled with the loop."""
     loop = asyncio.get_running_loop()
     mine = [t for t in _PENDING if t.get_loop() is loop and t is not asyncio.current_task()]
     if mine:
-        await asyncio.wait(mine, timeout=TIMEOUT_S + 1 if timeout is None else timeout)
+        await asyncio.wait(mine, timeout=TIMEOUT_S + 1 if timeout_s is None else timeout_s)
 
 
 def snap(ex, symbol: str) -> asyncio.Task | None:

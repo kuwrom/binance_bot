@@ -75,7 +75,7 @@ async def listen(urls: dict[str, str], done: asyncio.Event, settled: set[str] | 
         settled.add(name)
         return got
     names = list(urls)
-    return dict(zip(names, await asyncio.gather(*(one(k, urls[k]) for k in names))))
+    return dict(zip(names, await asyncio.gather(*(one(k, urls[k]) for k in names)), strict=True))
 
 
 async def user_stream(p: Probe) -> dict[str, Any]:

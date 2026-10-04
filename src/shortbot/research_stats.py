@@ -88,7 +88,7 @@ def scan_excess(rows: Sequence[dict[str, Any]], field: str = "short_ret_24h", sc
 def _cv3(values: Sequence[float], clusters: Sequence[Hashable]) -> tuple[float, int]:
     """(CV3 variance of the mean, number of clusters): (G-1)/G * sum over clusters of (leave-one-out mean - mean)^2."""
     sums: dict[Hashable, list[float]] = {}
-    for v, c in zip(values, clusters):
+    for v, c in zip(values, clusters, strict=True):
         s = sums.setdefault(c, [0.0, 0.0])
         s[0] += v
         s[1] += 1

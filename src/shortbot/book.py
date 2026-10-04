@@ -14,6 +14,7 @@ All pure except pending_book, which reads the entries table and tolerates its ab
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 import time
@@ -78,7 +79,7 @@ def diversity_mult(book: list[dict[str, Any]], symbol: str, setup: str | None,
 
 
 def log_returns(closes: list[float]) -> list[float]:
-    return [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+    return [math.log(b / a) for a, b in itertools.pairwise(closes) if a > 0 and b > 0]
 
 
 def avg_corr(returns: dict[str, list[float]], min_len: int = 48) -> float | None:

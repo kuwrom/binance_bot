@@ -79,7 +79,7 @@ async def test_an_entry_fill_event_runs_the_fill_poll_at_once():
     hub = Hub(fake)
     async with live(g, hub) as lane:
         fake.fill_limit(oid)
-        await until(lambda: g.j.open_trades(), timeout=1.0)
+        await until(lambda: g.j.open_trades(), limit_s=1.0)
         await until(lambda: all(o["status"] != "open" for o in fake.limits.values()))
     assert list(fake.stops.values()) == [1.10] and fake.prearms == {}
     st = lane.trigger_stats["entries"]
@@ -93,7 +93,7 @@ async def test_a_stop_out_event_reconciles_the_closed_trade_at_once():
     tid = await open_trade(g)
     async with live(g, Hub(fake)) as lane:
         fake.price = 1.06   # the closePosition stop at 1.05 triggers: ALGO_UPDATE TRIGGERED, FINISHED
-        await until(lambda: g.j.get_trade(tid)["status"] == "closed", timeout=1.0)
+        await until(lambda: g.j.get_trade(tid)["status"] == "closed", limit_s=1.0)
     assert lane.trigger_stats["positions"]["runs"] >= 1 and "trade_closed" in kinds(g)
 
 
@@ -101,7 +101,7 @@ async def test_a_target_fill_event_settles_it_at_once(tmp_path):
     g, fake, tid = await placed(tmp_path)
     async with live(g, Hub(fake)) as lane:
         fake.price = 0.95   # T1 (a reduce-only limit) fills on the way down
-        await until(lambda: any(d["action"] == "target_fill" for d in g.j.decisions(SYM)), timeout=1.0)
+        await until(lambda: any(d["action"] == "target_fill" for d in g.j.decisions(SYM)), limit_s=1.0)
     assert lane.trigger_stats["positions"]["runs"] >= 1
 
 
@@ -114,7 +114,7 @@ async def test_a_dropped_event_is_still_caught_by_the_poll_and_counted_as_a_miss
     hub.drop = lambda ev: ev["e"] == "ORDER_TRADE_UPDATE" and ev["o"]["x"] == "TRADE"
     async with live(g, hub):
         fake.fill_limit(oid)
-        await until(lambda: g.j.open_trades(), timeout=1.0)
+        await until(lambda: g.j.open_trades(), limit_s=1.0)
         await until(lambda: g.user_stream.stats["misses"] == 1)
     assert list(fake.stops.values()) == [1.10] and hub.dropped and g.user_stream.stats["hits"] == 0
 
@@ -125,11 +125,11 @@ async def test_duplicate_and_reordered_events_are_harmless():
     hub.dup = hub.reverse = True
     async with live(g, hub):
         fake.fill_limit(oid)
-        await until(lambda: g.j.open_trades(), timeout=1.0)
+        await until(lambda: g.j.open_trades(), limit_s=1.0)
         await asyncio.sleep(0.1)
         (tr,) = g.j.open_trades()
         fake.price = 1.11   # past the stop: the stop-out's events come twice, each batch reversed
-        await until(lambda: g.j.get_trade(tr["id"])["status"] == "closed", timeout=1.0)
+        await until(lambda: g.j.get_trade(tr["id"])["status"] == "closed", limit_s=1.0)
         await asyncio.sleep(0.1)
     assert len(g.j._rows("SELECT id FROM trades")) == 1
     assert len([o for o in fake.orders if o[3].get("closePosition")]) == 1

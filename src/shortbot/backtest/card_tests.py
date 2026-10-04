@@ -174,7 +174,7 @@ def dominance_rotation(data: dict[str, Any]) -> dict[str, Any]:
             ys = [bars[s][days[k]][4] / bars[s][days[k - 1]][4] - 1 if days[k] in bars[s] and days[k - 1] in bars[s]
                   else 0.0 for k in range(i - 59, i + 1)]
             vx = statistics.pvariance(xs)
-            beta[s] = (sum((a - statistics.fmean(xs)) * (b - statistics.fmean(ys)) for a, b in zip(xs, ys))
+            beta[s] = (sum((a - statistics.fmean(xs)) * (b - statistics.fmean(ys)) for a, b in zip(xs, ys, strict=True))
                        / len(xs) / vx) if vx else 1.0
         resid = {s: r14[s] - beta[s] * b14 for s in alts}
         top = sorted(alts, key=lambda s: -resid[s])[:5]

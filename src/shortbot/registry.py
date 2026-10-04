@@ -72,7 +72,7 @@ def _fp(p: dict[str, Any]) -> str:
 def latest(db, pid: str) -> dict[str, Any] | None:
     cur = db.execute("SELECT * FROM patterns WHERE id=? ORDER BY version DESC LIMIT 1", (pid,))
     row = cur.fetchone()
-    return dict(zip([c[0] for c in cur.description], row)) if row else None
+    return dict(zip([c[0] for c in cur.description], row, strict=True)) if row else None
 
 
 def _same_plan(db, cur: dict[str, Any], plan: dict[str, Any]) -> bool:

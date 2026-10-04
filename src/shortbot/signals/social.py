@@ -4,6 +4,8 @@ never short still-rising attention; the fade AFTER an attention peak is the setu
 
 from __future__ import annotations
 
+import itertools
+
 from ..decay import decayed_points, heat
 from ..market import MarketContext
 from .base import SignalOut, signal
@@ -17,7 +19,7 @@ def hourly_increments(series: list[tuple[int, float]]) -> list[float]:
         return []
     start, end = series[0][0], series[-1][0]
     buckets = [0.0] * (int((end - start) // HOUR_MS) + 1)
-    for (t0, v0), (t1, v1) in zip(series, series[1:]):
+    for (_t0, v0), (t1, v1) in itertools.pairwise(series):
         buckets[int((t1 - start) // HOUR_MS)] += max(v1 - v0, 0)
     return buckets
 

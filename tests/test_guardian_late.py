@@ -25,7 +25,7 @@ def row(j: Journal, kind: str) -> dict:
 async def until(cond, limit_s: float) -> float:
     """Seconds until cond() held (the job runs meanwhile), or the limit."""
     t0 = time.monotonic()
-    while not cond() and time.monotonic() - t0 < limit_s:
+    while not cond() and time.monotonic() - t0 < limit_s:  # noqa: ASYNC110 - a fake's state: no event to wait on
         await asyncio.sleep(0.02)
     return time.monotonic() - t0
 

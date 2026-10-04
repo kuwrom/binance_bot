@@ -26,7 +26,7 @@ from . import research_stats as rs
 def _cr1(u: Sequence[float], clusters: Sequence[Hashable], n: int) -> tuple[float, int]:
     """(G/(G-1) * sum over clusters of (sum of residuals)^2 / n^2, G). nan with fewer than 2 clusters."""
     sums: dict[Hashable, float] = {}
-    for x, c in zip(u, clusters):
+    for x, c in zip(u, clusters, strict=True):
         sums[c] = sums.get(c, 0.0) + x
     g = len(sums)
     if g < 2:
@@ -41,7 +41,7 @@ def two_way_cr1(values: Sequence[float], g: Sequence[Hashable], h: Sequence[Hash
     u = [x - m for x in values]
     vg, ng = _cr1(u, g, n)
     vh, nh = _cr1(u, h, n)
-    vgh, ngh = _cr1(u, list(zip(g, h)), n)
+    vgh, ngh = _cr1(u, list(zip(g, h, strict=True)), n)
     if ngh < 2:   # one cell: the intersection term has no estimate; nothing to subtract
         vgh = 0.0
     return {"v": vg + vh - vgh, "v_g": vg, "v_h": vh, "v_gh": vgh, "g": ng, "h": nh, "i": ngh}

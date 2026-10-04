@@ -50,7 +50,7 @@ def indicators(bars: list[tuple]) -> list[dict[str, float | None]]:
     v = [b[5] for b in bars]
     cc, cv = _prefix(c), _prefix(v)
     ema12, ema26 = _ema_series(c, 12), _ema_series(c, 26)
-    macd = [a - b for a, b in zip(ema12, ema26)]
+    macd = [a - b for a, b in zip(ema12, ema26, strict=True)]
     sig = _ema_series(macd, 9)
     gains = [0.0] + [max(0.0, c[i] - c[i - 1]) for i in range(1, len(c))]
     losses = [0.0] + [max(0.0, c[i - 1] - c[i]) for i in range(1, len(c))]
@@ -113,4 +113,4 @@ def rank_normalise(values: dict[str, float | None]) -> dict[str, float]:
 
 def by_day(data: dict[str, Any]) -> dict[str, dict[int, dict[str, float | None]]]:
     """{symbol: {day_ts: features}} for every coin in histdaily.load() output."""
-    return {s: {b[0]: f for b, f in zip(rows, indicators(rows))} for s, rows in data["bars"].items()}
+    return {s: {b[0]: f for b, f in zip(rows, indicators(rows), strict=True)} for s, rows in data["bars"].items()}

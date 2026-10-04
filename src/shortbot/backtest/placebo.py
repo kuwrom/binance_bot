@@ -58,7 +58,7 @@ class XSec:
         self.atrs, self.vols = sorted(x[2] for x in rows), sorted(x[3] for x in rows)
         self.rows = [(c, i, _pctile(self.atrs, a), _pctile(self.vols, v)) for c, i, a, v in rows]
         self.cells: dict[tuple[int, int], list[tuple[Coin, int]]] = {}
-        for (c, i, pa, _), (_, _, _, v) in zip(self.rows, rows):
+        for (c, i, pa, _), (_, _, _, v) in zip(self.rows, rows, strict=True):
             self.cells.setdefault((_decile(pa), vol_bucket(v)), []).append((c, i))
 
 

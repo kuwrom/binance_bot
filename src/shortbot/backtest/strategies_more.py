@@ -56,7 +56,7 @@ def corr_ts(a: Coin, b: Coin, ts: int, n: int = 72) -> float | None:
     if len(xs) < n // 2:
         return None
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
-    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
     sxx, syy = sum((x - mx) ** 2 for x in xs), sum((y - my) ** 2 for y in ys)
     return sxy / math.sqrt(sxx * syy) if sxx and syy else None
 
@@ -75,7 +75,7 @@ def laggard(m: Market, p: dict) -> Iterable[tuple[Coin, int, Plan]]:
             lc, li = max(live, key=lambda x: vol24_at(m, x[0], x[1]))
             lr = lc.rows
 
-            def below(k: int) -> bool:
+            def below(k: int, lr: list[dict] = lr) -> bool:
                 return lr[k]["c"] < min(x["l"] for x in lr[k - 13:k - 1]) and lr[k - 1]["c"] < min(
                     x["l"] for x in lr[k - 13:k - 1])
             l4 = lc.ret(li, 4)

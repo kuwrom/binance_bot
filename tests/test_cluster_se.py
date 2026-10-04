@@ -59,7 +59,7 @@ def _cgm_matrix(y, g, h):
     sgh = sg * sh
     uu = np.outer(u, u)
     G, H = len(set(g.tolist())), len(set(h.tolist()))
-    GH = len(set(zip(g.tolist(), h.tolist())))
+    GH = len(set(zip(g.tolist(), h.tolist(), strict=True)))
     part = lambda s, k: k / (k - 1) * (uu * s).sum() / n ** 2  # noqa: E731
     return part(sg, G) + part(sh, H) - part(sgh, GH), part(sg, G), part(sh, H)
 

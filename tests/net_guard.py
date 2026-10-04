@@ -18,6 +18,7 @@ Nothing in shortbot installs uvloop."""
 from __future__ import annotations
 
 import ipaddress
+import itertools
 import os
 import socket
 from pathlib import PurePath
@@ -44,7 +45,7 @@ def shortbot_child(argv: list) -> str | None:
     args = [os.fsdecode(a) if isinstance(a, (bytes, os.PathLike)) else str(a) for a in argv]
     if args and PurePath(args[0]).name.startswith("shortbot"):
         return args[0]
-    return next((m for flag, m in zip(args, args[1:]) if flag == "-m" and m.split(".")[0] == "shortbot"), None)
+    return next((m for flag, m in itertools.pairwise(args) if flag == "-m" and m.split(".")[0] == "shortbot"), None)
 
 
 class Guard:

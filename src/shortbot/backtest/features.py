@@ -6,6 +6,7 @@ EMA20 and lookups. `features(m, coin, i)` returns the dict the report splits on.
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 from dataclasses import dataclass, field
@@ -132,7 +133,7 @@ class Market:
         mx, my = statistics.fmean(xs), statistics.fmean(ys)
         sxx = sum((x - mx) ** 2 for x in xs)
         syy = sum((y - my) ** 2 for y in ys)
-        sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
         if not sxx or not syy:
             return None, None
         return sxy / sxx, sxy / math.sqrt(sxx * syy)
@@ -150,7 +151,7 @@ def _extra_at(coin: Coin, key: str, t_close: int) -> float | None:
 
 def efficiency_ratio(closes: list[float]) -> float | None:
     """|net move| / path length: 1 = a one-direction run, ~0 = chop."""
-    path = sum(abs(b - a) for a, b in zip(closes, closes[1:]))
+    path = sum(abs(b - a) for a, b in itertools.pairwise(closes))
     return abs(closes[-1] - closes[0]) / path if path else None
 
 

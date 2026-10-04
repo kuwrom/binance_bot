@@ -16,7 +16,7 @@ from ..research_stats import MIN_DAYS, clustered_wilson, days_of, episodes, infe
 
 def brier(rows: list[dict], key: str) -> dict[str, Any] | None:
     have = [r for r in rows if r.get(key) is not None]
-    xs = [(r[key], 1.0 if r["_y"] else 0.0, d) for r, d in zip(have, days_of(have))]
+    xs = [(r[key], 1.0 if r["_y"] else 0.0, d) for r, d in zip(have, days_of(have), strict=True)]
     if not xs:
         return None
     n = len(xs)

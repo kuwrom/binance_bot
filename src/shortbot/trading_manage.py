@@ -187,7 +187,7 @@ class ManageFlow:
         trig = [_f(o.get("triggerPrice") or o.get("stopPrice") or (o.get("info") or {}).get("triggerPrice"))
                 for o in held]
         if any(_whole(o) for o in held):
-            return f"closePosition stop kept at {min(p for o, p in zip(held, trig) if _whole(o)):g}"
+            return f"closePosition stop kept at {min(p for o, p in zip(held, trig, strict=True) if _whole(o)):g}"
         if held and sum(_f(o.get("amount")) for o in held) >= qty:
             return f"pre-armed stop(s) at {sorted(trig)} cover it; the fill poll adds the closePosition stop"
         stop = _f((trade or {}).get("stop_price"))

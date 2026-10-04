@@ -7,6 +7,7 @@ table is created when the journal opens (journal_tables.py, #82)."""
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import math
 import statistics
@@ -103,7 +104,7 @@ async def snapshot(ex, symbol: str) -> dict[str, Any]:
         s["depth_1pct_usd"] = round(sum(p * q for p, q, *_ in ob["bids"] if p >= lo)
                                     + sum(p * q for p, q, *_ in ob["asks"] if p <= hi))
     if ok(c1m) and len(c1m) > 2:
-        rets = [math.log(b[4] / a[4]) for a, b in zip(c1m, c1m[1:]) if a[4] and b[4]]
+        rets = [math.log(b[4] / a[4]) for a, b in itertools.pairwise(c1m) if a[4] and b[4]]
         s["rv_1m_pct"] = round(statistics.pstdev(rets) * 100, 4) if rets else None
     if ok(c1h) and c1h:
         s["high_6h"] = max(c[2] for c in c1h)

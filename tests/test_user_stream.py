@@ -48,10 +48,10 @@ def build(fake=None, clock=None, live=False, on_hit=None, **kw):
     return s, fake, hub, hits
 
 
-async def until(cond, timeout=2.0):
+async def until(cond, limit_s=2.0):
     t0 = time.monotonic()
     while not cond():
-        if time.monotonic() - t0 > timeout:
+        if time.monotonic() - t0 > limit_s:
             raise AssertionError("condition not met in time")
         await asyncio.sleep(0.002)
 

@@ -4,6 +4,7 @@ no protective pass, and the backlog drains in batches after it (#81); a pass rea
 before they send; and no guardian job writes on the loop outside a unit (journal_writer.py)."""
 
 import asyncio
+import itertools
 import sqlite3
 import time
 from datetime import UTC
@@ -66,7 +67,8 @@ async def test_a_held_write_lock_delays_no_protective_pass_and_its_backlog_drain
         task = asyncio.create_task(g.run())
         await asyncio.sleep(5.3)
         released = held.wait() - time.time() + time.monotonic()
-        while g.j.w.pending() and time.monotonic() < released + 30:   # a slow disk drains slower: not timed
+        # a slow disk drains slower: not timed
+        while g.j.w.pending() and time.monotonic() < released + 30:  # noqa: ASYNC110 - the writer's queue has no event
             await asyncio.sleep(0.01)
         left, queued = g.j.w.pending(), g.j.w.stats["queued"]  # every unit queued since the hold began
         task.cancel()
@@ -75,7 +77,7 @@ async def test_a_held_write_lock_delays_no_protective_pass_and_its_backlog_drain
     for job, ts in passes.items():
         held_ts = [t for t in ts if t < released]
         assert len(held_ts) > 100, job                         # ~every 13 ms, for 5 s
-        assert max(b - a for a, b in zip(held_ts, held_ts[1:])) < 0.1, job
+        assert max(b - a for a, b in itertools.pairwise(held_ts)) < 0.1, job
     batches = [n for n in done if n]                           # a COMMIT with units queued: one batch of them
     assert left == 0 and len(batches) * 20 <= queued, (len(batches), queued)   # before #81: a COMMIT per unit
     assert g.j.get("guardian_heartbeat") != hb0                # the bookkeeping landed after the release

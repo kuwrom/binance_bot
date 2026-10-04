@@ -58,7 +58,7 @@ def ensure(db: sqlite3.Connection) -> None:
 def _rows(db: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
     cur = db.execute(sql, args)
     names = [d[0] for d in cur.description]
-    return [dict(zip(names, r)) for r in cur.fetchall()]
+    return [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
 
 
 def _iso(ms: int) -> str:

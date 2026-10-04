@@ -1,6 +1,8 @@
 """Round-2 backtest logic: sell-stop entries, the funding budget, breakdown entry types, exit variants, re-entry,
 and the continuation / paired-difference stats (docs/FAILURES.md Round 2)."""
 
+import itertools
+
 import pytest
 
 from shortbot.backtest import report_v3 as r3
@@ -76,7 +78,7 @@ def test_breakdown_plans_share_the_stop_and_differ_only_in_the_entry():
     assert pls["limit"].limit_px == pytest.approx(c.ema20[i]) and pls["limit"].entry == "limit"
     assert pls["stop"].limit_px < min(b["l"] for b in c.rows[i - 11:i + 1])
     assert pls["stop"].arm_px == pytest.approx(c.rows[i]["c"] + 0.5 * v3.atr_abs(c, i))
-    assert all(b - a >= v3.BD_COOLDOWN for a, b in zip(arms, arms[1:]))
+    assert all(b - a >= v3.BD_COOLDOWN for a, b in itertools.pairwise(arms))
 
 
 def test_exit_variants_convert_the_live_percent_trail_into_r():

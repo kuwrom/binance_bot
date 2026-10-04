@@ -8,6 +8,7 @@ The 'who controls it' section (float, holders, unlocks, market makers) comes fro
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import statistics
@@ -55,7 +56,7 @@ def session_behaviour(c1h: list[list[float]]) -> dict[str, Any]:
     and the mean signed hourly return per bucket with a t-stat. |t| < 2 = noise; even |t| > 2 across 8 buckets
     will happen by chance about once in three coins, so treat it as a hypothesis to watch."""
     rows: dict[str, dict[str, list[float]]] = {}
-    for a, b in zip(c1h, c1h[1:]):
+    for a, b in itertools.pairwise(c1h):
         if not a[4] or not b[4]:
             continue
         r = (b[4] / a[4] - 1) * 100

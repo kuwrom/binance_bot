@@ -6,6 +6,7 @@ can we go". Results are anecdotes until n (distinct coins!) is large: 1 week = o
 
 from __future__ import annotations
 
+import itertools
 import random
 import statistics
 from typing import Any
@@ -55,7 +56,7 @@ def liquidity(rows: list[dict[str, Any]], i: int) -> dict[str, Any]:
 def bucket(v: float | None, edges: tuple[float, ...]) -> str:
     if v is None:
         return "n/a"
-    for lo, hi in zip(edges, edges[1:]):
+    for lo, hi in itertools.pairwise(edges):
         if v < hi:
             return f"{lo:g}-{hi:g}M" if hi != float("inf") else f">{lo:g}M"
     return "n/a"
@@ -117,7 +118,7 @@ def run(coins: list[dict[str, Any]], seed: int = 7, ctrl_per_event: int = 3) -> 
             continue
         found = detect(rows, c.get("funding"))
 
-        def rec(i: int, kind: str) -> dict[str, Any] | None:
+        def rec(i: int, kind: str, rows: list[dict[str, Any]] = rows, c: dict[str, Any] = c) -> dict[str, Any] | None:
             f = forward(rows, i)
             if not f:
                 return None

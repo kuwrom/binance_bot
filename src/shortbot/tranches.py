@@ -30,7 +30,7 @@ def expand(p: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     tid = uuid.uuid4().hex[:8]
     base = {k: v for k, v in p.items() if k != "tranches"}
     return tid, [{**base, "limit_price": t["limit_price"], "risk_share": s, "tranche": tid, "leg": i + 1}
-                 for i, (t, s) in enumerate(zip(legs, shares))]
+                 for i, (t, s) in enumerate(zip(legs, shares, strict=True))]
 
 
 def finalize(db, placed: list[dict[str, Any]]) -> dict[str, Any]:

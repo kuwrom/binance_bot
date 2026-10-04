@@ -181,7 +181,7 @@ async def archive_coin(f: V.Fetcher, db, raw: str, inf: dict | None, spot_set: s
         return {"no_data": True}     # delisted before the window: skip the other listings
     kinds = ("prem", "metrics", "funding")
     lists = await asyncio.gather(*(V.list_series(f, k, raw, start_ms) for k in kinds))
-    plans.update({k: V.plan_keys(m, d, start_ms, today_ms) for k, (m, d) in zip(kinds, lists)})
+    plans.update({k: V.plan_keys(m, d, start_ms, today_ms) for k, (m, d) in zip(kinds, lists, strict=True)})
     spot_raw, mult = None, 1.0
     for cand, m in V.spot_candidates(raw):
         if cand in spot_set:
@@ -194,7 +194,7 @@ async def archive_coin(f: V.Fetcher, db, raw: str, inf: dict | None, spot_set: s
     texts = await asyncio.gather(*(f.csv(key) for _, key in todo))
     fd = None if (inf or {}).get("onboardDate") else await V.first_day_ms(f, raw)
     rows = 0   # no awaits from here to commit: coins share one connection
-    for (kind, key), text in zip(todo, texts):
+    for (kind, key), text in zip(todo, texts, strict=True):
         if text is None:
             continue
         if kind == "metrics":
@@ -323,17 +323,17 @@ def load60(db_path: str | Path = DB_PATH, symbols: list[str] | None = None,
         if (want is not None and raw not in want) or meta.get("no_data"):
             continue
 
-        def bars(kind: str) -> list[tuple]:
+        def bars(kind: str, raw: str = raw) -> list[tuple]:
             return db.execute("SELECT ts,o,h,l,c,qv,n,tbq FROM bars WHERE symbol=? AND kind=? AND ts>=? "
                               "ORDER BY ts", (raw, kind, since)).fetchall()
         mult = meta.get("spot_mult") or 1.0
         mrows = db.execute(f"SELECT ts,{','.join(MCOLS)} FROM metrics_h WHERE symbol=? AND ts>=? ORDER BY ts",
                            (raw, since)).fetchall()
-        col = lambda i: {r[0]: r[i] for r in mrows if r[i] is not None}  # noqa: E731
+        col = lambda i, mrows=mrows: {r[0]: r[i] for r in mrows if r[i] is not None}  # noqa: E731
         out.append({
             "symbol": meta["symbol"], "onboard_ms": meta.get("onboard_ms") or 0, "delist_ms": meta.get("delist_ms"),
             "tags": meta.get("tags") or [],
-            "perp": [dict(zip(("ts", "o", "h", "l", "c", "qv", "n", "tbq"), r)) for r in bars("perp")],
+            "perp": [dict(zip(("ts", "o", "h", "l", "c", "qv", "n", "tbq"), r, strict=True)) for r in bars("perp")],
             "oi": col(2), "premium": {r[0]: r[4] for r in bars("prem")},
             "funding": [list(r) for r in db.execute("SELECT ts, rate FROM funding WHERE symbol=? AND ts>=? "
                                                     "ORDER BY ts", (raw, since))],

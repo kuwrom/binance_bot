@@ -13,6 +13,7 @@ on 2026-10-02 (BTC, SOL, BAT; 5m / 15m / 30m / 1h from 1m): 84 of 84 bars identi
 
 from __future__ import annotations
 
+import itertools
 import json
 import sqlite3
 from pathlib import Path
@@ -74,7 +75,7 @@ def _window(symbol: str, tf: str, n: int, flow: bool, path: str | Path, now_ms: 
     if len(forming) > 1 or (forming and forming[0][0] != closed[0][0] + step):
         return None                                                  # a missed close: that bar is incomplete
     window = list(reversed(forming + closed))[-n:]
-    if len(window) < n or any(b[0] - a[0] != step for a, b in zip(window, window[1:])):
+    if len(window) < n or any(b[0] - a[0] != step for a, b in itertools.pairwise(window)):
         return None                                                  # too short, or a gap inside the window
     if flow and any(r[6] is None for r in window):
         return None                                                  # a bar without taker volume (old backfill)

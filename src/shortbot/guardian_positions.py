@@ -145,7 +145,7 @@ class PositionChecks:
                 await self.ex.resync_time()   # the lane-level resync never sees errors swallowed here
             except Exception:  # noqa: BLE001 - logged; the failure itself is alerted just below
                 log.exception("time resync failed")
-        log.exception("position %s failed", sym)
+        log.error("position %s failed", sym, exc_info=e)
         await send_safe(self.n, "position_check_error", f"{type(e).__name__}: {e}", sym, cooldown_s=1800)
         if escalate:
             await send_safe(self.n, "guardian_failing:position", f"check failed {self.pos_streak.after}x in a row "

@@ -203,8 +203,9 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
     atr_v = sum(c[2] - c[3] for c in atr[-14:]) / max(len(atr[-14:]), 1) if atr else 0.0
     c1h4 = await ctx.candles("1h", 5)
     rows, logged = {}, []
+    cols = ("ts", "x_star", "x_virtual", "action", "stop_v")
     for name, prm in VARIANTS.items():
-        hist = [dict(zip(("ts", "x_star", "x_virtual", "action", "stop_v"), r)) for r in journal.db.execute(
+        hist = [dict(zip(cols, r, strict=True)) for r in journal.db.execute(
             "SELECT ts, x_star, x_virtual, action, stop_v FROM ladder_shadow WHERE trade_id=? AND"
             " COALESCE(variant,'base')=? ORDER BY id", (trade.get("id"), name))]
         live = name == "base" and plan.get("ladder_live")      # live trades: the base variant tracks REAL exposure

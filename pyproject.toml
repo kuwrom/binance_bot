@@ -66,28 +66,16 @@ select = [
     "E4",       # imports: one per line, at the top (ruff exempts sys.path, os.environ and matplotlib.use between them)
     "E7",       # statements: one per line, no lambda assignment, no `l`/`O`/`I` names
     "RUF100",   # every noqa suppresses something (BLE001 below is external, so its reasons stay)
+    "RUF007",   # successive pairs: itertools.pairwise, not zip(xs, xs[1:])
+    "ASYNC",    # flake8-async: nothing blocks the event loop, no hand-rolled `timeout` parameter
+    "PLE",      # pylint errors (raw zero-width and bidi characters: write them as \u escapes)
+    "LOG",      # flake8-logging (.exception() only in an except block)
 ]
-# zip() without strict= (69 sites): strict=True raises on a length mismatch, a behaviour change decided per site
-ignore = ["B905"]
+# B905, zip() without strict=: strict=True where the lengths match by construction and a mismatch is a bug (parallel
+# lists, a gather's results, a row and its columns); strict=False where truncation is the point.
 # `# noqa: BLE001 - <reason>` is the #37 lint's syntax (tests/test_error_lint.py: alert or re-raise), not ruff's
 # BLE001 (re-raise or logging.exception): ruff calls 40 of those reasons unused, and RUF100 --fix would delete them.
 external = ["BLE001"]
-
-[tool.ruff.lint.per-file-ignores]
-# Known findings, kept on for every other file (cleanup commit after #36 step 2: noqa per line or a rename, then drop).
-# B023: each closure is called in the loop iteration that defines it, so it sees the right value (18, checked by hand).
-"src/shortbot/backtest/strategies.py" = ["B023"]
-"src/shortbot/backtest/strategies_more.py" = ["B023"]
-"src/shortbot/histdata.py" = ["B023"]
-"src/shortbot/patterns.py" = ["B023"]
-"tests/test_liq_stops.py" = ["B023"]
-# B007: an unused loop variable (6): cosmetic
-"src/shortbot/backtest/hedge_report.py" = ["B007"]
-"src/shortbot/backtest/trigger_rates.py" = ["B007"]
-"src/shortbot/cadence_shadow.py" = ["B007"]
-"src/shortbot/lifecycle_report.py" = ["B007"]
-"src/shortbot/signals/social.py" = ["B007"]
-"tests/test_day_pnl.py" = ["B007"]
 
 # ---------------------------------------------------------------- types (scripts/check types; #43)
 # mypy, in three tiers. https://mypy.readthedocs.io/en/stable/config_file.html, .../existing_code.html

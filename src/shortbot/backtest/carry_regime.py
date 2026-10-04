@@ -175,7 +175,7 @@ def evaluate(pct: dict[int, float], carry: dict[int, float], outs: dict[str, dic
             dmy = np.array([rule(pct[d], carry[d]) for d in days])
             diff, t = nw_diff(y, dmy, h)
             years: dict[int, list] = {}
-            for d, v, flag in zip(days, y, dmy):
+            for d, v, flag in zip(days, y, dmy, strict=True):
                 years.setdefault(year_of(d), [[], []])[0 if flag else 1].append(v)
             per_year = {yr: round(float(np.mean(a) - np.mean(b)), 4)
                         for yr, (a, b) in years.items() if len(a) >= 20 and b}

@@ -62,7 +62,7 @@ def heat(series: list[float], fast_hl: float, slow_hl: float, baseline: int | No
 def calibrate_half_life(ages_h: list[float], ics: list[float], prior_h: float, k: float = 30.0) -> float | None:
     """Fit IC(age) = IC0·e^{−age/τ} by log-linear least squares on positive ICs, shrink toward the prior:
     HL = (n·HL_fit + k·HL_prior)/(n + k). Returns None if the fit is impossible."""
-    pts = [(a, math.log(ic)) for a, ic in zip(ages_h, ics) if ic > 0]
+    pts = [(a, math.log(ic)) for a, ic in zip(ages_h, ics, strict=True) if ic > 0]
     if len(pts) < 3:
         return None
     ma = sum(a for a, _ in pts) / len(pts)

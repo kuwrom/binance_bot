@@ -2,6 +2,7 @@
 writes the heartbeat only when protection actually worked; background tasks are supervised and cancelled."""
 
 import asyncio
+import itertools
 import time
 
 import ccxt
@@ -83,7 +84,7 @@ async def test_hung_slow_jobs_never_delay_the_protective_lane(monkeypatch):
     assert len(passes) >= 10 and g.j.get("guardian_heartbeat")
     # nothing blocked the loop either: a 0.2 s stall still leaves ~12 passes, so the count alone can't see it (#78);
     # passes come every ~13 ms, at worst ~45 ms with every core busy
-    assert max(b - a for a, b in zip(passes, passes[1:])) < 0.1
+    assert max(b - a for a, b in itertools.pairwise(passes)) < 0.1
     assert {"watch_positions", "check_governor", "record_metrics"} <= set(hung)   # one hung job per slow lane
     assert set(g.lanes["scan"].started) == {"scan", "cadence_shadow", "mtf_views"}   # ran for real, not hung
     assert sorted(cancelled) == sorted(hung) and all(t.done() for t in g._tasks)   # nothing left running
@@ -246,7 +247,7 @@ async def test_lane_logs_when_the_event_loop_was_blocked(monkeypatch, caplog):
     ln = lane_with(Job("entries", noop, 0, 5))
     task = asyncio.create_task(ln.run())
     await asyncio.sleep(0.005)
-    time.sleep(0.06)   # synchronous work elsewhere in the process, on purpose
+    time.sleep(0.06)   # noqa: ASYNC251 - synchronous work elsewhere in the process, on purpose
     await asyncio.sleep(0.02)
     task.cancel()
     assert "blocked the event loop" in caplog.text

@@ -105,9 +105,9 @@ def json_line(raw: bytes) -> dict[str, Any]:
     return msg
 
 
-async def read(reader: asyncio.StreamReader, timeout: float | None) -> dict[str, Any]:
+async def read(reader: asyncio.StreamReader, timeout_s: float | None) -> dict[str, Any]:
     """The next message. ConnectionError: the peer closed; ValueError: not one (too long, not JSON); TimeoutError."""
-    return json_line(await asyncio.wait_for(reader.readline(), timeout))
+    return json_line(await asyncio.wait_for(reader.readline(), timeout_s))
 
 
 def intent_dict(it: Intent) -> dict[str, Any]:

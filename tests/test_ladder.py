@@ -16,7 +16,7 @@ def test_levels_are_nested_and_edge_moves_odds():
     flat = evaluate_ladder(100, 104, t, 0.01, 12, 0.0)
     good = evaluate_ladder(100, 104, t, 0.01, 12, 2.0)
     assert flat[0]["p0"] >= flat[1]["p0"] >= flat[2]["p0"]
-    assert all(g["p_model"] > f["p_model"] for g, f in zip(good, flat))
+    assert all(g["p_model"] > f["p_model"] for g, f in zip(good, flat, strict=True))
     assert all(x["ev_R"] < 0.05 for x in flat)            # no edge -> EV ~ -cost
 
 

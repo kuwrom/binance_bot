@@ -138,7 +138,7 @@ async def test_adding_to_a_winner_checks_liquidation_at_the_symbols_bracket():
         assert r["ok"], r
         fake.price = 0.9
 
-        async def bracket(symbol, notional, m=maint):
+        async def bracket(symbol, notional, m=maint, asked=asked):
             asked.append((symbol, round(notional, 2)))
             return m
         t.ex.maint_margin = bracket

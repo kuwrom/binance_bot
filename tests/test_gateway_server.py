@@ -65,8 +65,8 @@ def submit(w, it, session="sess-client"):
     w.write(wire.encode({"op": "submit", "intent": wire.intent_dict(it), "origin": {"claude_session": session}}))
 
 
-async def until(cond, timeout=5.0):
-    end = time.monotonic() + timeout
+async def until(cond, limit_s=5.0):
+    end = time.monotonic() + limit_s
     while not cond():
         assert time.monotonic() < end, "timed out"
         await asyncio.sleep(0.005)

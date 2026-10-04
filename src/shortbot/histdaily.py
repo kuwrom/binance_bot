@@ -67,7 +67,7 @@ async def archive(f: V.Fetcher, db, raw: str, since: str) -> int:
         keys, _ = await f.list(prefix, marker=f"{prefix}{stem}{since}")
         todo = [k for k in keys if k.endswith(".zip") and k not in done]
         texts = await asyncio.gather(*(f.csv(k) for k in todo))      # the Fetcher's semaphore caps concurrency
-        for key, text in zip(todo, texts):
+        for key, text in zip(todo, texts, strict=True):
             rows = put(db, kind, raw, text) if text else 0
             db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?)", (key, raw, int(time.time() * 1000), rows))
             n += 1

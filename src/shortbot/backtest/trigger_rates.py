@@ -26,7 +26,7 @@ def main() -> None:
     print("symbols", len(per), "of", len(syms))
     counts = {k: {} for k in ("z1h_2", "z4h_2", "z1h_3", "z4h_3", "vol_2", "vol_3", "any_2", "any_3")}
     persist = {"z4h_2": [0, 0], "z1h_2": [0, 0]}
-    for s, (k, c, v) in per.items():
+    for _s, (k, c, v) in per.items():
         if len(c) < 130:
             continue
         r = np.diff(np.log(c))

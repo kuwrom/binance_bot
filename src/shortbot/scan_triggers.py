@@ -18,6 +18,7 @@ Keys are Binance ids (BTCUSDT); any ccxt symbols passed in are converted.
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 from collections import Counter
@@ -57,7 +58,7 @@ def closed(bars: list[list[float]], now_ms: int, step: int = M15) -> list[list[f
 def move_z(bars: list[list[float]]) -> dict[str, float | None]:
     """{"z1h", "z4h"}: the move's log return over the coin's own 15m volatility, estimated on the bars before it."""
     c = [b[4] for b in bars if b[4] > 0]
-    rets = [math.log(b / a) for a, b in zip(c, c[1:])]
+    rets = [math.log(b / a) for a, b in itertools.pairwise(c)]
     out: dict[str, float | None] = {}
     for name, k in (("z1h", 4), ("z4h", 16)):
         base = rets[:-k][-96:]

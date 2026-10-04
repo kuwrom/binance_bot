@@ -141,7 +141,7 @@ class Store:
     def metrics(self, symbol: str, a: int, b: int) -> list[dict[str, Any]]:
         cur = self.db.execute("SELECT ts, oi, oi_val, ls_top, ls_top_acct, ls_global, taker FROM metrics WHERE symbol=?"
                               " AND ts>=? AND ts<? ORDER BY ts", (symbol, a, b))
-        return [dict(zip(("ts", *METRIC_FIELDS), r)) for r in cur.fetchall()]
+        return [dict(zip(("ts", *METRIC_FIELDS), r, strict=True)) for r in cur.fetchall()]
 
     def funding(self, symbol: str, a: int, b: int) -> list[tuple[int, float]]:
         return self.db.execute("SELECT ts, rate FROM funding WHERE symbol=? AND ts>=? AND ts<? ORDER BY ts",

@@ -7,6 +7,7 @@ Math is pure (unit-tested); `build_map` does the I/O. Thresholds are starting as
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import math
 import statistics
@@ -26,7 +27,7 @@ KV_PREV_RANKS = "market_map_ranks"
 
 
 def log_returns(closes: list[float]) -> list[float]:
-    return [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+    return [math.log(b / a) for a, b in itertools.pairwise(closes) if a > 0 and b > 0]
 
 
 def beta(coin: list[float], btc: list[float]) -> float:
@@ -37,7 +38,7 @@ def beta(coin: list[float], btc: list[float]) -> float:
     x, y = btc[-n:], coin[-n:]
     mx, my = statistics.fmean(x), statistics.fmean(y)
     vx = sum((a - mx) ** 2 for a in x)
-    b = sum((a - mx) * (c - my) for a, c in zip(x, y)) / vx if vx else 1.0
+    b = sum((a - mx) * (c - my) for a, c in zip(x, y, strict=True)) / vx if vx else 1.0
     b = (1 - BETA_SHRINK) * b + BETA_SHRINK * 1.0
     return max(BETA_CLIP[0], min(BETA_CLIP[1], b))
 
@@ -65,7 +66,7 @@ def coin_row(sym: str, c1h: list[list[float]], btc_rets: list[float], btc_moves:
     moves = {h: pct(closes, n) for h, n in (("1h", 1), ("4h", 4), ("24h", 24))}
     resid = {h: (moves[h] - b * btc_moves[h]) if moves[h] is not None and btc_moves.get(h) is not None else None
              for h in moves}
-    res = [r - b * x for r, x in zip(rets[-len(btc_rets):], btc_rets[-len(rets):])] if btc_rets else []
+    res = [r - b * x for r, x in zip(rets[-len(btc_rets):], btc_rets[-len(rets):], strict=False)] if btc_rets else []
     resid_vol = statistics.pstdev(res) * 100 if len(rets) > 24 and len(res) > 1 else None
     base_vol = statistics.fmean(qv[-170:-2]) if len(qv) > 26 else None   # [-1] is the still-forming hour
     e20 = ema(closes, 20)
@@ -183,7 +184,7 @@ async def build_map(ex, journal, min_quote_vol: float = 10_000_000) -> dict[str,
     sem = asyncio.Semaphore(12)
     majors = ("BTC/USDT:USDT", "ETH/USDT:USDT")
     kl = await asyncio.gather(*(_klines(ex, s, sem) for s in [*majors, *universe]))
-    data = dict(zip([*majors, *universe], kl))
+    data = dict(zip([*majors, *universe], kl, strict=True))
     btc_c = [c[4] for c in data[majors[0]]]
     if len(btc_c) < 30:   # BTC klines failed (timeout): a map without its benchmark would be wrong - keep the old one
         raise RuntimeError(f"BTC klines unavailable ({len(btc_c)} bars): market map not rebuilt this cycle")

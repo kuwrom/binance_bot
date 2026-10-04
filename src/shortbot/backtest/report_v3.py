@@ -73,7 +73,7 @@ def continuation(trades: list[dict], m: Market) -> dict[str, Any]:
     ac1 = None
     if len(xs) >= 10:
         mx, my = statistics.fmean(xs), statistics.fmean(ys)
-        sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
         sxx, syy = sum((x - mx) ** 2 for x in xs), sum((y - my) ** 2 for y in ys)
         ac1 = round(sxy / math.sqrt(sxx * syy), 3) if sxx and syy else None
     return {"n": len(drift), "ac1": ac1, "hit1": hit, "p2": round(cont / (cont + back), 2) if cont + back else None,

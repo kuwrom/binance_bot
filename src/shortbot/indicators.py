@@ -29,7 +29,7 @@ def rsi(values: list[float], period: int = 14) -> float | None:
     losses = [max(values[i - 1] - values[i], 0) for i in range(1, len(values))]
     avg_g = sum(gains[:period]) / period
     avg_l = sum(losses[:period]) / period
-    for g, loss in zip(gains[period:], losses[period:]):
+    for g, loss in zip(gains[period:], losses[period:], strict=True):
         avg_g = (avg_g * (period - 1) + g) / period
         avg_l = (avg_l * (period - 1) + loss) / period
     if avg_l == 0:
@@ -54,8 +54,8 @@ def vwap_bands(c: list[Candle]) -> dict[str, float] | None:
     if not c or vol == 0:
         return None
     typical = [(x[2] + x[3] + x[4]) / 3 for x in c]
-    vwap = sum(t * x[5] for t, x in zip(typical, c)) / vol
-    var = sum(x[5] * (t - vwap) ** 2 for t, x in zip(typical, c)) / vol
+    vwap = sum(t * x[5] for t, x in zip(typical, c, strict=True)) / vol
+    var = sum(x[5] * (t - vwap) ** 2 for t, x in zip(typical, c, strict=True)) / vol
     sd = math.sqrt(var)
     last = c[-1][4]
     return {"vwap": vwap, "sd": sd, "z": (last - vwap) / sd if sd else 0.0,

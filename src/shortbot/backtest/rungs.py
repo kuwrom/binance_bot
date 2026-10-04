@@ -44,7 +44,7 @@ SPLIT = (0.3, 0.3, 0.4)
 
 
 def with_rungs(plan: Plan, entry: float, depths: tuple[float, ...], total: float, carve: bool) -> Plan:
-    rungs = tuple((entry * (1 - d), total * s) for d, s in zip(depths, SPLIT))
+    rungs = tuple((entry * (1 - d), total * s) for d, s in zip(depths, SPLIT, strict=True))
     base = tuple((px, f * (1 - total)) for px, f in plan.targets) if carve else ()
     return replace(plan, targets=base + rungs)
 

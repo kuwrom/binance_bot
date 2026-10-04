@@ -43,7 +43,7 @@ class Trial:
 
 def grid(strategy: str, fn: Callable, space: dict[str, list], **kw: Any) -> list[Trial]:
     keys = list(space)
-    return [Trial(strategy, dict(zip(keys, vals)), fn, grid_idx=g, **kw)
+    return [Trial(strategy, dict(zip(keys, vals, strict=True)), fn, grid_idx=g, **kw)
             for g, vals in enumerate(itertools.product(*(space[k] for k in keys)))]
 
 
@@ -147,7 +147,7 @@ def level_fade(m: Market, coin: Coin, p: dict) -> Iterable[tuple[int, Plan]]:
         if not tradable(coin, i) or not in_session(coin, i, p.get("session")):
             continue
         if p["entry"] == "market":
-            def failed(k: int) -> bool:   # pierced within bars k-2..k and closed back below at k
+            def failed(k: int, lvl: float = lvl) -> bool:   # pierced within bars k-2..k and closed back below at k
                 return r[k]["c"] < lvl and any(b["h"] > lvl * 1.001 for b in r[k - 2:k + 1])
             accepted = r[i - 1]["c"] > lvl and r[i - 2]["c"] > lvl
             if failed(i) and not failed(i - 1) and not accepted:

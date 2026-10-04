@@ -66,7 +66,7 @@ async def score_and_alert(ex, journal, tickers: list[dict[str, Any]], regime: st
     from . import scanner, weight
     with weight.tagged(weight.TIER2, wait_s=TIER2_WAIT_S):
         evals, rows = await scanner.evaluate_tickers(ex, tickers)
-    done = [(ev, row) for ev, row in zip(evals, rows) if not ev.features.get("data_deferred")]
+    done = [(ev, row) for ev, row in zip(evals, rows, strict=True) if not ev.features.get("data_deferred")]
     now = now_s if now_s is not None else time.time()
     seen = load_seen(journal, [row["symbol"] for _, row in done], now)
     alerts = pick_alerts([row for _, row in done], regime, seen, now)

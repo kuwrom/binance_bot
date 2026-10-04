@@ -85,7 +85,8 @@ def test_few_days_are_labelled_descriptive_only_and_one_day_has_no_interval():
 
 
 def test_scan_excess_is_ret_minus_same_scan_median_over_distinct_symbols():
-    scan = [{"symbol": s, "ts_ms": 1, "short_ret_24h": v} for s, v in zip("ABCDE", (1.0, 2.0, 3.0, 4.0, 10.0))]
+    rets = (1.0, 2.0, 3.0, 4.0, 10.0)
+    scan = [{"symbol": s, "ts_ms": 1, "short_ret_24h": v} for s, v in zip("ABCDE", rets, strict=True)]
     dup = {"symbol": "E", "ts_ms": 1, "short_ret_24h": 10.0}
     small = [{"symbol": s, "ts_ms": 2, "short_ret_24h": 1.0} for s in "ABCD"]
     assert scan_excess(scan + [dup] + small) == [-2.0, -1.0, 0.0, 1.0, 7.0, 7.0, None, None, None, None]

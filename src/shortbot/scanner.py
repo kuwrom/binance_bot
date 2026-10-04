@@ -52,7 +52,8 @@ def log_scan(journal, evals: list[Evaluation], rows: list[dict[str, Any]], regim
         {**row, "price": ev.features.get("last"),
          "features": {**ev.features, "tape_state": row["tape"]["state"],
                       "scan": {**scan, **(by_symbol or {}).get(ev.symbol, {})}}}
-        for ev, row in zip(evals, rows)], regime)   # tape state as classified NOW (the registry needs scan-time)
+        for ev, row in zip(evals, rows, strict=True)],
+        regime)   # tape state as classified NOW (the registry needs scan-time)
     _log_research_brackets(journal, evals, rows, regime)
     return len(evals)
 
@@ -174,7 +175,7 @@ def _log_research_brackets(journal, evals, rows, regime) -> None:
     no-edge baseline p. Labelled 24h later, these measure where real drift exists (by setup, tape state, regime)."""
     from .probability import vol_scaled_bracket
     from .probability.baseline import short_geometry
-    for ev, row in zip(evals, rows):
+    for ev, row in zip(evals, rows, strict=True):
         price, s = ev.features.get("last"), ev.features.get("sigma_h")
         if not price or not s:
             continue
