@@ -1,6 +1,6 @@
 # Go-live gate (#46)
 
-`.venv/bin/shortbot golive --text` (MCP `golive_report`, web console Research) answers **READY** or **NOT READY** from the demo journal, and names every blocker with its evidence. It only reads: switching to live is the owner's, in `.env` (deploy/DEPLOY.md §6). The session brief shows the same verdict on one line, `go-live: NOT READY — <n> blockers: …`, from a light check that skips the drawdown bootstrap and uses its floor instead, so it is never looser than the full report.
+`.venv/bin/shortbot golive --text` (MCP `golive_report`, web console Research) answers **READY** or **NOT READY** from the demo journal, and names every blocker with its evidence. It only reads: switching to live is the owner's, in `.env` (deploy/DEPLOY.md §6). The session brief shows the same verdict on one line, `go-live: NOT READY — <n> blockers: …`, from a light check that skips the drawdown bootstrap and uses its floor instead, so it is never looser than the full report. The line is bounded like every brief line (`cli_brief.GOLIVE_TIMEOUT_S` = `BRIEF_TIMEOUT_S`, 20 s). It reads off the event loop, on a connection of its own, so a slow or failing journal gives `go-live: unavailable (…)` and the rest of the brief still comes.
 
 Code: `golive.py` (the criteria), `golive_equity.py` (the equity drawdown), `golive_view.py` (plumbing, text, brief line, live probation).
 

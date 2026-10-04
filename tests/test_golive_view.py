@@ -4,6 +4,8 @@ line names the blockers from a light check (no bootstrap); `golive_report` / `sh
 a probation line compares the live fills with the model and with demo."""
 
 import json
+import threading
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -145,6 +147,43 @@ async def test_the_session_brief_carries_the_line(monkeypatch):
     from tests.test_brief import app
     text = await cli_brief.brief(app())
     assert "- go-live: NOT READY" in text
+
+
+def golive_of(text):
+    return [ln for ln in text.splitlines() if "go-live" in ln]
+
+
+async def test_a_slow_journal_never_stalls_the_brief(monkeypatch):
+    from tests.test_brief import app
+    release = threading.Event()
+    monkeypatch.setattr(golive_view, "brief_line", lambda *a, **k: release.wait(10) and "- go-live: late")
+    monkeypatch.setattr(cli_brief, "GOLIVE_TIMEOUT_S", 0.2)
+    t0 = time.monotonic()
+    try:
+        text = await cli_brief.brief(app())
+    finally:
+        release.set()
+    assert time.monotonic() - t0 < 5 and "### record:" in text      # the rest of the brief came as usual
+    assert golive_of(text) == ["- go-live: unavailable (no answer in 0.2 s; `shortbot golive` for the report)"]
+
+
+async def test_a_failing_go_live_check_is_one_short_line(monkeypatch):
+    from tests.test_brief import app
+
+    def broken(*a, **k):
+        raise RuntimeError("database disk image is malformed " + "x" * 300)
+    monkeypatch.setattr(golive_view, "brief_line", broken)
+    [line] = golive_of(await cli_brief.brief(app()))
+    assert line.startswith("- go-live: unavailable (RuntimeError: database disk image is malformed") and len(line) < 160
+
+
+async def test_the_brief_reads_a_journal_file_on_a_connection_of_its_own(tmp_path, monkeypatch):
+    j = rig.desk(monkeypatch, path=tmp_path / "j.db")
+    seen, real, before = [], golive_view.brief_line, j.db.total_changes
+    monkeypatch.setattr(golive_view, "brief_line", lambda jj, *a, **k: seen.append(jj.db) or real(jj, *a, **k))
+    line = await cli_brief.golive_line(j, RiskLimits(), NOW)
+    assert line.startswith("- go-live: READY") and seen and seen[0] is not j.db
+    assert j.db.total_changes == before
 
 
 def test_live_mode_adds_a_probation_line(tmp_path, monkeypatch):

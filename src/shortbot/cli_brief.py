@@ -8,15 +8,21 @@ ladder stop seen for the first time, which it records and alerts once, as sizing
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import sqlite3
+import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 
 from . import alerts_view, gateway_health, killswitch, procs, setup_ladder_view
 from .entries import EntryDesk
+from .journal_writer import connect
 from .untrusted import clean
 
 BRIEF_TIMEOUT_S = 20
+GOLIVE_TIMEOUT_S: float = BRIEF_TIMEOUT_S   # the go-live line's bound, as every other line's
 BACKUP_MAX_AGE_H = 36
 
 
@@ -36,11 +42,7 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         lines.append(f"- ⚠️ setup ladder check failed: {type(e).__name__}: {e}")
     lines.append(backup_line(j))
-    try:   # the go-live gate (#46): a light check (no bootstrap), its blockers by name
-        from .golive_view import brief_line as golive_line
-        lines.append(golive_line(j, app.settings.limits))
-    except Exception as e:  # noqa: BLE001
-        lines.append(f"- ⚠️ go-live check failed: {type(e).__name__}: {e}")
+    lines.append(await golive_line(j, app.settings.limits))   # the go-live gate (#46): never raises, bounded
     try:   # long-lived processes still on code older than the code on disk (#58)
         lines.append(await asyncio.wait_for(procs.brief_line(j), BRIEF_TIMEOUT_S))
     except Exception as e:  # noqa: BLE001
@@ -96,6 +98,61 @@ async def brief(app) -> str:
     lines.append(f"### record: {stats['closed_trades']} closed trades, net {stats['total_pnl']} USDT; "
                  f"{len(j.candidates(labelled_only=True, limit=100000))} labelled research candidates")
     return "\n".join(lines)
+
+
+def _settle(fut: asyncio.Future[str], res: str | None, err: Exception | None) -> None:
+    if not fut.done():   # else it timed out: nobody waits for it any more
+        if err is not None:
+            fut.set_exception(err)
+        else:
+            fut.set_result(res or "")
+
+
+def _off_loop(fn: Callable[[], str]) -> asyncio.Future[str]:
+    """fn() on a daemon thread. Not asyncio.to_thread: asyncio.run joins its executor at exit, so a read left running
+    past its timeout would still hold the hook's process; a daemon thread is dropped at exit."""
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[str] = loop.create_future()
+
+    def run() -> None:
+        res, err = None, None
+        try:
+            res = fn()
+        except Exception as e:  # noqa: BLE001 - handed to the waiter
+            err = e
+        try:
+            loop.call_soon_threadsafe(_settle, fut, res, err)
+        except RuntimeError:   # the loop closed meanwhile
+            pass
+    threading.Thread(target=run, name="brief-golive", daemon=True).start()
+    return fut
+
+
+def _golive(j, limits, now: datetime | None, path: str) -> str:
+    """golive_view.brief_line on a connection of its own to the journal file at `path` ('' = ':memory:': j itself)."""
+    from . import golive_view
+    if not path:
+        return golive_view.brief_line(j, limits, now)
+    view = copy.copy(j)
+    view.db = connect(path)
+    view.db.row_factory = sqlite3.Row
+    try:
+        return golive_view.brief_line(view, limits, now)
+    finally:
+        view.db.close()
+
+
+async def golive_line(j, limits, now: datetime | None = None) -> str:
+    """The go-live gate's line (golive_view.brief_line, a light check), bounded like every brief line: a slow or
+    failing journal gives a short `unavailable` line, never a stalled or failed brief. It reads off the event loop on
+    a connection of its own (a journal file), so a read left running past the bound never shares this one."""
+    try:
+        path = next((r[2] for r in j.db.execute("PRAGMA database_list") if r[1] == "main"), "")   # no file I/O
+        return await asyncio.wait_for(_off_loop(lambda: _golive(j, limits, now, path)), GOLIVE_TIMEOUT_S)
+    except TimeoutError:
+        return f"- go-live: unavailable (no answer in {GOLIVE_TIMEOUT_S:g} s; `shortbot golive` for the report)"
+    except Exception as e:  # noqa: BLE001
+        return f"- go-live: unavailable ({type(e).__name__}: {str(e)[:80]})"
 
 
 def backup_line(j, now: float | None = None) -> str:
