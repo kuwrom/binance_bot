@@ -150,7 +150,7 @@ class Account:
         b = self.sym[s]
         for o in self.limits.values():
             if o["symbol"] == s and o["status"] == "open":
-                o["status"] = "canceled"
+                o["status"], o["upd"] = "canceled", self.now_ms()
         for i in [i for i in [*self.stops, *self.prearms] if self._algo_sym(i) == s]:
             self._retire(i, "CANCELED")
         cid = "adl_autoclose" if kind == "ADL" else f"autoclose-{self.now_ms()}"

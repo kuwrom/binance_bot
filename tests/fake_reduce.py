@@ -55,14 +55,14 @@ class ReduceOnly:
         if not fits_new:
             raise err.reduce_only_rejected()
         for i in drop:
-            self.limits[i]["status"] = "expired"
+            self.limits[i].update(status="expired", upd=self.now_ms())
         return qty
 
     def _ro_flat(self, s: str) -> None:
         """The position closed: its reduce-only limits expire."""
         if self.ro_expire_on_flat:
             for _, o in self._ro_open(s):
-                o["status"] = "expired"
+                o.update(status="expired", upd=self.now_ms())
 
     def _walk_down(self, s: str, old: float, p: float) -> None:
         """Price falls from old to p: resting BUY limits at or above p fill at their own price, highest first. A
@@ -78,6 +78,6 @@ class ReduceOnly:
         o = self.limits[i]
         q = min(o["amount"] - o["filled"], self.sym[o["symbol"]]["qty"])
         if q <= 0:
-            o["status"] = "expired"
+            o.update(status="expired", upd=self.now_ms())
             return
         self._exec_limit(i, q)

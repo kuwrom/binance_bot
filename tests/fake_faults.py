@@ -1,8 +1,8 @@
 """Fault injection on top of the strict fake (fakes.py), for the #46 plumbing suite: tests/test_fault_matrix*.py,
 test_duplicate_fills.py, test_crash_restart.py.
 
-- `FaultyCcxt.arm(method, fault, kind)`: ONE call of create_order, cancel_order, fetch_order or fetch_my_trades meets one
-  of FAULTS, picked by the client-id kind of the order it concerns (clientid.kind_of: open, entry, stop, bridge, prearm,
+- `FaultyCcxt.arm(method, fault, kind)`: ONE call of create_order, cancel_order, edit_order, fetch_order or
+  fetch_my_trades meets one of FAULTS, picked by the client-id kind of the order it concerns (clientid.kind_of: open, entry, stop, bridge, prearm,
   close, target; "any" matches every call). Each fault answers the exact error ccxt 4.5.84 raises for it
   (fake_errors.py, checked against ccxt's own handler in test_errors.py):
   - 1007_ran / 1007_unsent: -1007 "execution status unknown" (error-code page), after the request ran / without it
@@ -29,7 +29,8 @@ from tests.fakes import FakeCcxt
 
 FAULTS = ("1007_ran", "1007_unsent", "503_unknown", "503_unavailable", "1008", "1021_after")
 RAN = ("1007_ran", "503_unknown", "1021_after")   # the request executed, then its answer was lost or refused
-METHODS = {"create_order": "POST", "cancel_order": "DELETE", "fetch_order": "GET", "fetch_my_trades": "GET"}
+METHODS = {"create_order": "POST", "cancel_order": "DELETE", "edit_order": "PUT", "fetch_order": "GET",
+           "fetch_my_trades": "GET"}
 
 
 def fault_error(fault: str, method: str = "create_order", algo: bool = False) -> Exception:
@@ -103,6 +104,16 @@ class FaultyCcxt(FakeCcxt):
             await super().cancel_order(i, s, params)
         raise e
 
+    async def edit_order(self, i, s, type_, side, amount, price, params=None):
+        """Modify Order (PUT /fapi/v1/order): one that ran is applied, then its answer is lost or refused."""
+        f = self._take("edit_order", kind_of_id(self, i))
+        if f is None:
+            return await super().edit_order(i, s, type_, side, amount, price, params)
+        e = fault_error(f, "edit_order")
+        if f in RAN:
+            await super().edit_order(i, s, type_, side, amount, price, params)
+        raise e
+
     async def fetch_order(self, i, s, params=None):
         cid = _cid(params)
         f = self._take("fetch_order", clientid.kind_of(cid) if cid else kind_of_id(self, i))
@@ -161,6 +172,8 @@ class View:
         if method == "create_order":
             params = a[5] if len(a) > 5 else k.get("params")
             return clientid.kind_of(_cid(params) or "")
+        if method == "edit_order":
+            return kind_of_id(f, a[0])
         if method in ("cancel_order", "fetch_order"):
             params = a[2] if len(a) > 2 else k.get("params")
             cid = _cid(params)

@@ -48,7 +48,7 @@ class Engine(ReduceOnly):
         self.clock_s += seconds
         for o in self.limits.values():
             if o["status"] == "open" and o["gtd"] and o["gtd"] <= self.now_ms():
-                o["status"] = "expired"
+                o["status"], o["upd"] = "expired", self.now_ms()
         old = self.now_ms() - FORGET_MS
         for i in [i for i, o in self.limits.items() if o["status"] in ("canceled", "expired") and not o["filled"]
                   and o["ts"] < old]:
@@ -58,10 +58,37 @@ class Engine(ReduceOnly):
             del self.algo[i]
         for s in [s for s, due in self.countdowns.items() if due and due <= self.now_ms()]:
             self.countdowns[s] = None   # countdownCancelAll fired: once, regular AND conditional orders (388)
-            for o in self.limits.values():
-                o["status"] = "canceled" if o["symbol"] == s and o["status"] == "open" else o["status"]
+            for o in [o for o in self.limits.values() if o["symbol"] == s and o["status"] == "open"]:
+                o["status"], o["upd"] = "canceled", self.now_ms()
             for i in [i for i in [*self.stops, *self.prearms] if self._algo_sym(i) == s]:
                 self._retire(i, "CANCELED")
+
+    # ------------------------------------------------------------ order views (the fields ccxt's parse_order fills)
+    def _order_view(self, i: str) -> dict:
+        o = self.limits.get(i) or self.market_orders[i]
+        # ccxt 4.5.84 parse_order: lastTradeTimestamp = updateTime only for 'closed', or 'open' with a fill; None for
+        # canceled/expired orders, even (partly) filled ones. lastUpdateTimestamp = transactTime / updateTime: the
+        # order's last change (created, filled, edited, cancelled, expired)
+        last = o["last_ts"] if o["status"] == "closed" or (o["status"] == "open" and o["filled"]) else None
+        return {"id": i, "clientOrderId": o["cid"], "symbol": o["symbol"], "type": o["type"], "side": o["side"],
+                "price": o["price"], "amount": o["amount"], "filled": o["filled"], "average": o["avg"],
+                "remaining": o["amount"] - o["filled"], "status": o["status"], "reduceOnly": o["reduce"],
+                "timestamp": o["ts"], "lastTradeTimestamp": last,
+                "lastUpdateTimestamp": max(t for t in (o["ts"], o.get("last_ts"), o.get("upd")) if t)}
+
+    def _algo_view(self, i: str) -> dict:
+        a = self.algo.get(i, {})
+        close = i in self.stops or (i not in self.prearms and a.get("close", True))
+        p = self.stops.get(i, self.prearms.get(i, a.get("trigger")))
+        st = a.get("status", "NEW")
+        # exact shape ccxt 4.5.84 returns for a Binance algo stop (verified against demo, 2026-09-27); pre-armed
+        # reduce-only entry stops are listed too on live (trigger orders), but WITHOUT closePosition
+        return {"id": i, "clientOrderId": a.get("cid"), "symbol": a.get("symbol", SYM), "triggerPrice": p,
+                "stopPrice": p, "side": "buy", "type": "market", "reduceOnly": True, "amount": a.get("qty"),
+                "status": ALGO_STATUS[st], "lastUpdateTimestamp": a.get("upd", a.get("ts")),
+                "info": {"orderType": "STOP_MARKET", "algoType": "CONDITIONAL", "closePosition": close,
+                         "reduceOnly": True, "triggerPrice": str(p), "side": "BUY", "algoStatus": st,
+                         "actualOrderId": a.get("actual", "")}}
 
     # ------------------------------------------------------------ prices
     def set_price(self, s: str, p: float) -> None:
@@ -135,7 +162,7 @@ class Engine(ReduceOnly):
         close = i in self.stops
         trig = self.stops.pop(i, None) if close else self.prearms.pop(i, None)
         a = self.algo.setdefault(i, {"symbol": SYM, "qty": None, "cid": None, "trigger": trig})
-        a.update(status=status, close=close)
+        a.update(status=status, close=close, upd=self.now_ms())
 
     # ------------------------------------------------------------ fills
     def _exec_limit(self, i: str, q: float) -> None:

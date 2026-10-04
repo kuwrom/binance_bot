@@ -25,7 +25,7 @@ import ccxt
 from shortbot.config import RiskLimits, Settings
 from tests import fake_errors as err
 from tests.fake_account import Account
-from tests.fake_engine import ALGO_STATUS, SYM, Engine, ProdView, raw
+from tests.fake_engine import SYM, Engine, ProdView, raw
 
 STOP_TYPES = ("STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET")
 
@@ -133,31 +133,6 @@ class FakeCcxt(Account, Engine):
         b = self._spec(s)
         return {"id": raw(s), "symbol": s, "limits": {"cost": {"min": b["min"]}},
                 "precision": {"amount": b["step"], "price": b["tick"]}}
-
-    # --- order views (the fields ccxt's parse_order fills)
-    def _order_view(self, i):
-        o = self.limits.get(i) or self.market_orders[i]
-        # ccxt 4.5.84 parse_order: lastTradeTimestamp = updateTime only for 'closed', or 'open' with a fill; None for
-        # canceled/expired orders, even (partly) filled ones
-        last = o["last_ts"] if o["status"] == "closed" or (o["status"] == "open" and o["filled"]) else None
-        return {"id": i, "clientOrderId": o["cid"], "symbol": o["symbol"], "type": o["type"], "side": o["side"],
-                "price": o["price"], "amount": o["amount"], "filled": o["filled"], "average": o["avg"],
-                "remaining": o["amount"] - o["filled"], "status": o["status"], "reduceOnly": o["reduce"],
-                "timestamp": o["ts"], "lastTradeTimestamp": last}
-
-    def _algo_view(self, i):
-        a = self.algo.get(i, {})
-        close = i in self.stops or (i not in self.prearms and a.get("close", True))
-        p = self.stops.get(i, self.prearms.get(i, a.get("trigger")))
-        st = a.get("status", "NEW")
-        # exact shape ccxt 4.5.84 returns for a Binance algo stop (verified against demo, 2026-09-27); pre-armed
-        # reduce-only entry stops are listed too on live (trigger orders), but WITHOUT closePosition
-        return {"id": i, "clientOrderId": a.get("cid"), "symbol": a.get("symbol", SYM), "triggerPrice": p,
-                "stopPrice": p, "side": "buy", "type": "market", "reduceOnly": True, "amount": a.get("qty"),
-                "status": ALGO_STATUS[st], "info": {"orderType": "STOP_MARKET", "algoType": "CONDITIONAL",
-                                                    "closePosition": close, "reduceOnly": True,
-                                                    "triggerPrice": str(p), "side": "BUY", "algoStatus": st,
-                                                    "actualOrderId": a.get("actual", "")}}
 
     def _open_cid(self, cid) -> bool:
         return any(o["cid"] == cid and o["status"] == "open" for o in self.limits.values()) or any(
@@ -288,7 +263,7 @@ class FakeCcxt(Account, Engine):
             if not o or o["status"] != "open":
                 # Binance: a filled (or already cancelled) order is unknown to cancel (MOVR 2026-10-01)
                 raise err.unknown_order()
-            o["status"] = "canceled"
+            o["status"], o["upd"] = "canceled", self.now_ms()
             resp = {"id": i, "status": "canceled", "filled": o["filled"]}   # the cancel carries executedQty
         if self.drift_on_cancel:
             self.drift_on_cancel -= 1
@@ -316,7 +291,7 @@ class FakeCcxt(Account, Engine):
             raise err.no_such_order()
         if not _on_tick(price, self.sym[s]["tick"]):
             raise err.tick_size()
-        o["price"] = price
+        o["price"], o["upd"] = price, self.now_ms()
         return self._order_view(i)
 
     async def cancel_all_orders(self, s, params=None):
@@ -326,7 +301,7 @@ class FakeCcxt(Account, Engine):
         else:
             for o in self.limits.values():
                 if o["symbol"] == s and o["status"] == "open":
-                    o["status"] = "canceled"
+                    o["status"], o["upd"] = "canceled", self.now_ms()
         return {"code": 200, "msg": "The operation of cancel all open order is done."}
 
     async def fapiPrivateGetOpenOrders(self, req=None):
@@ -339,7 +314,7 @@ class FakeCcxt(Account, Engine):
                  "status": "PARTIALLY_FILLED" if o["filled"] else "NEW", "price": str(o["price"]),
                  "origQty": str(o["amount"]), "executedQty": str(o["filled"]), "reduceOnly": o["reduce"],
                  "closePosition": False, "timeInForce": "GTD" if o["gtd"] else "GTC", "goodTillDate": o["gtd"] or 0,
-                 "time": o["ts"], "updateTime": o["last_ts"] or o["ts"]}
+                 "time": o["ts"], "updateTime": o.get("upd") or o["last_ts"] or o["ts"]}
                 for i, o in self.limits.items() if o["status"] == "open" and s in (None, raw(o["symbol"]))]
 
     # --- test controls

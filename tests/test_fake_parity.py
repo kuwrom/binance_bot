@@ -192,6 +192,47 @@ async def test_last_trade_timestamp_only_for_closed_or_partly_filled_open_orders
     assert got["status"] == "expired" and got["filled"] == 30 and got["lastTradeTimestamp"] is None
 
 
+async def test_an_order_carries_the_time_of_its_last_change():
+    """ccxt 4.5.84 parse_order: lastUpdateTimestamp = transactTime / updateTime / updatedAt (binance.py): when an order
+    was created, filled, edited, cancelled or expired; Query-Algo-Order answers updateTime too. #86 tells a lost
+    cancel that ran from one a later cancel did by it."""
+    fake, t0 = FakeCcxt(), int(time.time() * 1000)
+    fake.now_ms = lambda: t0 + int(fake.clock_s * 1000)   # the exchange clock moves only with advance() here
+    o = await fake.create_order(SYM, "limit", "sell", 100, 1.04, gtd(hours=1))
+    assert (await fake.fetch_order(o["id"], SYM))["lastUpdateTimestamp"] == o["timestamp"]
+    fake.advance(60)
+    await fake.edit_order(o["id"], SYM, "limit", "sell", 100, 1.05)
+    edited = fake.now_ms()
+    assert (await fake.fetch_order(o["id"], SYM))["lastUpdateTimestamp"] == edited
+    fake.advance(60)
+    await fake.cancel_order(o["id"], SYM)
+    assert (await fake.fetch_order(o["id"], SYM))["lastUpdateTimestamp"] == fake.now_ms() > edited
+    await short(fake)
+    s = await stop(fake, 1.05)
+    fake.advance(60)
+    await fake.cancel_order(s["id"], SYM, params=TRIG)
+    assert (await fake.fetch_order(s["id"], SYM, params=TRIG))["lastUpdateTimestamp"] == fake.now_ms()
+    lim = await fake.create_order(SYM, "limit", "sell", 100, 1.06, gtd(hours=1))
+    fake.advance(3700)                                                       # GTD expiry stamps it too
+    assert (await fake.fetch_order(lim["id"], SYM))["lastUpdateTimestamp"] == fake.now_ms()
+
+
+@pytest.mark.parametrize("fault, ran", [("1007_ran", True), ("1007_unsent", False), ("503_unknown", True),
+                                        ("503_unavailable", False), ("1008", False), ("1021_after", True)])
+async def test_an_edit_meets_each_unknown_outcome_answer_after_or_before_it_ran(fault, ran):
+    """fake_faults: Modify Order (PUT /fapi/v1/order) meets the same answers as a send or a cancel, picked by the
+    client-id kind of the order it edits."""
+    from tests.fake_faults import FaultyCcxt
+    fake = FaultyCcxt()
+    o = await fake.create_order(SYM, "limit", "sell", 100, 1.04, {**gtd(), "clientOrderId": "sb-eg1-0"})
+    fake.arm("edit_order", fault, "entry")
+    with pytest.raises(ccxt.BaseError):
+        await fake.edit_order(o["id"], SYM, "limit", "sell", 100, 1.05)
+    assert (await fake.fetch_order(o["id"], SYM))["price"] == (1.05 if ran else 1.04)
+    assert fake.fired == [("edit_order", "entry", fault)]
+    assert (await fake.edit_order(o["id"], SYM, "limit", "sell", 100, 1.06))["price"] == 1.06   # armed once
+
+
 async def test_placement_rejections_tick_min_notional_and_margin():
     fake = FakeCcxt(equity=100)
     with pytest.raises(ccxt.BadRequest, match="-4014"):
