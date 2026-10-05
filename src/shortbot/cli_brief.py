@@ -23,6 +23,9 @@ from .untrusted import clean
 
 BRIEF_TIMEOUT_S = 20
 GOLIVE_TIMEOUT_S: float = BRIEF_TIMEOUT_S   # the go-live line's bound, as every other line's
+# Claude Code shows a SessionStart hook's output inline only up to 10,000 characters; past that the session sees a
+# 2 KB preview, which cut the rulebook off (2026-10-05). The alerts go last and are trimmed first.
+BRIEF_MAX_CHARS = 9000
 BACKUP_MAX_AGE_H = 36
 
 
@@ -83,10 +86,6 @@ async def brief(app) -> str:
         lines += coin_lines(j)
     except Exception as e:  # noqa: BLE001
         lines.append(f"- ⚠️ could not load coin memory: {type(e).__name__}: {e}")
-    try:
-        lines += alerts_view.brief_lines(j)
-    except Exception as e:  # noqa: BLE001
-        lines.append(f"### ⚠️ could not load alerts: {type(e).__name__}: {e}")
     try:   # the rulebook, what is relevant now, what to re-check
         from . import learnings_brief
         lines += learnings_brief.section(j, orders)
@@ -103,7 +102,25 @@ async def brief(app) -> str:
     stats = j.stats()
     lines.append(f"### record: {stats['closed_trades']} closed trades, net {stats['total_pnl']} USDT; "
                  f"{len(j.candidates(labelled_only=True, limit=100000))} labelled research candidates")
-    return "\n".join(lines)
+    try:
+        alerts = alerts_view.brief_lines(j)
+    except Exception as e:  # noqa: BLE001
+        alerts = [f"### ⚠️ could not load alerts: {type(e).__name__}: {e}"]
+    return fit(lines, alerts)
+
+
+def fit(lines: list[str], alerts: list[str], limit: int = BRIEF_MAX_CHARS) -> str:
+    """The brief within `limit` characters: everything else whole, then as many alert lines as fit (the header and
+    the urgent ones first), then a pointer to the rest."""
+    out, more = list(lines), "- … more alerts: run `journal` (start_session acknowledges them all)"
+    used = len("\n".join(out))
+    for i, ln in enumerate(alerts):
+        if used + len(ln) + len(more) + 2 > limit:
+            out.append(more)
+            break
+        out.append(ln)
+        used += len(ln) + 1
+    return "\n".join(out)
 
 
 def _settle(fut: asyncio.Future[str], res: str | None, err: Exception | None) -> None:

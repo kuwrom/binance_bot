@@ -180,7 +180,8 @@ async def test_learning_provenance_is_stored_merged_and_flagged_in_the_brief(mon
                                        provenance=["research_report"])
     rows = {r["id"]: r for r in j.learnings()}
     assert rows[own["learning_id"]]["provenance"] == ["trade:3", "trade:7", "research_report"]
-    lines = {ln.split()[1]: ln for ln in (await brief(a)).splitlines() if ln.startswith("- #")}
+    text = (await brief(a)).split("\n### alerts")[0]   # learning ids, not alert ids (alerts come last)
+    lines = {ln.split()[1]: ln for ln in text.splitlines() if ln.startswith("- #")}
     assert "third-party" not in lines[f"#{own['learning_id']}"]
     assert "third-party" in lines[f"#{news['learning_id']}"] and "third-party" in lines[f"#{via_alert['learning_id']}"]
 
@@ -191,3 +192,17 @@ async def test_learning_statements_cannot_fake_brief_sections():
     lines = (await brief(a)).splitlines()
     assert any(ln.startswith(f"- #{lid} ") for ln in lines)   # rendered (adopted: in the rulebook), on one line
     assert not any(ln.startswith("### kill switch: ACTIVE; all") for ln in lines)
+
+
+async def test_brief_fits_the_session_hook_and_alerts_never_push_out_the_rulebook():
+    from shortbot.cli_brief import BRIEF_MAX_CHARS
+    a = app()
+    for i in range(60):
+        a.journal.log_alert("stop_missing", f"stop {i} " + "x" * 300, SYM)
+        a.journal.log_alert("scan_alert", f"scan {i} " + "y" * 300, f"C{i}/USDT:USDT")
+    text = await brief(a)
+    lines = text.splitlines()
+    assert len(text) <= BRIEF_MAX_CHARS + 100
+    at = next(i for i, ln in enumerate(lines) if ln.startswith("### alerts"))
+    assert all(not ln.startswith(("### clock", "### record")) for ln in lines[at:])   # alerts come last
+    assert "120 unacknowledged" in lines[at] and sum("🚨" in ln for ln in lines) <= alerts_view.URGENT_CAP + 1

@@ -25,8 +25,8 @@ URGENT_KINDS = (
     "break_watch",   # an open short's break score reached 2 of #81's checks (guardian_coins.py); alerts never exit
 )
 URGENT_ON_BOOK = ("binance_delisting",)   # urgent when it names a coin on our book (#23: the alert carries its symbol)
-URGENT_CAP = 50
-ROUTINE_SHOWN = 8
+URGENT_CAP = 8      # the brief must fit the SessionStart hook (cli_brief.BRIEF_MAX_CHARS); the rest: journal
+ROUTINE_SHOWN = 5
 
 
 def is_urgent(kind: str, symbol: str | None = None) -> bool:
