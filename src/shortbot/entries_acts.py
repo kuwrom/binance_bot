@@ -86,6 +86,8 @@ async def _first(desk: EntryDesk, e: dict[str, Any],
         if errors.classify(x.__cause__ or x) is not errors.ReduceOnlyRejected or not await tr.flat_now(sym):
             raise
         pos, cps = None, []   # the round trip below journals it
+        if rest == "kept":    # no position to keep the rest for after all: pulled before the round trip claims the row
+            keep, rest = False, await withdraw(tr, {**e, "prearm_id": None})
     if rest == "unknown":
         return rest, pos, [], None
     desk._cancel_fails.pop(e["id"], None)

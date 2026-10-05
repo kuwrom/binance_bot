@@ -26,7 +26,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
                "read_coin", "coin_profile", "chart", "probability", "book_plan", "upcoming_unlocks", "coin_memory",
                "update_coin_read", "watch"),
     "Orders": ("open_short", "close_position", "move_stop", "update_plan", "reassess", "widen_stop", "add_to_winner",
-               "propose_entries", "cancel_entry_group", "amend_entry", "position_ladder", "ladder"),
+               "entry_levels", "propose_entries", "cancel_entry_group", "amend_entry", "position_ladder", "ladder"),
     "Research": ("research_report", "calibration_report", "list_setups", "list_signals", "add_learning",
                  "update_learning", "learnings", "study", "sweeps", "registry", "add_unlock", "macro-add", "macro-refresh",
                  "warmup_start", "warmup_check", "warmup", "probe", "drill", "golive_report"),

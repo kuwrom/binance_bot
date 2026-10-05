@@ -309,7 +309,8 @@ class PositionChecks:
             if ev["event"] in ("cancelled", "expired"):
                 await self.n.send(f"entry_{ev['event']}", f"entry #{ev['entry_id']}: {ev.get('why', '')}",
                                   cooldown_s=0)
-            elif ev["event"] in ("filled", "tranche_joined", "sibling_joined") and state not in (None, ACTIVE):
+            elif ev["event"] in ("filled", "tranche_joined", "sibling_joined", "increment") and \
+                    state not in (None, ACTIVE):   # (increment: a partly filled entry's rest, entries_partial.py)
                 await send_safe(self.n, "fill_while_" + state.lower(), f"entry #{ev['entry_id']} filled while the "
                                 f"kill switch is {state}: protected and journalled as trade #{ev.get('trade_id')}. "
                                 "Manage it under its plan or close it; it is never auto-closed.", urgent=True,
