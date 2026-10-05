@@ -38,7 +38,7 @@ live trades. One guardian per desk: a second one for the same mode refuses to st
 and `shortbot-admin --mode live status`.
 
 ## The demo desk
-Everything in CLAUDE.md "You are in control". Code changes go on a branch in a worktree and are merged only once
+Everything in CLAUDE.md section 3 ("What you may do"). Code changes go on a branch in a worktree and are merged only once
 proven (tests, backtests, forward evidence); a merge redeploys the live guardian too, so the bar is high. New
 findings, setups and parameter experiments are tried here first.
 
