@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from shortbot import news
+from shortbot import clock, news
 from shortbot.market.hub import MarketContext
 from shortbot.signals import REGISTRY
 from shortbot.signals.hack import hack_flag, match
@@ -73,7 +73,8 @@ def test_hack_match_window_newest_and_reimbursement():
     assert match(items[1:2] + items[3:], NOW) == {"hack_flag": False}
 
 
-async def test_hack_signal_is_a_feature_only():
+async def test_hack_signal_is_a_feature_only(monkeypatch):
+    monkeypatch.setattr(clock, "now_dt", lambda: NOW)   # the 72h window is measured from the desk clock
     out = await hack_flag(Ctx(20, items=[{"title": "ABC exploit drains vault", "time": iso(1)}]))
     assert out.features["hack_flag"] is True and out.features["hack_source"] == "Binance"
     assert out.points == [] and out.vetoes == []
