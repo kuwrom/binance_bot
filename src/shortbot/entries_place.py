@@ -258,6 +258,7 @@ class EntryPlacement:
             pe = await ProbabilityEngine(tr.ex, self.j).short_bracket(
                 sym, stop, tgts[:1], float(plan.time_stop_hours or 24), entry=px,
                 fill_hours=(expires_ms / 1000 - time.time()) / 3600, log_source="entry", ref_id=eid,
+                analyst_p=plan.analyst_p,
                 context={"setup": p["setup"], "level_type": p.get("level_type"), "regime": regime})
             if pe.get("ok"):
                 odds = {"p_fill_upper_bound": pe.get("fill_prob"), "p_target_first_if_filled": pe["targets"][0]["p_target"],

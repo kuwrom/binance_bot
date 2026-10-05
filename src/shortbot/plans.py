@@ -35,6 +35,7 @@ class TradePlan:
     auto: dict[str, bool] = field(default_factory=lambda: {
         "breakeven": True, "trail": True, "targets": False, "time_stop": False})
     uses_learnings: list[int] = field(default_factory=list)   # learning ids this entry relies on (learnings_view.scores)
+    analyst_p: float | None = None   # your P(first target before the stop), logged for calibration (#68)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -65,13 +66,22 @@ def build_plan(defaults: dict[str, Any], overrides: dict[str, Any] | None) -> Tr
     auto = {**TradePlan().auto, **merged.pop("auto", {})}
     targets = [t if isinstance(t, Target) else Target(float(t["price"]), float(t["fraction"]))
                for t in merged.pop("targets", [])]
-    cited = _cited(merged.pop("uses_learnings", None))
-    return TradePlan(**merged, targets=targets, auto=auto, uses_learnings=cited)
+    cited, p = _cited(merged.pop("uses_learnings", None)), _prob(merged.pop("analyst_p", None))
+    return TradePlan(**merged, targets=targets, auto=auto, uses_learnings=cited, analyst_p=p)
+
+
+def _prob(p: Any) -> float | None:
+    """analyst_p: a probability strictly between 0 and 1 (a stated certainty can't be calibrated), or None."""
+    if p is None:
+        return None
+    if isinstance(p, bool) or not isinstance(p, (int, float)) or not 0 < p < 1:
+        raise ValueError(f"analyst_p must be your probability of the first target before the stop, 0 < p < 1; got {p!r}")
+    return float(p)
 
 
 PINNED = ("r1_usdt", "full_size", "ladder_live")   # written by the desk (adds, the live ladder, split entries), never
                                                    # by a plan edit: 1R and the ladder's exposure base stay fixed
-ENTRY_ONLY = ("uses_learnings",)   # set with the entry: a citation added once the outcome shows would score itself
+ENTRY_ONLY = ("uses_learnings", "analyst_p")   # set with the entry: added once the outcome shows, it would score itself
 
 
 def revise_plan(current: dict[str, Any], changes: dict[str, Any] | None) -> tuple[TradePlan, dict[str, Any]]:
@@ -80,7 +90,8 @@ def revise_plan(current: dict[str, Any], changes: dict[str, Any] | None) -> tupl
     too."""
     locked = sorted(set(changes or {}) & {*PINNED, *ENTRY_ONLY})
     if locked:
-        raise ValueError(f"{locked} are pinned (1R and the ladder's full size by the desk, uses_learnings at entry): "
+        raise ValueError(f"{locked} are pinned (1R and the ladder's full size by the desk, uses_learnings and analyst_p "
+                         "at entry): "
                          "not editable in a plan")
     pins = {k: current[k] for k in PINNED if k in current}
     return build_plan({k: v for k, v in current.items() if k not in PINNED}, changes), pins

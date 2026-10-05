@@ -55,3 +55,16 @@ def test_listing_fade_v2_only_spot_listed_day6_to_30():
     assert not d({"listing_age_days": 2, "spot_available": True})        # too early: fatter squeeze tails
     assert not d({"listing_age_days": 40, "spot_available": True})
     assert SETUPS["listing_fade"].default_plan["time_stop_hours"] == 24 * 45
+
+
+def test_analyst_p_is_a_probability_set_at_entry_only():
+    from shortbot.plans import revise_plan
+    assert build_plan({}, None).analyst_p is None
+    assert build_plan({}, {"analyst_p": 0.55}).analyst_p == 0.55
+    for bad in (0, 1, 1.2, -0.1, "0.5", True):
+        with pytest.raises(ValueError, match="analyst_p"):
+            build_plan({}, {"analyst_p": bad})
+    plan, _ = revise_plan(build_plan({}, {"analyst_p": 0.6}).to_dict(), {"time_stop_hours": 30})
+    assert plan.analyst_p == 0.6                      # kept through a plan edit
+    with pytest.raises(ValueError, match="analyst_p"):
+        revise_plan(plan.to_dict(), {"analyst_p": 0.9})   # stated after the fact it would score itself
