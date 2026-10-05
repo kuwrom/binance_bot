@@ -44,7 +44,9 @@ async def run(args: argparse.Namespace, s: Settings, j: Journal) -> dict[str, An
         return {"ok": False, "error": _under_claude() or f"limits {args.action} needs a --reason"}
     if not args.items:
         return {"ok": False, "error": f"limits {args.action}: name at least one limit"}
-    changes, drop, errs = {}, (), []
+    changes: dict[str, str] = {}
+    drop: tuple[str, ...] = ()
+    errs: list[str] = []
     if args.action == "set":
         for item in args.items:
             k, eq, v = item.partition("=")
@@ -54,7 +56,7 @@ async def run(args: argparse.Namespace, s: Settings, j: Journal) -> dict[str, An
                 changes[k] = v.strip()
     else:
         drop = tuple(args.items)
-        errs += [f"{k!r}: unset takes names only" for k in drop if "=" in k]
+        errs += [f"{name!r}: unset takes names only" for name in drop if "=" in name]
     if errs:
         return {"ok": False, "error": "; ".join(errs)}
     k = dl.key(j)

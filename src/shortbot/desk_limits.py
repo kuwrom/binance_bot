@@ -20,7 +20,7 @@ import logging
 import os
 from dataclasses import asdict, fields, replace
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .config import RiskLimits, Settings, consistency_errors
 
@@ -49,7 +49,7 @@ def env_name(name: str) -> str:
 def key(j: Journal, mode: str | None = None) -> str:
     """The kv key of `mode`'s desk limits (default: the journal's own mode), via Journal.mode_key."""
     from .journal import Journal
-    return Journal.mode_key(SimpleNamespace(mode=mode or j.mode), KV)
+    return Journal.mode_key(cast("Journal", SimpleNamespace(mode=mode or j.mode)), KV)
 
 
 def field_name(raw: str) -> str:
@@ -113,7 +113,7 @@ def baseline(settings: Settings, j: Journal | None, mode: str | None = None) -> 
     """defaults -> .env -> desk limits: the baseline the guardian and every check without research overrides use.
     `mode`: another desk's (the go-live report compares demo trades with the live desk's baseline)."""
     desk = stored(j, mode)
-    return replace(settings.limits, **desk) if desk else settings.limits
+    return replace(settings.limits, **cast(dict[str, Any], desk)) if desk else settings.limits
 
 
 def env_layer_source(name: str) -> str:
@@ -158,7 +158,7 @@ def validate_changes(settings: Settings, j: Journal, changes: dict[str, Any], dr
         except LimitError as e:
             errs.append(str(e))
     if not errs:
-        errs += consistency_errors(replace(settings.limits, **new))
+        errs += consistency_errors(replace(settings.limits, **cast(dict[str, Any], new)))
     return cur, new, errs
 
 
