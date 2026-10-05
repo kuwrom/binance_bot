@@ -8,7 +8,11 @@ when_to_use: A scan candidate is tagged pump_fade, or the user asks about shorti
 
 **Thesis:** small and mid caps that spike on futures tend to mean-revert. Majors keep trending, so don't fade them.
 **Evidence:** FMZ workflow [S], small-cap reversal study [W]; see docs/PLAYBOOK.md.
-**Status:** active. Check `journal` → `by_setup.pump_fade` and the learnings; they override this page.
+**Status:** active in code, negative on the evidence. Through the live pipeline, plain pump_fade loses 0.07R per episode
+(#51, n 725). Only pump_fade with a perp **discount** keeps an edge: premium at or below -1%, funding at or below
+-0.1%, or a 1h interval (#24, shadow, +0.14R). Without a discount it's a demo `exp_` trade or a C-size judgement call
+with the reason written down (docs/DOCTRINE.md). Squeezes decide the mean, so manage squeezes over entry timing (#52).
+`journal` → `by_setup.pump_fade` and the learnings override this page.
 
 ## Froth: 3 or more of these
 - 24h change ≥ +10%, stronger ≥ +30%
@@ -33,7 +37,7 @@ when_to_use: A scan candidate is tagged pump_fade, or the user asks about shorti
 
 ## Default plan (override per trade)
 - time_stop_hours 12
-- breakeven at +5%, trail 4% once +10% (automatic)
+- breakeven at +5%; no automatic trail: post-entry returns mean-revert, so trailing adds nothing for fades (#20)
 - Suggested targets:
   - first target: the pre-pump base or the 0.5 retrace of the pump, half the position
   - runner: 0.618 retrace

@@ -21,7 +21,7 @@ Tags: **[W]** widely used by practitioners, **[S]** single source, **[Mine]** ou
 ## 2. Veto (any one = no short)
 1. Funding negative, or the 1h capped interval: shorts pay. Since 2026-09-29 this is a FLAG, not a veto: half size plus a funding budget that exits at 0.5R paid without follow-through. Round 3 (learning #22) found the blocked trades did better and the funding paid was small [W → tested]
 2. OI rising while funding is negative and price is flat or up [W]
-3. Funding at its cap, or the symbol has moved to 1h funding (`fundingInfo`) [W]
+3. Funding at its cap, or the symbol has moved to 1h funding (`fundingInfo`): a flag like 1, not a veto [W]
 4. Low float / Binance Alpha tokens: MYX ran +1,400% and liquidated $89.5M of shorts [W]
 5. Funding that is an extreme outlier on a low-cap coin (a "gamed" squeeze setup) [S]
 6. OI < $30M, a thin order book, or a fresh bullish catalyst in the news [W]
@@ -37,7 +37,7 @@ Tags: **[W]** widely used by practitioners, **[S]** single source, **[Mine]** ou
 - Weekend: thinner order books, so use smaller size [Mine]
 
 ## 4. Sizing and stops
-- Risk 0.5–2% of equity per trade (our code caps it at 1%). Size = risk ÷ stop distance [W].
+- Risk 0.5–2% of equity per trade (the `.env` baseline and the desk limits set it; demo experiments move it within the human's bounds). Size = risk ÷ stop distance [W].
 - Stop above the swing high plus a 1.5–3× ATR buffer [W]. Isolated margin, 1–3× leverage, a reduce-only stop-market on the exchange.
 - Low leverage protects better than a tight stop, because stops slip in squeezes [W].
 - **Never average up into a losing short** [W; FMZ's inverse pyramid is rejected].
@@ -51,7 +51,7 @@ Tags: **[W]** widely used by practitioners, **[S]** single source, **[Mine]** ou
   - price reclaims the invalidation level
   - funding turns deeply negative while OI rises
   - funding bleed exceeds budget [W]
-- Time stop: no follow-through within about 2–3 funding intervals means exit [Mine].
+- Time stop: the setup's default (pump_fade 12h, setups.py), aiming at the 75th percentile of time-to-MFE (POSITION_MANAGEMENT.md) [Mine].
 - After a tagged delisting (`deliveryDate` set) there is usually a fast dump, but expect squeezes [S].
 
 ## 6. Portfolio

@@ -6,7 +6,7 @@ when_to_use: User says "run a trading session", "let's trade", "check the market
 
 # Trading session
 
-**You are in control** (CLAUDE.md "You are in control"). Your judgement is the desk's measured edge: declining a high-score signal or closing a trade the engine still rates valid is your call; record why. Beyond this checklist, query any data, run a script or study, or change the app whenever the session needs it. Only the human-only walls are off limits.
+**You are in control** (CLAUDE.md section 3). Your judgement is the desk's measured edge: declining a high-score signal or closing a trade the engine still rates valid is your call; record why. Beyond this checklist, query any data, run a script or study, or change the app whenever the session needs it. Only the human-only walls are off limits.
 
 The shortbot state was injected at session start: kill switch, stale processes, open positions, entry orders, unacknowledged alerts (urgent first), the learnings rulebook and the learnings relevant now. If you don't see it, run `.venv/bin/shortbot brief`.
 
@@ -22,7 +22,8 @@ The shortbot state was injected at session start: kill switch, stale processes, 
 - **Guardian heartbeat** STALE or never seen: nothing guards fills and stops, so entries are refused. Tell the human.
 - **Unexplained change** (a stop moved, an order or decision you don't recognise): `shortbot audit --since 24h` shows who acted (mcp, cli, guardian, admin), from which Claude session and code version.
 
-## 1. Learn before acting (2 minutes)
+## 1. Learn before acting (2 minutes, at session start and during the warm-up, not when a signal arrives)
+- `docs/DOCTRINE.md` (loaded through CLAUDE.md) is the evidence-ranked summary: setups by evidence, entry, management and sizing rules. Everything below adds detail.
 - `journal`: read `stats.by_setup` / `by_experiment` (win rate, avg R, MAE/MFE) and the **learnings** index (one compact row each, best first).
 - The brief's **rulebook** holds the settled learnings (adopted, or supported on a real sample); **relevant now** adds the ones that match your open trades, resting entries and the latest scans. Before deciding on a coin or setup, search the rest: `learnings` with a query (`learnings "ZRO fakeout"`), `--setup` or `--id`.
 - Say in one line which learnings apply today. One marked "(not settled)" or listed under "learnings to re-check" (review due, n < 30, harmful, expired) isn't settled: don't lean on it alone. Re-checking is `research-review` work.
@@ -103,10 +104,11 @@ Load the `manage-position` skill, then for each position:
   - It replaces the current read and expires in 24h. Expired reads are scored against the move.
 - `watch COIN --reason ... --days N` keeps a forming setup in focus (state every 15 min, events alerted) until it confirms or dies. `watch COIN --remove` takes it off.
 
-## 5. Prefer limit entries at levels (docs/POSITION_MANAGEMENT.md §c)
-Unless the trigger needs an immediate market entry, place a **group of 3-5 limit shorts**:
-`propose_entries`, or `.venv/bin/shortbot propose '<json list>'`.
-- **Levels:** rest the sell a few ticks below a round number or prior high, or above the stop/liquidation cluster (sweep). Always set `level_type` and `level_reason`.
+## 5. Enter at the market or at the level (docs/POSITION_MANAGEMENT.md §c)
+**Distance decides fills.** Of the desk's limits, those at most 1% from the price filled 9/11; 1-2.5% away, 2/11; 2.5% or more, 1/27. The ones that missed were cancelled "the move happened without us" (#29, #62).
+- **Confirmed trigger:** enter now, either at the market (`open_short`) or as a limit at the level within about 1% of the price. Don't wait for a bounce that the tape doesn't promise.
+- **Waiting for a level:** a group of limit shorts (`propose_entries`, or `.venv/bin/shortbot propose '<json list>'`) is right when price is still below a real level it is likely to retest. Rest the sell AT the level or inside the wick, not beyond it. Keep a rolling book of such near-price groups across candidates.
+- **Levels:** a few ticks below a prior 24h high (the best short level, #4) or a round number, or above the stop/liquidation cluster (sweep). Always set `level_type` and `level_reason`.
 - **Stop:** beyond the sweep extreme plus a buffer. Set `cancel_below` where the move would have happened without us.
 - **Expiry and fills:** GTD expiry on the exchange. The first fill cancels the rest, and the guardian protects the fill within 5 s. A sibling that filled before its cancel landed is journaled and protected too, and alerted as over the group's single-bet budget: manage it, don't assume it's gone (`cancel_entry_group` lists it as `filled_first`). Until the guardian adopts such a row, or retries a failed cancel, it still shows in `pending_entries`; "cancel failing ... order still live" means it may still fill. A split leg that fills after its trade closed becomes a new trade (urgent alert).
 - **Cancel failed:** `cancel_entry_group` answers `ok: false` with `cancel_failed` ids when a cancel couldn't land (a busy symbol, a network error). Those orders may still be live and fill. Call it again; don't treat the symbol as clean until it is.
@@ -131,7 +133,7 @@ Unless the trigger needs an immediate market entry, place a **group of 3-5 limit
 ## 6. Decide and execute
 **Execution path.** You decide and execute; there is no per-trade approval step. The MCP tools and the `.venv/bin/shortbot` CLI run the same code and checks: vetoes, risk budget, account lock, governor, setup ladder, kill switch, audit trail. If an MCP tool refuses with `stale_code`, run the CLI command the refusal names. The CLI always runs the code on disk.
 - Enter only when the trigger is **confirmed**. Everything else goes on the watchlist with `log_decision("watch", ...)`, noting what would confirm it.
-- Every entry carries the full plan: trigger, invalidation, targets, time_stop_hours, auto flags, and `uses_learnings`: the ids of the learnings the entry relies on (set at entry only; each closed trade scores them by its R). The thesis says why now, what confirmed it and which evidence card supports it.
+- Every entry carries the full plan: trigger, invalidation, targets, time_stop_hours, auto flags, `uses_learnings` (the ids of the learnings the entry relies on; each closed trade scores them by its R) and `analyst_p` (your probability of the first target before the stop, logged for calibration, #68). Both are set at entry only. The thesis says why now, what confirmed it and which evidence card supports it.
 - Per candidate, settle: coin | setup | trigger confirmed? | entry | stop (tight or wide) | size/risk | plan | main risk.
 
 ## 7. Close the loop
@@ -139,6 +141,12 @@ Unless the trigger needs an immediate market entry, place a **group of 3-5 limit
 - `log_decision("session_summary", ...)`: what we did, what we learned, what to check next time.
 - If something looked like a pattern: `add_learning` as a **hypothesis**, with the evidence (trade ids, candidate counts), its `provenance` (e.g. `["trade:12", "research_report"]`), its `kind` (usually `statistical`) and `n` / `days` (one trade = n 1). A tell from one day or one coin gets a `valid_until`. If the result's `similar` already says it, append evidence to that learning (`update_learning`) instead.
 - Every few sessions, load `research-review`.
+
+## 8. Keep the desk running between prompts
+The session drives itself (Claude Code tools; they live only while the session runs):
+- **A 30-min check:** `CronCreate` at off-minutes (e.g. `7,37 * * * *`), or `/loop 30m` from the human. Each pass: manage open trades, check the kill switch, governor and alerts, scan, act on confirmed triggers, log. Learning happened at the start; don't redo it at the trigger.
+- **A 45 s level watch:** run `Monitor` on `.venv/bin/python -m shortbot.level_watch --level COIN=entry,stop,target ...` (`SHORTBOT_MODE=live` in front for the live desk) for every open trade and resting entry. It prints only level crossings (0.3% past the level), funding flips and this desk's new alerts. Each line wakes you. Re-arm it when it expires, and change the levels when the book changes.
+- **Scheduled one-offs:** a one-shot `CronCreate` for known times (a halt lifting at 00:00 UTC, an unlock date).
 
 ## Hard rules
 - Never dodge a rejection (splitting orders, sneaking a limit up, relabelling a setup). Change parameters openly (`set_risk_params` with an experiment tag; overrides apply in demo only) and tell the human.

@@ -7,7 +7,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
 ## How it works
 - **One card = one strategy**, in a strict format: `### id — Name`, then `- direction / family / mechanism / rules / data needed / evidence / grade / risks / fit` bullets.
 - **Registry:** `shortbot registry seed` registers each card as `lib.<id>` (level `strategy`, status **draft**, metric `trade_r`, no detector yet), and `shortbot registry search TEXT` finds it. Editing a card's rules creates a new version. Code: `src/shortbot/library_seed.py`.
-- **Path to live:** draft → shadow (a detector in `signals/` or the backtest, logging episodes) → live (the registry's promotion gate: ≥ 30 coins, CI > 0, t ≥ 3). See [../REGISTRY.md](../REGISTRY.md).
+- **Path to live:** draft → shadow (a detector in `signals/` or the backtest, logging episodes) → live (the registry's forward test: 100 scan episodes or 30 trades over ≥ 20 days, one-sided day-clustered p ≤ 0.025/M). See [../REGISTRY.md](../REGISTRY.md).
 - **Long and neutral cards** cannot trade until longs are enabled. They can still be backtested and shadow-logged now, from the same data.
 - *(proposed)* in a card's rules means the mechanism is sound but nobody has published stats. Lab-test it before trusting it.
 - **Grades:**
@@ -29,7 +29,7 @@ The live, short-only playbook is still [../PLAYBOOK.md](../PLAYBOOK.md) plus the
    - ATOM printed $0.001.
 
    Rules that follow: margin in USDT/USDC only, ≥ 2x margin buffer, deep reduce-only TP ladders, partial profits on big winners.
-5. **LLM judgement is not the edge.** In Alpha Arena 26 of 32 LLM accounts lost money. Edges should be explicit, rule-based and backtestable, with the agent running research and execution. This argues for rules, not approval gates.
+5. **LLM judgement is not the edge** *(superseded 2026-10-04 by the journal evidence and the owner's decision: docs/QUANT_METHODS.md "Design principle"; the warning stands for unmeasured, rule-free LLM trading).* In Alpha Arena 26 of 32 LLM accounts lost money. Edges should be explicit, rule-based and backtestable, with the agent running research and execution. This argues for rules, not approval gates.
 6. **Lumpy is normal.** Pro directional teams won ~40% of trades and lost in 4 of 5 months in 2026 (1Token). The median quant crypto fund made +3.2% in 2025.
 
 ## Priority queue (evidence × fit)

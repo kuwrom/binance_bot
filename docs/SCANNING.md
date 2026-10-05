@@ -10,7 +10,7 @@ The question: should we poll every coin every minute, or is there a better way? 
 
 **Binance's limit:** 2,400 request-weight per minute per IP (the REST `exchangeInfo` `rateLimits`). Overruns earn 429s and escalating 418 IP bans.
 
-**Today's scan is REST-only:**
+**Before #77 the scan was REST-only** (today's tiers are below):
 - One bulk ticker call ranks all 460 coin perps by 24h change.
 - The top ~25 movers are then deep-scored.
 - That is 325 requests and ~800 weight per pass (48 s): 168 klines calls (several timeframes per coin), 42 OI-history, 25 mark-price klines, 21 depth, 21 taker-ratio, 21 premium klines and 21 funding.

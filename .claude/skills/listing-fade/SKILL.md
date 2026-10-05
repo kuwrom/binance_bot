@@ -18,7 +18,7 @@ when_to_use: A candidate is tagged listing_fade (perp listed < 30 days), the sca
 - **Better when** first-week volume was high and BTC is falling. Budget for funding: new listings often charge shorts.
 
 ## Checklist
-- Listing age 1–30 days (`coin_snapshot.listing.listing_age_days`). Avoid the first hours: spreads are wide and funding is extreme.
+- Listing age 6–30 days (`coin_snapshot.listing.listing_age_days`; the detector's window). Day 0-3 shorts have fatter squeeze tails.
 - High turnover: the fade concentrates in the most traded listings. Quiet listings show no fade.
 - Negative funding on new perps: half size, and the funding budget applies (learning #22). Check `funding_history_pct`: a long hold pays funding every interval.
 - Not a Binance Alpha or low-float token (scanner veto): squeezes of +100–1,400% happen there.
@@ -32,7 +32,7 @@ when_to_use: A candidate is tagged listing_fade (perp listed < 30 days), the sca
 - 1–2× leverage. Distance matters more than precision here.
 
 ## Default plan
-- time_stop_hours 504 (21d)
+- time_stop_hours 1080 (45 days; setups.py)
 - breakeven at +10%, trail 10% once +20%
 - review every 24h
 - Targets: −20% and −35% from entry are reasonable starting points; record what actually happens.

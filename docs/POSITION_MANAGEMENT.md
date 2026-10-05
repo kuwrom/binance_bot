@@ -9,13 +9,13 @@ Manage every trade **from its current state**, not from the entry. At each revie
 `risk_$ = equity × base × m_dd × m_vol × m_regime × m_corr`, then `size = risk_$ / |stop − entry|`. Stop-based sizing already scales each trade to its own volatility.
 
 **base.** `risk_per_trade_pct`.
-- The research default is 0.5%, with a hard cap of 1% [PL; Turtles used 1%/unit].
+- The `.env` baseline is 1% (config.py); demo experiments move it within the human's bounds [PL; Turtles used 1%/unit].
 - Once there are 50 or more trades per setup, cap it with ½ Kelly: `f* = W − (1−W)/b`.
 - Half Kelly gives a 1/8 chance of ever halving the account (full Kelly: 1/2) and keeps ¾ of the growth rate (Thorp) [WS].
 - Never use raw optimal-f (Vince), which can imply drawdowns of about 97% [WS].
 
 **m_dd = clip(1 − DD/DD_max, 0.25, 1).**
-- DD_max defaults to 20%; at DD_max, stop and review. Based on Grossman–Zhou 1993 [WS theory].
+- DD_max defaults to 20% and only scales size; the governor already stops new entries at dd_stop 12% (RISK_GOVERNANCE.md). Based on Grossman–Zhou 1993 [WS theory].
 - Never size up after losses.
 - Continuous scaling, not an equity-curve on/off switch [MX].
 

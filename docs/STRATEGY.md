@@ -1,6 +1,6 @@
 # Where the edge is, and how to combine signals (research 2026-09-28)
 
-> **Update 2026-10-01:** [INDUSTRY.md](INDUSTRY.md) §6 corrects four points below with new evidence: carry moved (dispersion, TradFi perps, and a crash-gate signal for us), specialise by mechanism, not direction, venue mechanics drive tail losses, and LLM judgement is not the edge. The full strategy catalogue is in [strategies/](strategies/README.md).
+> **Update 2026-10-01:** [INDUSTRY.md](INDUSTRY.md) §6 corrects four points below with new evidence: carry moved (dispersion, TradFi perps, and a crash-gate signal for us), specialise by mechanism, not direction, venue mechanics drive tail losses, and LLM judgement is not the edge (that last point is superseded: since 2026-10-04 the AI's judgement is the measured edge, docs/QUANT_METHODS.md "Design principle"; the rules in force are docs/DOCTRINE.md). The full strategy catalogue is in [strategies/](strategies/README.md).
 
 ## How independent (non-market-maker) quants make money
 Profitable independents tie every strategy to a **forced or uneconomic flow**, specialise, keep costs low, size small and fixed, and kill strategies when they decay. Most retail traders lose: in Taiwan only about 5% of day traders are profitable in a given year and under 1% persistently, and costs roughly triple the losses (Barber-Lee-Liu-Odean, peer-reviewed).
@@ -8,7 +8,7 @@ Profitable independents tie every strategy to a **forced or uneconomic flow**, s
 | Edge family | Status for us |
 |---|---|
 | **Supply shocks** (team/cliff unlocks: about 90% negative, team unlocks about −25%, pressure starting ~30d before; post-TGE/high-FDV listings: 88% of 2024 airdrops fell; delistings) | **#1 priority.** Best evidence, and a capacity edge (too small for big funds). Keyrock unlock/airdrop studies are practitioner research. |
-| **Funding-aware fades of overextended alts** | **#2.** High carry predicts crashes (BIS WP 1087). Collect positive funding and veto negative funding / rising-OI squeezes. |
+| **Funding-aware fades of overextended alts** | **#2.** Corrected by our data (#38): top-quintile aggregate carry meant trend-on, alt shorts lost; a coin's own funding is never a short trigger, and negative funding is a size flag, not a veto (#22). Rising-OI squeezes stay the main risk (#52). |
 | **Beta-hedged cross-sectional short leg** (weak momentum, high dilution) with a BTC trend (TSMOM) regime switch | **#3.** Peer-reviewed factor support (Liu-Tsyvinski-Wu JF 2022). Trend is the most robust crypto premium (Sharpe 0.8–1.5 in working papers). |
 | Liquidation-cascade fades | Secondary timing overlay only. There is no reliable early warning, and ADL can close winning shorts (Hyperliquid, $45–52M). |
 | Cash-and-carry / funding arbitrage | **Closed.** It decayed from about 30%/yr (2021) to about 4% (2025), below the cash rate. |
