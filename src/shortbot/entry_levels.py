@@ -150,6 +150,7 @@ async def assess_live(ex: Any, t: Any, symbol: str, stop: float, targets: list[f
     last = await hub.context(symbol).last()
     if not last:
         raise ValueError(f"no market price for {symbol}")
+    await ex.trade_markets(symbol)   # a one-shot process (the CLI) has not loaded them: market() would raise
     tick = float(t.market(symbol)["precision"]["price"])
     engine = ProbabilityEngine(ex, None, cast(DataHub, hub))   # it calls only hub.context(): one per symbol here
     return await assess(engine, symbol, stop, targets, candidates, fill_hours, hold_hours, last, tick, threshold,

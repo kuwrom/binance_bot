@@ -5,6 +5,7 @@ level whose fill-adjusted touch odds clear the threshold, resting 2 ticks inside
 import json
 import math
 
+import ccxt
 import pytest
 
 from shortbot import entry_levels as lv
@@ -155,3 +156,20 @@ def test_the_levels_command_parses_comma_lists():
     kw = cmd.cli_kwargs(ns)
     assert kw["targets"] == [0.95, 0.9] and kw["candidates"] == [1.02, 1.04, 1.06] and kw["hours"] == 4.0
     assert not cmd.write and cmd.name == "entry_levels"
+
+
+async def test_a_one_shot_process_loads_the_trade_markets_before_reading_the_tick():
+    d, t, fake = desk()
+    loaded = []
+
+    class Fresh:                            # a fresh ccxt client (the CLI): market() raises until its markets load
+        def market(self, s):
+            if not loaded:
+                raise ccxt.ExchangeError("binanceusdm markets not loaded")
+            return fake.market(s)
+
+    async def trade_markets(symbol=None):
+        loaded.append(symbol)
+    t.ex.trade_markets = trade_markets
+    res = await lv.assess_live(t.ex, Fresh(), SYM, 1.10, [0.95, 0.90], [1.01, 1.02], 6.0, 24.0)
+    assert loaded == [SYM] and len(res["candidates"]) == 2
