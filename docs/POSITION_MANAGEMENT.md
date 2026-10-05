@@ -63,10 +63,36 @@ From the current price, compute `stop_now` (the structural invalidation), `targe
 - Put the stop beyond the sweep extreme plus a buffer, never exactly at a round number.
 - Coinglass heatmaps are modeled estimates, so use them only as a hint.
 
+**One full-size order at the picked level (default; owner decision 2026-10-05).** Give the level picker 2-4 candidate
+levels (`propose_entries` with `candidates: [{price, level_type, level_reason}]`, or read-only `shortbot levels COIN
+--stop S --targets t1,t2 --candidates p1,p2,p3 --hours H`). Per level it computes, with the probability engine's
+no-edge baseline (`entry_levels.py`):
+- `p_touch`: the chance price touches the level within the fill window (the TTL);
+- `p_fill` = `p_touch` × 0.85, a haircut for queue position and partial fills at an exact touch;
+- the odds of the first target before the stop if filled (closed form and Monte Carlo) and the R:R at the order price.
+
+It picks the **highest** level whose `p_fill` ≥ 0.70, else the likeliest fill (with a note), and rests ONE full-size
+sell **2 ticks inside** that level (below it, for a short), so a touch trades through the order. The row records the
+choice, every candidate's odds and the threshold (`entries.level_pick`, carried onto the trade as
+`entry_features.level_pick`); each candidate's touch is logged as an `entry_level` prediction and labelled like
+`entry_fill`, so `calibration_report` can test the 0.85 and 0.70 (both hypotheses: 32 labelled `entry_fill`
+predictions by 2026-10-05 averaged 0.64 predicted vs 0.56 touched). Why: BEAMX entry #43 (2026-10-04) rested exactly
+at the touch as one half of a split; price touched it, 3,827 of 33,791 filled (11%), the rest was cancelled and the
+trade ran at ~5% of its planned size.
+- **Split legs** (`tranches`) only when two candidates both clear the threshold and the far one is a real sweep zone
+  (the picker's `split_hint`). Learning #29's split entry is a 3-day hypothesis under test, not evidence.
+- **Partial fills keep resting** (`entries_partial.py`). The first fill opens the trade for what filled, protected
+  as usual (the closePosition stop covers the whole position); the remainder rests until its expiry and each further
+  fill joins the same trade (`entry_increment`, an `action_fill` per increment). It is cancelled by `cancel_below`, a
+  kill-switch or governor withdrawal, `cancel_entry_group`, or the trade closing (before a desk close buys back;
+  within 5 s of a stop or target). It counts as pending heat for its remainder only, can't be amended, and blocks
+  another entry on the symbol. OCO siblings are still cancelled at the first fill.
+
 **Adverse selection.** Limit orders fill more often when you're wrong (Handa & Schwartz 1996; Linnainmaa 2010; Albers et al. 2025 on the Binance BTC perp) [WS]. Assume filled trades win less than the signal until markouts prove otherwise.
 
 **Cancel when:**
-- price moves toward the order faster than ~1·ATR(1h) in 15 minutes, or OI/volume surges (a cascade, not a tap);
+- price moves toward the order faster than ~1·ATR(1h) in 15 minutes, or OI/volume surges (a cascade, not a tap); not
+  a partly filled order's remainder (price is at the level and the trade's stop bounds it);
 - the thesis is invalidated;
 - the TTL passes.
 
@@ -77,6 +103,8 @@ From the current price, compute `stop_now` (the structural invalidation), `targe
 - **Per setup:** E[R], SQN = E[R]/σ_R·√min(N,100), shrunk Kelly, MAE of winners (for stop width), MFE quantiles (for targets).
 - **Execution:**
   - fill rate by level type and distance
+  - the level picker's calibration: `entry_level` touch predictions vs touches (`calibration_report`), and fills vs
+    touches (the 0.85 haircut)
   - markouts at 1m/5m/1h/24h after the fill
   - **counterfactual outcome of unfilled orders** (the true non-execution cost).
 - **Management audit:** "hold the original plan" vs each action taken. Re-fit the multipliers only after 50 or more trades per setup.
