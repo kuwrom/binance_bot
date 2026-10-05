@@ -1,8 +1,10 @@
-"""The desk's own closed trades that bear on a coin being read (read.py): this coin's, then the latest of the same
-setup(s), each with its R, exit reason and the lesson written at the exit. A lesson is stored per trade
-(trades.lesson) and nothing else brings it back at decision time; here it returns where the next decision on the same
-coin or setup is made. Each row is one trade (n = 1): an anecdote that says what to check, never a rule (rules are
-learnings). All desks' trades (the claim is about the market, not the account), never a plumbing drill's."""
+"""What the desk already did and thought about a coin being read (read.py): its own closed trades on this coin, then
+the latest of the same setup(s), each with its R, exit reason and the lesson written at the exit; and the latest
+decisions logged on the coin (skip, watch, hold, note: why we passed or what we were waiting for). A lesson is stored
+per trade (trades.lesson) and a decision per coin (decisions), and nothing else brings them back at decision time;
+here they return where the next decision on the same coin or setup is made. Each row is one trade or one moment
+(n = 1): it says what to check, never a rule (rules are learnings). Both desks' rows (the claim is about the market,
+not the account), never a plumbing drill's."""
 
 from __future__ import annotations
 
@@ -13,10 +15,33 @@ from .untrusted import flat
 PER_GROUP = 3      # trades shown per group, newest first
 LESSON_MAX = 400   # a lesson's characters (our own text, one line)
 NOTE = "the desk's own closed trades, newest first; each is one trade (n=1): what to check, not a rule"
+DECISIONS = ("skip", "watch", "hold", "note", "rejected")   # a session's judgement on the coin, never an order row
+DECISIONS_SHOWN = 4
+DECISION_DAYS = 7     # older reasons describe another week's tape
+DECISION_MAX = 240
 
 
 def for_coin(journal, symbol: str, setups: list[str]) -> dict[str, Any]:
-    """{this_coin, same_setup, note}; {} when no closed trade matches."""
+    """{this_coin, same_setup, note} when a closed trade matches, plus {recent_decisions} when the coin has any;
+    {} when there is nothing."""
+    out = _trades(journal, symbol, setups)
+    if said := _decisions(journal, symbol):
+        out["recent_decisions"] = said
+    return out
+
+
+def _decisions(journal, symbol: str) -> list[dict[str, Any]]:
+    """The last DECISIONS_SHOWN judgement rows on this coin from the last DECISION_DAYS days, newest first."""
+    marks = ",".join("?" * len(DECISIONS))
+    rows = journal.db.execute(
+        f"SELECT ts, COALESCE(mode, 'demo'), action, reasoning FROM decisions WHERE symbol=? AND action IN ({marks})"
+        " AND ts >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?) ORDER BY id DESC LIMIT ?",
+        (symbol, *DECISIONS, f"-{DECISION_DAYS} days", DECISIONS_SHOWN)).fetchall()
+    return [{"at": str(ts)[:16].replace("T", " "), "desk": mode, "action": action, "why": flat(why, DECISION_MAX)}
+            for ts, mode, action, why in rows]
+
+
+def _trades(journal, symbol: str, setups: list[str]) -> dict[str, Any]:
     closed = {t["id"]: t for t in journal.closed_results(all_modes=True)}
     if not closed:
         return {}

@@ -4,8 +4,8 @@ Loaded in every session. It holds the rules our data supports; the numbers in br
 (`shortbot learnings --id N` shows the evidence). Change it only with new evidence, through `research-review`.
 
 ## What gives us an edge
-- Your judgement picking trades and cutting losers. The scanner's raw list loses money: its picks hit the target first
-  in 2% of cases, below the 5% a coin flip would give. Your picks did 81% vs 44% (16 trades: promising, not proven).
+- Your judgement picking trades and cutting losers. The scanner's raw list loses money traded mechanically; your picks
+  and exits have done better so far, on a small sample (docs/QUANT_METHODS.md "Design principle": promising, not proven).
 - Signals, scores and vetoes are advice. Only the safety rails are hard: kill switch, loss limits, setup stops, order
   rejections.
 
@@ -20,8 +20,8 @@ Loaded in every session. It holds the rules our data supports; the numbers in br
 
 ## How to enter
 - **When the signal is confirmed, get in.** Sell at the market, or put a limit at the level within about 1% of the
-  price. Limits within 1% filled 9 of 11 times; limits 2.5% or more away filled 1 of 27, and the move happened
-  without us (85).
+  price. Limits that close mostly filled; limits 2.5% or more away almost never did, and the move happened without
+  us (85).
 - Never wait for a bounce in a falling coin with a resting sell above the price: those fill only when the drop fails (20).
 - Don't chase, and don't re-enter after a stop-out.
 - **Squeeze warning signs**: price and open interest rising together, or open interest falling into your short. They

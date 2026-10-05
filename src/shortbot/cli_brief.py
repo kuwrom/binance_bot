@@ -27,6 +27,7 @@ GOLIVE_TIMEOUT_S: float = BRIEF_TIMEOUT_S   # the go-live line's bound, as every
 # 2 KB preview, which cut the rulebook off (2026-10-05). The alerts go last and are trimmed first.
 BRIEF_MAX_CHARS = 9000
 HANDOFF_MAX_CHARS = 700   # the last session's summary in the brief
+NOTE_MAX_CHARS = 200      # the last note on an open trade, on its brief line
 BACKUP_MAX_AGE_H = 36
 
 
@@ -70,7 +71,7 @@ async def brief(app) -> str:
         plan = p.get("plan") or {}
         lines.append(f"- {p['symbol']} #{p['trade_id']} {p['setup']}: PnL {p['pnl_pct']}%, stop {p['exchange_stop']}"
                      f"{flag}, MFE {p['mfe_pct']}% / MAE {p['mae_pct']}%, time stop {plan.get('time_stop_hours')}h, "
-                     f"opened {p['opened_at']}")
+                     f"opened {p['opened_at']}" + last_note(j, p))
     if not live and app.ex.trade:
         lines.append("- no open positions")
     try:   # resting entries, sends of unknown outcome and orders the desk didn't place
@@ -109,6 +110,18 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         alerts = [f"### ⚠️ could not load alerts: {type(e).__name__}: {e}"]
     return fit(lines, alerts)
+
+
+def last_note(j, p: dict) -> str:
+    """The latest hold / review / note a session logged on an open trade's coin since it opened (this desk's), for
+    its brief line; "" when none. What the last session thought of the trade, not only its numbers."""
+    try:
+        row = j.db.execute("SELECT ts, reasoning FROM decisions WHERE symbol=? AND action IN ('hold','review','note')"
+                           " AND COALESCE(mode, 'demo')=? AND ts >= ? ORDER BY id DESC LIMIT 1",
+                           (p["symbol"], j.mode, str(p.get("opened_at") or ""))).fetchone()
+    except sqlite3.Error:
+        return ""
+    return f"; last note {str(row[0])[5:16].replace('T', ' ')}: {flat(row[1], NOTE_MAX_CHARS)}" if row else ""
 
 
 def handoff_lines(j) -> list[str]:

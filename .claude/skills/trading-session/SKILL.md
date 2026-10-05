@@ -100,7 +100,7 @@ Load the `manage-position` skill, then for each position:
 
 ### Read each shortlisted coin
 - Run `read_coin` (`shortbot read COIN`). It shows the lifecycle stage, the game on the tape, the controller label and the session, then gives a playbook, a size note, stops and layered evidence (all coins → archetype → this coin).
-- Its `past_trades` block holds our own closed trades on this coin and on the same setup, each with its R and exit lesson. Read them before entering: each is one trade (what to check), not a rule.
+- Its `past_trades` block holds our own closed trades on this coin and on the same setup, each with its R and exit lesson, and `recent_decisions`: why we skipped, watched or held this coin in the last 7 days. Read them before entering: each is one trade or one moment (what to check), not a rule.
 - "observe" means no known script fits. Log what you see; if it repeats, it becomes a new script.
 - Scripts and thresholds change only when the research report (`by_archetype`, `by_lifecycle`, `by_controller`) supports it.
 - The `registry` block shows the evidence card for each node the coin sits in (docs/REGISTRY.md).

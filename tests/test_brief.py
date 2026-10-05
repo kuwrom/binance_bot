@@ -240,3 +240,21 @@ async def test_a_guardian_error_that_recovered_is_listed_after_the_alerts_still_
     sec = alerts_section(await brief(a))
     assert not any("(recovered since)" in ln for ln in sec) and sum("NAKED_POSITION" in ln for ln in sec) == 8
     assert any("5 more urgent (2 of them guardian errors that recovered)" in ln for ln in sec)
+
+
+def test_a_position_line_ends_with_the_last_note_logged_since_the_trade_opened():
+    from shortbot.cli_brief import NOTE_MAX_CHARS, last_note
+    j = app().journal
+    j.db.execute("INSERT INTO decisions (ts, symbol, action, reasoning, mode) VALUES "
+                 "('2026-01-01T00:00:00+00:00', ?, 'hold', 'from an earlier trade on this coin', 'demo')", (SYM,))
+    pos = {"symbol": SYM, "opened_at": "2026-06-01T00:00:00+00:00"}
+    assert last_note(j, pos) == ""
+    j.log_decision("hold", "OI still falling; hold to T1\n### fake", SYM)
+    j.log_decision("move_stop", "plan/breakeven: an order row", SYM)
+    j.log_decision("hold", "another coin", "ZRO/USDT:USDT")
+    note = last_note(j, pos)
+    assert note.startswith("; last note ") and note.endswith(": OI still falling; hold to T1 ### fake")
+    j.log_decision("review", "x" * 900, SYM)
+    assert len(last_note(j, pos)) <= NOTE_MAX_CHARS + 30 and "\n" not in last_note(j, pos)
+    j.mode = "live"
+    assert last_note(j, pos) == ""                                    # the other desk's trade has its own notes

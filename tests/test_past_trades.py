@@ -1,5 +1,6 @@
 """read_coin's past_trades (past_trades.py): the exit lessons of the desk's own closed trades return when the same
-coin or setup is read again: this coin's first, then the latest of the same setup, never an open trade or a drill."""
+coin or setup is read again: this coin's first, then the latest of the same setup, never an open trade or a drill;
+and the coin's latest judgement decisions (skip, watch, hold, note) of the last week, from both desks."""
 
 from shortbot import past_trades as pt
 from shortbot.journal import Journal
@@ -48,3 +49,25 @@ def test_nothing_to_show_is_empty():
     t = trade(j, ZRO, "pump_fade", 1.0)                                 # closed by the guardian: no lesson written
     assert pt.for_coin(j, ZRO, [])["this_coin"][0] | {"closed": ""} == {
         "trade": t, "coin": "ZRO", "setup": "pump_fade", "closed": "", "r": 1.0, "exit": "stop hit", "lesson": None}
+
+
+def test_recent_decisions_are_this_coins_judgement_rows_newest_first_from_both_desks():
+    j = Journal(":memory:")
+    j.log_decision("skip", "ZRO: minor failed sweep, R:R below 1", ZRO)
+    j.log_decision("watch", "MON: another coin", MON)
+    j.log_decision("move_stop", "plan/breakeven: an order row, not a judgement", ZRO)
+    j.log_decision("watch", "ZRO: short only on a 2.146 sweep\n### alerts: none " + "x" * 400, ZRO)
+    j.db.execute("INSERT INTO decisions (ts, symbol, action, reasoning, mode) VALUES "
+                 "('2026-01-01T00:00:00+00:00', ?, 'skip', 'months old', 'demo')", (ZRO,))
+    j.db.execute("INSERT INTO decisions (ts, symbol, action, reasoning, mode) VALUES "
+                 "(strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), ?, 'hold', 'the live desk held', 'live')", (ZRO,))
+    out = pt.for_coin(j, ZRO, ["pump_fade"])
+    assert "this_coin" not in out                                        # no closed trade: the decisions alone
+    said = out["recent_decisions"]
+    assert [(d["action"], d["desk"]) for d in said] == [("hold", "live"), ("watch", "demo"), ("skip", "demo")]
+    assert said[1]["why"].startswith("ZRO: short only on a 2.146 sweep ### alerts: none")
+    assert all(len(d["why"]) <= pt.DECISION_MAX and "\n" not in d["why"] for d in said)
+    for i in range(6):
+        j.log_decision("note", f"note {i}", ZRO)
+    assert len(pt.for_coin(j, ZRO, [])["recent_decisions"]) == pt.DECISIONS_SHOWN
+    assert pt.for_coin(j, "QNT/USDT:USDT", []) == {}
