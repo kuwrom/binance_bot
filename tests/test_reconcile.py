@@ -229,3 +229,26 @@ async def test_trade_history_is_read_whole_when_a_window_holds_more_than_a_page(
     fake.fills = [{**f, "id": str(i), "timestamp": f["timestamp"] + i * 100} for i in range(2500)]
     rows = await episodes.history(fake, SYM, f["timestamp"] - 1000)
     assert [x["id"] for x in rows] == [str(i) for i in range(2500)]
+
+
+async def test_a_pass_that_read_the_trade_open_keeps_the_reason_and_lesson_of_the_desks_own_close(monkeypatch):
+    t, fake = setup(monkeypatch)
+    tid = await short(t)
+    fake.advance(60)
+    real, calls = t.raw_positions, []
+
+    async def closed_meanwhile():                                # the session's close lands after the pass read its rows
+        calls.append(1)
+        if len(calls) == 1:
+            res = await t.close(SYM, "plan invalidation: 2 closes above the level", "write the level past the noise")
+            assert res["ok"], res
+        return await real()
+    monkeypatch.setattr(t, "raw_positions", closed_meanwhile)
+    (res,) = await reconcile.reconcile(t)
+    tr = t.j.get_trade(tid)
+    assert tr["status"] == "closed" and tr["exit_reason"] == "plan invalidation: 2 closes above the level"
+    assert tr["lesson"] == "write the level past the noise"
+    assert res["reason"] == tr["exit_reason"]                    # the trade_closed alert names the desk's reason
+    assert tr["pnl"] == pytest.approx(net(fake))
+    closes = [d for d in t.j.decisions(limit=50) if d["action"] == "trade_closed"]
+    assert len(closes) == 1                                      # journalled once, by the close that named it

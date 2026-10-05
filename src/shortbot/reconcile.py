@@ -146,13 +146,15 @@ async def trade_income(t, trade: dict[str, Any], episode: dict[str, Any] | None 
     return summarize_income([r for r in rows if ours(r)])
 
 
-async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
-                   until_ms: int | None = None, *, episode: dict[str, Any] | None = None) -> dict[str, Any]:
+async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "", until_ms: int | None = None, *,
+                   episode: dict[str, Any] | None = None, late: bool = False) -> dict[str, Any]:
     """Close a journal trade with exchange-truth PnL. Safe to call when the position is already flat.
     until_ms: the trade's end when it is known, so income and fills of later activity on the symbol are not counted.
     episode: the trade's position rebuilt from trade history (episodes.match / walk): its own income (trade_income),
     its exit fills' price, and closed_at = its exit fill (not the time of this call). None given (the desk's own close):
-    rebuilt here by the trade's order ids (own_episode)."""
+    rebuilt here by the trade's order ids (own_episode).
+    late (the reconcile pass): the pass read the row open, so the desk's own close may have finished it meanwhile. That
+    close's reason and lesson stay (ZRO #21, 2026-10-05); only the money is written again, and it is journalled once."""
     t, j = trader.t, trader.j
     given = episode is not None
     if not given and until_ms is None:
@@ -162,23 +164,31 @@ async def finalize(trader, trade: dict[str, Any], reason: str, lesson: str = "",
                                                                 until_ms))[0]
     if inc["liquidated"] and "liquidat" not in reason:
         reason = f"LIQUIDATED ({reason})"
-    await j.write(_close_row, trade["id"], exit_px, inc, reason, lesson,
-                  ms_to_iso(episode["closed_ms"]) if episode else None)
+    named = await j.write(_close_row, trade["id"], exit_px, inc, reason, lesson,
+                          ms_to_iso(episode["closed_ms"]) if episode else None, late)
+    reason = named or reason
     if given and episode is not None:   # rebuilt here: the desk's close, whose fills it benchmarks live (#35)
         fill_quality.record_episode(trader, trade, episode,   # mainnet refs for its fills not yet referenced (#35)
                                     targets.order_kinds(j, trade["id"]))   # its resting targets' fills say so
-    j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,
-                                                                      "exit": exit_px})
+    if not named:
+        j.log_decision("trade_closed", reason, trade["symbol"], snapshot={"trade_id": trade["id"], **inc,
+                                                                          "exit": exit_px})
     return {"trade_id": trade["id"], "symbol": trade["symbol"], "exit": exit_px, **inc, "reason": reason}
 
 
 def _close_row(j, trade_id: int, exit_px: float | None, inc: dict[str, Any], reason: str, lesson: str,
-               closed_at: str | None) -> None:
-    """The trade's close, one unit (journal.write: an event loop never waits for the lock)."""
+               closed_at: str | None, late: bool = False) -> str | None:
+    """The trade's close, one unit (journal.write: an event loop never waits for the lock). Returns the reason the row
+    already carried when `late` found it closed by the desk (kept, with its lesson), else None."""
+    cur, named = j.get_trade(trade_id) if late else None, None
+    if cur and cur["status"] == "closed" and cur.get("exit_reason"):
+        named = reason = cur["exit_reason"]
+        lesson = cur.get("lesson") or lesson
     j.close_trade(trade_id, exit_px, inc["net"], reason, lesson, gross_pnl=inc["gross"], fees=inc["fees"],
                   funding=inc["funding"] + inc["liq_fee"])
     if closed_at:
         j.update_trade(trade_id, closed_at=closed_at)
+    return named
 
 
 async def own_episode(trader, trade: dict[str, Any]) -> dict[str, Any] | None:
@@ -217,7 +227,7 @@ async def reconcile(trader, live_positions: list[dict[str, Any]] | None = None) 
                 why = await exit_reason(trader.t, tr["symbol"], m)
                 if why == CLOSED_ON_EXCHANGE:   # not Binance's own close: its last exit may be a resting target (#65)
                     why = targets.exit_label(trader.j, tr["id"], m) or why
-                done.append(await finalize(trader, tr, why, episode=m))
+                done.append(await finalize(trader, tr, why, episode=m, late=True))
             elif empty:
                 unproven.append(tr)
             elif not p or older:
