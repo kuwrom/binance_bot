@@ -55,6 +55,7 @@ About 30 flows reach them, through 25 `symbol_lock` acquisitions in 13 files.
 - `propose_entries`: `entries_place.py`, lock at :203.
 - `amend_entry`: lock at :52.
 - `cancel_entry_group`: `entries_cancel.py:93`, then `_cancel_entry` with its lock at :67.
+- `adopt_position` (`trading_adopt.py`) and `cancel_external` (`entries_cancel.py`), demo only: each under its symbol lock; neither is BREAKGLASS (gateway down: refused).
 - `halt_trading` and `flatten_all`: `killswitch_ops.py:37-77`.
 - `ladder --apply`: `ladder_apply.py:110-114`.
 - Every session's opening gate can also halt on a stale heartbeat and withdraw the entries itself (`killswitch.py:214-234`).
