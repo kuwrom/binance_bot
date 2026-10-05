@@ -78,7 +78,7 @@ def _beside(symbol: str, rows: list[dict]) -> dict:
     why = ([f"resting entries {[r['id'] for r in own]} (group {', '.join(sorted({r['group_id'] for r in own}))}) can "
             "fill into it: cancel_entry_group first, or let them rest"] if own else []) + (
            [f"external orders {[r['order_id'] for r in ext]} (not placed by shortbot) rest on it: cancel them "
-            "first (cancel-external, or on Binance)"] if ext else [])
+            "first (on Binance; on the demo desk also cancel-external)"] if ext else [])
     return {"ok": False, "resting_entries": [{k: r[k] for k in ("id", "group_id", "status")} for r in rows],
             "error": f"no market short on {symbol} beside an order that can fill into the same position (a second "
                      "trade, its PnL counted twice): " + "; ".join(why)}
