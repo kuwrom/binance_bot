@@ -325,6 +325,11 @@ class FakeCcxt(Account, Engine):
         self.sym[o["symbol"]]["price"] = o["price"]
         self._exec_limit(i, qty or o["amount"] - o["filled"])
 
+    def hand_order(self, symbol=SYM, side="sell", qty=50.0, cid="web_hand1"):
+        """A market order placed by hand in the Binance app, filled at the current price: an order id, fills and
+        income as any market order leaves them, and no journal row. A buy reduces the short. Returns the order id."""
+        return self._record_market(symbol, side, qty, reduce=side == "buy", cid=cid)
+
     def trigger_stop(self, symbol=SYM):
         """Simulate the exchange stop firing at the current price."""
         i = next((i for i in self.stops if self._algo_sym(i) == symbol), None)
