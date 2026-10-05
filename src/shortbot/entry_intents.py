@@ -49,7 +49,7 @@ HINTS = {"placing": "send in flight, or its call died: the guardian resolves it 
          "unknown": "send status unknown: it may rest on the book. Don't re-propose it; the guardian resolves it by "
                     "client id within ~3 min (adopts it if it rests, else marks it rejected).",
          "external": "NOT placed by shortbot: no plan, no stop, not managed (counted as exposure at the max stop "
-                     "distance). Cancel it on Binance, or tell the human."}
+                     "distance). Cancel it (cancel-external, demo for now; else on Binance), or tell the human."}
 
 
 def external_orders(j) -> list[dict[str, Any]]:

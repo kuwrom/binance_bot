@@ -64,7 +64,8 @@ def stubbed(tmp_path, monkeypatch, served_ids):
 def test_the_order_commands_are_declared():
     assert {c.kind for c in ORDERS} == {
         "open_short", "close_position", "move_stop", "update_plan", "widen_stop", "add_to_winner", "propose_entries",
-        "cancel_entry_group", "amend_entry", "kill_switch", "halt_trading", "flatten_all", "ladder"}
+        "cancel_entry_group", "amend_entry", "kill_switch", "halt_trading", "flatten_all", "ladder",
+        "adopt_position", "cancel_external"}
     assert all(c.write for c in ORDERS) and not commands.by_kind("probe").orders   # probes stay raw (GATEWAY §1.2)
 
 

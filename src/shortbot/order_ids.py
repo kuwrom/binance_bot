@@ -59,3 +59,13 @@ def read(j: Journal, trade_id: int) -> dict[str, dict[str, str | None]]:
         if isinstance(o, dict) and o.get("leg") in LEGS:
             out[o["leg"]][str(oid)] = o.get("cid")
     return out
+
+
+def put(j: Journal, trade_id: int, leg: str, orders: dict[str, str | None]) -> None:
+    """Journal orders already known to be the trade's ({order id: client id}), for a caller inside a journal unit: an
+    adopted position's entry orders, read from trade history (trading_adopt.py). note()'s json_set, one per order."""
+    if leg not in LEGS:
+        raise ValueError(f"unknown leg {leg!r}")
+    for oid, cid in orders.items():
+        j.db.execute(f"UPDATE trades SET fill_refs = json_set({DOC}, '$.orders.' || json_quote(?), json(?)) "
+                     "WHERE id=?", (str(oid), json.dumps({"leg": leg, "cid": cid}), trade_id))

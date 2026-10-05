@@ -11,8 +11,9 @@ exchange-side stop-market (closePosition, mark price). Safety properties:
   guardian, the MCP servers and CLI calls on this host. Every risk-adding flow first holds the account lock, from its
   portfolio checks through the send, so two sessions can't both spend the last slot (#74)
 
-This module: account, positions and the stop primitives. The flows are mixed in from trading_open.py (open_short)
-and trading_manage.py (close, move_stop, ensure_stop); the order primitives from trading_orders.py.
+This module: account, positions and the stop primitives. The flows are mixed in from trading_open.py (open_short),
+trading_manage.py (close, move_stop, ensure_stop) and trading_adopt.py (adopt: a hand-placed short); the order
+primitives from trading_orders.py.
 
 Public interface (#36 gateway step 0): other modules call only Trader's public methods, and send every exchange write
 through its primitives (prepare, place_close_stop here; the rest in trading_orders.py), never through `t` directly
@@ -36,6 +37,7 @@ from .journal import Journal
 from .risk import AccountState
 from .stops import is_protective_stop
 from .symlock import SymbolLocks, lock_dir_for
+from .trading_adopt import AdoptFlow
 from .trading_manage import ManageFlow
 from .trading_open import OpenFlow
 from .trading_orders import OrderFlow
@@ -71,7 +73,7 @@ async def default_prechecks(ex: Exchanges, symbol: str, ticker: dict) -> dict[st
     return await entry_checks(ex, symbol, ticker)
 
 
-class Trader(OpenFlow, ManageFlow, OrderFlow):
+class Trader(OpenFlow, ManageFlow, AdoptFlow, OrderFlow):
     def __init__(self, ex: Exchanges, journal: Journal, alert: Alert | None = None,
                  prechecks: Prechecks = default_prechecks, budget=default_budget):
         self.ex, self.j = ex, journal
