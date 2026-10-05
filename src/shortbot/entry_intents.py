@@ -49,7 +49,7 @@ HINTS = {"placing": "send in flight, or its call died: the guardian resolves it 
          "unknown": "send status unknown: it may rest on the book. Don't re-propose it; the guardian resolves it by "
                     "client id within ~3 min (adopts it if it rests, else marks it rejected).",
          "external": "NOT placed by shortbot: no plan, no stop, not managed (counted as exposure at the max stop "
-                     "distance). Cancel it (cancel-external, demo for now; else on Binance), or tell the human."}
+                     "distance). Cancel it (cancel-external on the demo desk, on Binance otherwise), or tell the human."}
 
 
 def external_orders(j) -> list[dict[str, Any]]:
@@ -281,6 +281,14 @@ def explained_symbols(desk) -> set[str]:
     ours = {r["symbol"] for r in desk._rows("status IN ('pending','placing','unknown','external','external_filled')"
                                             " OR (status='rejected' AND created_at >= ?)", (since,))}
     return ours | active_symbols(desk.j)
+
+
+def hand_explained(desk) -> set[str]:
+    """Symbols where a hand order the sweep journalled explains a position ('external' while it rests, 'external_filled'
+    once it filled): the one case in explained_symbols that never ends in a trip. A command that journals a hand-placed
+    position (adopt) skips the reconciliation trip for these only; a send of ours in flight or a young 'rejected' row
+    merely defers the guardian's trip."""
+    return {r["symbol"] for r in desk._rows("status IN ('external','external_filled')")}
 
 
 async def _external(desk, o: dict, oid: str, cid: str | None, sym: str) -> dict[str, Any]:

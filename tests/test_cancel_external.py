@@ -5,6 +5,8 @@ conditional orders (stops) are never touched through it."""
 import dataclasses
 
 from shortbot import entry_intents
+from shortbot import killswitch as ks
+from shortbot.killswitch import ACTIVE, REDUCING
 from tests.fakes import SYM
 from tests.test_entries import prop
 from tests.test_entries_cancel import fail_cancel
@@ -71,7 +73,40 @@ async def test_the_desks_own_orders_its_targets_and_stops_are_never_cancelled_th
     stop_id = next(iter(fake.prearms))                             # a conditional order: the entry's pre-armed stop
     r = await d.cancel_external(SYM, stop_id, WHY)
     assert not r["ok"] and "no regular order" in r["error"] and stop_id in fake.prearms
-    assert not (await d.cancel_external(SYM, mine["order_id"], " "))["ok"]   # no reason, no cancel
+
+
+async def test_no_reason_no_cancel_and_an_order_already_off_the_book_is_not_journalled():
+    d, t, fake = desk()
+    o = await hand_limit(fake)
+    r = await d.cancel_external(SYM, o["id"], " ")
+    assert not r["ok"] and "a reason" in r["error"] and open_limits(fake) == [o["id"]]
+    await fake.cancel_order(o["id"], SYM)                         # the owner pulled it; the sweep never saw it
+    r = await d.cancel_external(SYM, o["id"], WHY)
+    assert not r["ok"] and "not resting (canceled)" in r["error"] and d._rows("group_id='external'") == []
+
+
+async def test_a_part_fill_is_its_own_outcome_and_a_swept_one_explains_its_position_as_today():
+    d, t, fake = desk()
+    o = await hand_limit(fake)
+    await entry_intents.reconcile(d)                               # the sweep recorded it resting
+    (x,) = d._rows("status='external'")
+    fake.fill_limit(o["id"], qty=20)
+    r = await d.cancel_external(SYM, o["id"], WHY)
+    assert r["ok"] and r["outcome"] == "partly_filled" and r["status"] == "external_filled", r
+    assert open_limits(fake) == [] and "had filled 20 of 50; the rest is cancelled" in row(d, x["id"])["reason"]
+    assert "had filled 20 of 50" in alerts(t, "external_cancelled")[0]["message"]
+    assert ks.read(t.j)["state"] == ACTIVE and not alerts(t, "untracked_position")   # explained by a swept order
+
+
+async def test_fills_of_an_order_the_sweep_never_recorded_trip_as_an_untracked_position_would():
+    d, t, fake = desk()
+    o = await hand_limit(fake)
+    fake.fill_limit(o["id"], qty=20)                               # partly filled before any sweep saw it
+    r = await d.cancel_external(SYM, o["id"], WHY)
+    st = ks.read(t.j)
+    assert r["ok"] and r["outcome"] == "partly_filled", r
+    assert st["state"] == REDUCING and st["cause"] == "reconciliation" and st["by"] == "cancel_external"
+    assert len(alerts(t, "untracked_position")) == 1 and "20" in alerts(t, "untracked_position")[0]["message"]
 
 
 async def test_cancel_external_is_refused_on_the_live_desk_for_now():

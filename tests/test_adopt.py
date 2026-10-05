@@ -39,12 +39,14 @@ async def adopt(t, stop=1.08, setup="exp_manual", thesis=WHY, **kw):
 
 async def test_a_hand_short_is_journalled_by_its_entry_orders_with_the_stop_on_first():
     t, fake = setup()
+    fake.advance(-3600)                                           # the owner opened it an hour before the adoption
     oid = fake.hand_order(qty=50)
     fill = fake.fills[-1]
-    fake.advance(600)
+    fake.advance(3600)
     r = await adopt(t, plan={"targets": [{"price": 0.9, "fraction": 0.5}]})
     assert r["ok"] and r["contracts"] == 50 and r["stop"] == 1.08 and r["entry_orders"] == [oid], r
     tr = t.j.get_trade(r["trade_id"])
+    assert abs(datetime.fromisoformat(tr["opened_at"]) - datetime.now(UTC)).total_seconds() > 3000
     assert (tr["status"], tr["entry_price"], tr["amount"], tr["stop_price"], tr["initial_stop"]) == \
         ("open", 1.0, 50, 1.08, 1.08)
     assert tr["opened_at"] == iso(fill["timestamp"])              # its first entry fill, not the adoption
@@ -67,11 +69,19 @@ async def test_what_can_not_be_adopted_is_refused_with_nothing_journalled_and_no
         r = await adopt(t, **kw)
         assert not r["ok"] and text in str(r), (kw, r)
     fake.sym[SYM]["margin"] = "CROSSED"
-    assert "cross margin" in (await adopt(t))["error"]
+    r = await adopt(t)
+    assert "cross margin" in r["error"] and "cross_override" in r["error"]
     fake.sym[SYM]["margin"] = "ISOLATED"
     fake.stops["s1"] = 1.05                                       # the owner's own stop, tighter than the one asked
     assert "stops only tighten" in (await adopt(t))["error"] and list(fake.stops.values()) == [1.05]
+    fake.stops["s1"] = 0.99                                       # a stop already in profit: no risk to measure R by
+    for stop in (1.08, 0.98):                                     # one message, whatever stop is asked
+        r = await adopt(t, stop=stop)
+        assert "can't be adopted" in r["error"] and "at or below the entry" in r["error"] and "plan_errors" not in r
     fake.stops.clear()
+    fake.price = 1.06                                             # the market is already through the stop asked
+    assert "must be above mark" in (await adopt(t, stop=1.05))["error"]
+    fake.price = 1.0
     fake.sym[SYM]["lev"] = 2                                      # liquidation far away: the desk's own limit decides
     assert "max stop distance" in (await adopt(t, stop=1.3))["error"]
     assert t.j.trades() == [] and fake.stops == {} and ks.read(t.j)["state"] == ACTIVE
@@ -123,12 +133,65 @@ async def test_a_part_bought_back_by_hand_before_the_adoption_is_in_the_trades_s
     fake.hand_order(side="buy", qty=20, cid="web_hand2")
     fake.advance(60)
     r = await adopt(t)
-    assert r["ok"] and r["contracts"] == 30 and r["amount"] == 50, r   # original size: targets and R count from it
+    row = t.j.get_trade(r["trade_id"])
+    assert r["ok"] and r["contracts"] == 30 and (row["amount"], row["notional"]) == (50, 50.0), r   # its original size
     fake.advance(60)
     fake.price = 1.08                                             # stopped out
     (res,) = await reconcile.reconcile(t)
     tr = t.j.get_trade(r["trade_id"])
     assert res["trade_id"] == tr["id"] and tr["status"] == "closed" and tr["pnl"] == pytest.approx(net(fake))
+
+
+async def test_the_original_size_is_the_positions_peak_not_everything_ever_sold():
+    t, fake = setup()
+    fake.hand_order(qty=50)
+    fake.hand_order(side="buy", qty=20, cid="web_hand2")
+    fake.hand_order(qty=20, cid="web_hand3")                      # 50 -> 30 -> 50: 70 sold, never more than 50 held
+    r = await adopt(t)
+    row = t.j.get_trade(r["trade_id"])
+    assert r["ok"] and r["contracts"] == 50 and row["amount"] == 50 and len(r["entry_orders"]) == 2, r
+
+
+async def test_a_position_the_history_prices_differently_is_refused():
+    t, fake = setup()
+    fake.hand_order(qty=50)
+    fake.entry = 1.03                                             # positionRisk disagrees with the fills read
+    r = await adopt(t)
+    assert not r["ok"] and "rebuilds an entry price of 1" in r["error"] and t.j.trades() == [] and fake.stops == {}
+
+
+async def test_a_hand_limit_the_sweep_has_not_journalled_yet_blocks_the_adoption():
+    t, fake = setup()
+    fake.hand_order(qty=50)
+    o = await fake.create_order(SYM, "limit", "sell", 30, 1.04, {"timeInForce": "GTC"})   # no entries row yet
+    r = await adopt(t)
+    assert not r["ok"] and r["external_orders"] == [o["id"]] and "cancel-external" in r["error"]
+    assert t.j.trades() == [] and fake.stops == {} and ks.read(t.j)["state"] == ACTIVE
+    await fake.cancel_order(o["id"], SYM)
+    assert (await adopt(t))["ok"]
+
+
+async def test_the_plans_automatic_targets_rest_from_the_adoption_on():
+    t, fake = setup()
+    fake.hand_order(qty=50)
+    plan = {"targets": [{"price": 0.95, "fraction": 0.5}, {"price": 0.9, "fraction": 0.5}], "auto": {"targets": True}}
+    r = await adopt(t, plan=plan)
+    resting = sorted((o["price"], o["amount"]) for o in fake.limits.values() if o["status"] == "open")
+    assert r["ok"] and r["resting_targets"] == {"cancelled": 0, "placed": 2} and resting == [(0.9, 25), (0.95, 25)], r
+    assert all(o["cid"].startswith(f"sb-t{r['trade_id']}-") and o["reduce"] for o in fake.limits.values())
+
+
+async def test_a_cross_margin_position_is_adopted_only_on_a_recorded_override():
+    t, fake = setup()
+    fake.hand_order(qty=50)
+    fake.sym[SYM]["margin"] = "CROSSED"
+    assert not (await adopt(t, cross_override="  "))["ok"] and t.j.trades() == []
+    r = await adopt(t, cross_override="the owner's GTC short: wants its plan and R tracked")
+    tr = t.j.get_trade(r["trade_id"])
+    assert r["ok"] and tr["entry_features"]["adopted"]["margin_mode"] == "cross", r
+    assert tr["entry_features"]["adopted"]["cross_override"].startswith("the owner's GTC short")
+    (told,) = [a for a in t.j.alerts() if a["kind"] == "position_adopted"]
+    assert "CROSS margin" in told["message"] and "the owner's GTC short" in told["message"]
 
 
 async def test_an_adopted_trade_closes_by_its_ids_beside_an_earlier_desk_trade_on_the_symbol(monkeypatch):
@@ -172,6 +235,20 @@ async def test_adopting_inside_the_guardians_grace_still_trips_reducing_as_the_g
     r = await adopt(t)
     st = ks.read(t.j)
     assert r["ok"] and r["kill_switch"] == REDUCING and st["cause"] == "reconciliation" and st["by"] == "adopt", r
+    assert [a["kind"] for a in t.j.alerts()].count("untracked_position") == 1   # the go-live incident count reads it
+
+
+async def test_a_young_rejected_send_on_the_symbol_only_defers_the_guardians_trip_so_adopt_still_trips():
+    t, fake = setup()
+    fake.hand_order(qty=50)
+    from shortbot import entry_intents
+    from shortbot.entries import EntryDesk
+    d = EntryDesk(t)
+    t.j._insert("INSERT INTO entries (group_id, symbol, status, created_at, expires_ms) VALUES ('g', ?, 'rejected', ?,"
+                " 0)", (SYM, now_iso()))                           # a proposal of ours refused a minute ago
+    assert SYM in entry_intents.explained_symbols(d) and SYM not in entry_intents.hand_explained(d)
+    r = await adopt(t)
+    assert r["ok"] and ks.read(t.j)["state"] == REDUCING and ks.read(t.j)["cause"] == "reconciliation", r
 
 
 async def test_a_position_a_swept_hand_limit_explains_is_adopted_without_a_trip_as_today():
@@ -182,6 +259,7 @@ async def test_a_position_a_swept_hand_limit_explains_is_adopted_without_a_trip_
     t.j._insert("INSERT INTO entries (group_id, symbol, status, created_at, expires_ms) VALUES ('external', ?, "
                 "'external_filled', ?, 0)", (SYM, now_iso()))     # the sweep saw the order rest, then fill
     assert (await adopt(t))["ok"] and ks.read(t.j)["state"] == ACTIVE
+    assert "untracked_position" not in [a["kind"] for a in t.j.alerts()]
 
 
 async def test_a_human_clear_holds_once_the_position_is_adopted_and_is_re_tripped_while_it_is_not():
@@ -208,9 +286,13 @@ async def test_a_human_clear_holds_once_the_position_is_adopted_and_is_re_trippe
     assert ks.read(g.j)["state"] == ACTIVE and SYM not in g.untracked_since
 
 
-async def test_adopt_is_refused_on_the_live_desk_for_now():
+async def test_adopt_is_refused_off_the_demo_desk_for_now(monkeypatch):
     t, fake = setup()
     fake.hand_order(qty=50)
+    monkeypatch.setattr(fake, "urls", {"api": {"fapiPrivate": "https://fapi.binance.com/fapi/v1"}}, raising=False)
+    r = await adopt(t)                                            # demo mode, but the client is not on the demo host
+    assert not r["ok"] and "fapi.binance.com" in r["error"] and t.j.trades() == [] and fake.stops == {}
+    monkeypatch.undo()
     t.ex.settings = dataclasses.replace(t.ex.settings, mode="live")
     r = await adopt(t)
     assert not r["ok"] and "demo desk only" in r["error"] and t.j.trades() == [] and fake.stops == {}

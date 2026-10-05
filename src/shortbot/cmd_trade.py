@@ -147,16 +147,18 @@ async def move_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]
          args=(Arg("symbol"), Arg("stop_price", "--stop", "tighten only: at or below the stop resting now"),
                Arg("setup", "--setup"), Arg("thesis", "--thesis"),
                Arg("plan", "--plan", "JSON plan fields over the setup's defaults", metavar="JSON", convert=json.loads),
-               Arg("lookback_days", "--lookback-days", "how far back its entry fills are looked for")))
+               Arg("lookback_days", "--lookback-days", "how far back its entry fills are looked for"),
+               Arg("cross_override", "--cross-override", "reason to adopt a CROSS-margin position anyway")))
 async def adopt_position(symbol: str, stop_price: float, setup: str, thesis: str, plan: dict[str, Any] | None = None,
-                         lookback_days: float = 7.0) -> dict[str, Any]:
+                         lookback_days: float = 7.0, cross_override: str | None = None) -> dict[str, Any]:
     """Adopt a short opened outside shortbot (in the Binance app) into the journal: setup, thesis, stop and plan, so
     its targets, breakeven, time stop, R and exit lesson work like a desk trade's. The stop goes on first (tighten
     only); the entry fills are rebuilt from trade history and refused if they don't explain the position. Refused for
-    a long, cross margin, a symbol with resting orders (cancel them first) or an existing journal trade. Works while
-    the kill switch is REDUCING or HALTED and never clears it: an untracked position still trips REDUCING, and only the
-    human clears that. Demo desk only for now."""
-    return await get_app().trader.adopt(symbol, stop_price, setup, thesis, plan, lookback_days)
+    a long, an existing journal trade, a stop resting at or below the entry, a symbol with any resting order that
+    could fill into it (the desk's: cancel_entry_group; not the desk's: cancel_external), and cross margin unless
+    cross_override gives a reason (recorded and alerted). Works while the kill switch is REDUCING or HALTED and never
+    clears it: an untracked position still trips REDUCING, and only the human clears that. Demo desk only for now."""
+    return await get_app().trader.adopt(symbol, stop_price, setup, thesis, plan, lookback_days, cross_override)
 
 
 @command(cli="update-plan", write=True, orders=True, weight=PROTECTIVE,

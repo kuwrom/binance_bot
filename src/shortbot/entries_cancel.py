@@ -183,11 +183,14 @@ class EntryCancel:
     async def cancel_external(self, symbol: str, order_id: str, reason: str) -> dict[str, Any]:
         """Cancel ONE resting order the desk did not place (a hand limit the owner forgot), by its exchange order id.
         Never the desk's own order or target (cancel-group, the plan) and never a conditional order (a stop someone
-        set is protection: only regular orders are looked up). Believes only what filled (withdraw): an order that
-        filled first stays 'external_filled' and explains its position. Demo first (trading_adopt.demo_first)."""
-        from .trading_adopt import demo_first  # lazy: the trading mixins import the entries modules' helpers
+        set is protection: only regular orders are looked up). Believes only what filled (withdraw); outcome:
+        cancelled (nothing filled), partly_filled (the rest is off the book) or filled_first (it filled whole before
+        the cancel landed). An order with fills stays 'external_filled' and explains its position, as after a sweep;
+        one the sweep had NOT recorded gets no such pass: its untracked position trips REDUCING here, with the
+        guardian's alert (trading_adopt.trip_untracked). Demo first (trading_adopt.demo_first)."""
+        from .trading_adopt import demo_first, trip_untracked  # lazy: the trading mixins import the entries modules
         symbol, oid, reason = to_symbol(symbol), str(order_id).strip(), (reason or "").strip()
-        if why := demo_first(self.tr.ex.settings, "cancel-external"):
+        if why := demo_first(self.tr.ex, "cancel-external"):
             return {"ok": False, "error": why}
         if not reason or not oid:
             return {"ok": False, "error": "cancel-external needs the order id and a reason (it may be the owner's)"}
@@ -204,11 +207,11 @@ class EntryCancel:
             except ccxt.OrderNotFound:
                 return {"ok": False, "error": f"no regular order {oid} on {symbol} (a conditional order, a stop, is "
                         "never cancelled here)"}
-            cid = o.get("clientOrderId")
+            cid, swept = o.get("clientOrderId"), bool(rows)
             if clientid.ours(cid) or targets.is_target(cid):
                 return {"ok": False, "error": f"order {oid} ({cid}) carries a shortbot client id: it is the desk's, "
                         "not an external order"}
-            if not rows:   # not swept yet: journalled (and alerted) as the sweep would, then withdrawn
+            if not swept:   # journalled (and alerted) as the sweep would, then withdrawn
                 if o.get("status") != "open":
                     return {"ok": False, "error": f"order {oid} is not resting ({o.get('status')})"}
                 await entry_intents._external(self, {"side": str(o.get("side") or "").upper(), "price": o.get("price"),
@@ -221,20 +224,40 @@ class EntryCancel:
             if got == "unknown":
                 return {"ok": False, "order_id": oid, "error": f"cancel of external order {oid} not confirmed: it may "
                         "still rest. Call again"}
+            outcome, what = await self._external_outcome(symbol, oid, got)
             status = "external_gone" if got == "unfilled" else "external_filled"
-            await self._settle(e["id"], "external", status=status,
-                               reason=f"{e['reason']}; cancelled by the desk: {reason}" if got == "unfilled" else
-                               f"{e['reason']}; filled before the desk's cancel landed ({reason})")
+            await self._settle(e["id"], "external", status=status, reason=f"{e['reason']}; {what}: {reason}")
             self.j.log_decision("cancel_external", reason, symbol, snapshot={
                 "order_id": oid, "client_id": cid, "side": o.get("side"), "price": o.get("price"),
-                "amount": o.get("amount"), "filled": o.get("filled"), "outcome": got})
+                "amount": o.get("amount"), "outcome": outcome, "swept": swept})
+            if got == "filled" and not swept and not self.j.active_trade(symbol):
+                try:   # the position its fill made has no journal row and the guardian will now find it "explained"
+                    held = await self.tr.position(symbol)
+                    size = float(held["contracts"]) if held else 0.0
+                except Exception:  # noqa: BLE001 - unreadable: tripped as if it were there
+                    size = float(o.get("amount") or 0)
+                if size:
+                    await trip_untracked(self.tr, symbol, size, "cancel_external", f"hand order {oid} had filled "
+                                         "before the sweep recorded it. Close it, or journal it (adopt)")
             await self.tr.alert("external_cancelled", f"order {oid} ({o.get('side')} {o.get('amount')} @ "
-                                f"{o.get('price')}, not placed by shortbot) " + (
-                                    f"cancelled by the desk: {reason}" if got == "unfilled" else
-                                    f"filled before the cancel landed ({reason}): its position has the guardian's "
-                                    "stop and no plan; adopt it or close it"), symbol, True)
-            return {"ok": True, "symbol": symbol, "order_id": oid, "status": status,
-                    "outcome": "cancelled" if got == "unfilled" else "filled_first"}
+                                f"{o.get('price')}, not placed by shortbot) {what} ({reason})" + (
+                                    "" if got == "unfilled" else ": the position it made has the guardian's stop and "
+                                    "no plan; adopt it or close it"), symbol, True)
+            return {"ok": True, "symbol": symbol, "order_id": oid, "status": status, "outcome": outcome}
+
+    async def _external_outcome(self, symbol: str, oid: str, got: str) -> tuple[str, str]:
+        """(outcome, what happened) of a withdrawn external order: read back once when it has fills, to tell a part
+        fill whose rest is off the book from an order that filled whole before the cancel landed."""
+        if got == "unfilled":
+            return "cancelled", "cancelled by the desk"
+        try:
+            o = await self.tr.t.fetch_order(oid, symbol)
+        except Exception:  # noqa: BLE001 - it has fills either way; how many stays unread
+            return "filled_first", "has fills (how much is unread); nothing of it rests"
+        filled, amount = float(o.get("filled") or 0), float(o.get("amount") or 0)
+        if o.get("status") in clientid.DEAD and filled < amount:
+            return "partly_filled", f"had filled {filled:g} of {amount:g}; the rest is cancelled by the desk"
+        return "filled_first", f"filled whole ({filled:g}) before the desk's cancel landed"
 
     def _filled_sibling(self, e: dict[str, Any]) -> int | None:
         """Another order of this OCO group that already filled ('error' = a fill was reported; pending with a trade =
