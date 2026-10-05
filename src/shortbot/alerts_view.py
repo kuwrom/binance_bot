@@ -25,6 +25,7 @@ URGENT_KINDS = (
     "break_watch",   # an open short's break score reached 2 of #81's checks (guardian_coins.py); alerts never exit
 )
 URGENT_ON_BOOK = ("binance_delisting",)   # urgent when it names a coin on our book (#23: the alert carries its symbol)
+RECOVERED, FAILED = "guardian_recovered:", ("guardian_failing:", "guardian_error:")   # + the guardian job's name
 URGENT_CAP = 8      # the brief must fit the SessionStart hook (cli_brief.BRIEF_MAX_CHARS); the rest: journal
 ROUTINE_SHOWN = 5
 
@@ -83,11 +84,12 @@ def brief_lines(j) -> list[str]:
     n_urgent = sum(r["n"] for r in counts if r["u"])
     out = [f"### alerts: {total} unacknowledged since #{after} ({n_urgent} urgent); start_session acknowledges them"]
     if n_urgent:
-        urgent = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND {MINE} AND urgent(kind, symbol) ORDER BY id DESC "
-                          "LIMIT ?", (after, j.mode, URGENT_CAP))
-        out += [_line(a, "🚨 ") for a in urgent]
+        urgent, over = _urgent_first_open(j, after)
+        out += [_line(a, "🚨 (recovered since) " if a["recovered"] else "🚨 ") for a in urgent]
         if n_urgent > URGENT_CAP:
-            out.append(f"- 🚨 {n_urgent - URGENT_CAP} more urgent: see the journal tool")
+            out.append(f"- 🚨 {n_urgent - URGENT_CAP} more urgent"
+                       + (f" ({over} of them guardian errors that recovered)" if over else "")
+                       + ": see the journal tool")
     routine = [r for r in counts if not r["u"]]
     if routine:
         n = sum(r["n"] for r in routine)
@@ -99,6 +101,24 @@ def brief_lines(j) -> list[str]:
                                           tuple(g["id"] for g in groups))}
         out += [_line(rows[g["id"]], n=g["n"]) for g in groups]   # newest per (kind, symbol): a flood takes one line
     return out
+
+
+def _urgent_first_open(j, after: int) -> tuple[list[dict[str, Any]], int]:
+    """(the URGENT_CAP urgent alerts to list, how many recovered ones the cap left out). A guardian job's
+    guardian_failing / guardian_error with a later guardian_recovered for the same job is over: it stays urgent and
+    counted, but is listed after the alerts still open, so a timeout that healed never pushes a live one past the cap.
+    Newest first within each part."""
+    healed = {r["job"]: r["id"] for r in _rows(
+        j, f"SELECT substr(kind, {len(RECOVERED) + 1}) AS job, MAX(id) AS id FROM alerts WHERE id > ? AND {MINE} AND "
+           "kind LIKE ? GROUP BY job", (after, j.mode, RECOVERED + "%"))}
+    ids = _rows(j, f"SELECT id, kind FROM alerts WHERE id > ? AND {MINE} AND urgent(kind, symbol) ORDER BY id DESC",
+                (after, j.mode))
+    done = {a["id"] for a in ids if a["kind"].startswith(FAILED) and healed.get(a["kind"].split(":", 1)[1], 0) > a["id"]}
+    order = [a["id"] for a in ids if a["id"] not in done] + [a["id"] for a in ids if a["id"] in done]
+    show = order[:URGENT_CAP]
+    rows = {r["id"]: r for r in _rows(j, f"SELECT * FROM alerts WHERE id IN ({','.join('?' * len(show))})",
+                                      tuple(show))}
+    return [{**rows[i], "recovered": i in done} for i in show], len(done - set(show))
 
 
 def acknowledge(j) -> dict[str, Any]:

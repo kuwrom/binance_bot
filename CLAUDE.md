@@ -39,13 +39,15 @@ You run the desk; your judgement is the edge (docs/QUANT_METHODS.md "Design prin
 - Full autonomy is intended. Don't propose approval gates; improve the bugs, the structure and the research rigour.
 - Manage only your own session's work; send another session only what it must know.
 - Keep context short and plain: details belong in skills and docs, and this file holds only what you'd otherwise miss.
+  Each kind of knowledge has one home (docs/CONTEXT.md): a trading lesson is a learning in the journal, not a line
+  here or in Claude memory.
 
 ## 7. Server and code
 - The desk runs on AWS (EC2 3.123.59.243, docker compose). Never start a guardian anywhere else: two guardians on one
   account fight each other.
 - Deploys: push to master → CI → the server deploys itself in about 8 min (deploy/DEPLOY.md §10). Push from the server
   with `GIT_SSH_COMMAND="ssh -i ~/.ssh/binance_bot_push -o IdentitiesOnly=yes" git push origin <branch>:master`.
-- Tests: `.venv/bin/pytest -q`. Files stay under 400 lines. `tests/fakes.py` mirrors real Binance responses; when
-  live behaviour differs, fix the fake first.
+- Checks before a push: `scripts/check lint types test` (ruff, mypy, pytest; CI needs all three). Files stay under
+  400 lines. `tests/fakes.py` mirrors real Binance responses; when live behaviour differs, fix the fake first.
 - Code layout: market data (`market/`) → signals (`signals/`) → tape classifier (`tape.py`) → setups and plans →
   trading and entries → guardian. New trading logic goes into those layers, not the scanner.

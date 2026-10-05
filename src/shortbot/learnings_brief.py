@@ -3,11 +3,13 @@ holds or watches right now, and what to re-check. Everything else is searched on
 brief stays bounded however many learnings accumulate (learnings #82/#83: ACE, ExpeL, the Claude Code memory docs).
 
 - rulebook: at most RULEBOOK_MAX settled learnings (learnings_view.settled: adopted, or supported on a real sample),
-  best first (learnings_view.rank), each as its one-line rule.
+  best first (learnings_view.rank), each as its one-line rule. One that docs/DOCTRINE.md already states (the file is
+  loaded with CLAUDE.md in every session) is listed by id only: one statement of a rule per session, not two.
 - relevant now: at most RELEVANT_MAX current learnings the rulebook doesn't show, taken in this order from the ids the
   open trades' plans cite, then searches for the open trades (base symbol + setup), the resting entries and the top
   CANDIDATES_N tradable candidates of the last CANDIDATE_HOURS (one scan batch is only 2-7 coins).
-- a footer with the number of current learnings neither part shows, then learnings_view.brief_lines (re-check).
+- a footer with the number of current learnings neither part shows, then learnings_view.brief_lines (re-check),
+  which ends with doctrine_check's line: the learnings DOCTRINE.md or a skill cites that aren't settled.
 Our own text only, one line each (flat); a learning resting on third-party text is marked, never quoted."""
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import json
 import time
 from typing import Any
 
+from . import doctrine_check
 from . import learnings_view as lv
 from .untrusted import flat
 
@@ -32,18 +35,34 @@ def section(j, orders: list[dict[str, Any]]) -> list[str]:
     current = [r for r in rows if not r.get("superseded_by") and "expired" not in r["audit"]["flags"]]
     book = lv.rank([r for r in current if lv.settled(r)])[:RULEBOOK_MAX]
     now = _relevant(j, orders, {r["id"]: r for r in current}, {r["id"] for r in book})
+    cites = doctrine_check.cited()
+    stated = sorted(r["id"] for r in book if cites.get(r["id"]) == doctrine_check.DOCTRINE.name)
     lines = []
     if current:
         lines.append("### rulebook (settled: adopted, or supported on a real sample; cite the ids an entry relies on "
                      "in plan.uses_learnings)")
-        lines += [_line(r) for r in book] or ["- none settled yet: the rest is searched (`learnings` tool)"]
+        lines += [_line(r) for r in book if r["id"] not in stated]
+        if stated:
+            lines.append("- settled and stated in docs/DOCTRINE.md (loaded above; `learnings --id N` for the "
+                         "evidence): " + " ".join(f"#{i}" for i in stated))
+        if not book:
+            lines.append("- none settled yet: the rest is searched (`learnings` tool)")
     if now:
         lines.append(f"### relevant now (searched from open trades, resting entries and the last {CANDIDATE_HOURS}h "
                      "of scans)")
         lines += [_line(r, "" if lv.settled(r) else " (not settled)") for r in now]
     if more := len(current) - len(book) - len(now):
         lines.append(f"- {more} more current learnings: `learnings` tool (a query, --setup or --id)")
-    return lines + lv.brief_lines(rows)
+    return lines + _recheck(j, rows, cites)
+
+
+def _recheck(j, rows: list[dict[str, Any]], cites: dict[int, str]) -> list[str]:
+    """learnings_view.brief_lines plus the citation check, which also needs the rejected learnings."""
+    out = lv.brief_lines(rows)
+    rejected = lv.annotate(j, j.learnings(active_only=False, status="rejected")) if cites else []
+    if line := doctrine_check.brief_line(rows + rejected, cites):
+        out = (out or [f"{lv.SECTION}"]) + [line]
+    return out
 
 
 def _line(r: dict[str, Any], mark: str = "") -> str:

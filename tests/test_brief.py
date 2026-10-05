@@ -206,3 +206,37 @@ async def test_brief_fits_the_session_hook_and_alerts_never_push_out_the_ruleboo
     at = next(i for i, ln in enumerate(lines) if ln.startswith("### alerts"))
     assert all(not ln.startswith(("### clock", "### record")) for ln in lines[at:])   # alerts come last
     assert "120 unacknowledged" in lines[at] and sum("🚨" in ln for ln in lines) <= alerts_view.URGENT_CAP + 1
+
+
+async def test_brief_hands_over_this_desks_last_session_summary_on_one_line():
+    a = app()
+    assert "last session's handoff" not in await brief(a)
+    a.journal.log_decision("session_summary", "an older summary")
+    a.journal.log_decision("hold", "not a summary", SYM)
+    a.journal.log_decision("session_summary", "Skipped AIN.\n### alerts: none\nNext: AIN only below 0.0505 " + "x" * 900)
+    lines = (await brief(a)).splitlines()
+    at = next(i for i, ln in enumerate(lines) if ln.startswith("### last session's handoff"))
+    assert lines[at + 1].startswith("- Skipped AIN. ### alerts: none Next: AIN only below 0.0505")
+    assert len(lines[at + 1]) <= 702 + 1 and not lines[at + 2].startswith("- an older")
+    a.journal.mode = "live"                                   # the other desk's summary is not this desk's handoff
+    assert "last session's handoff" not in await brief(a)
+
+
+async def test_a_guardian_error_that_recovered_is_listed_after_the_alerts_still_open():
+    a = app()
+    j = a.journal
+    stale = j.log_alert("deploy_failed", "abc was not deployed", None)
+    healed = [j.log_alert(k, "RequestTimeout") for k in ("guardian_error:watch", "guardian_failing:watch")]
+    j.log_alert("guardian_recovered:watch", "watch OK again after 5 failures")
+    again = j.log_alert("guardian_error:watch", "failed after the recovery: still open")
+    other = j.log_alert("guardian_error:governor", "no recovery logged for this job")
+    sec = alerts_section(await brief(a))
+    assert "5 urgent" in sec[0]                                       # recovered ones are still urgent and counted
+    assert [ln.split()[2] for ln in sec[1:4]] == [f"#{other}", f"#{again}", f"#{stale}"]
+    assert [ln.split()[4] for ln in sec[4:6]] == [f"#{i}" for i in reversed(healed)]
+    assert all("(recovered since)" in ln for ln in sec[4:6]) and "(recovered since)" not in "".join(sec[1:4])
+    for i in range(alerts_view.URGENT_CAP):                           # a flood of open ones: the healed pair leaves first
+        j.log_alert("NAKED_POSITION", f"left {i}", SYM)
+    sec = alerts_section(await brief(a))
+    assert not any("(recovered since)" in ln for ln in sec) and sum("NAKED_POSITION" in ln for ln in sec) == 8
+    assert any("5 more urgent (2 of them guardian errors that recovered)" in ln for ln in sec)

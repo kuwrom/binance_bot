@@ -102,8 +102,19 @@ async def read_coin(ex, journal, symbol: str) -> dict[str, Any]:
         "stops": snap.get("suggested_stops"),
         "evidence": layered_evidence(rows, snap["symbol"], arch),
         "registry": (reg := registry_view(journal, stage, game, labels, snap.get("setups") or [], snap["symbol"])),
+        "past_trades": _past(journal, snap["symbol"], snap.get("setups") or []),
     } | {"verdict": gate_by_registry(playbook(stage, game, labels, snap.get("vetoes") or []), stage, game,
                                      snap.get("setups") or [], reg)}
+
+
+def _past(journal, symbol: str, setups: list[str]) -> dict[str, Any]:
+    """Our own closed trades on this coin and setup, with their exit lessons (past_trades.py); an aid, never a
+    reason for a read to fail."""
+    from . import past_trades
+    try:
+        return past_trades.for_coin(journal, symbol, setups)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def gate_by_registry(verdict: dict[str, Any], stage: str, game: str, setups: list[str],

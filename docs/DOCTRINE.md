@@ -21,7 +21,7 @@ Loaded in every session. It holds the rules our data supports; the numbers in br
 ## How to enter
 - **When the signal is confirmed, get in.** Sell at the market, or put a limit at the level within about 1% of the
   price. Limits within 1% filled 9 of 11 times; limits 2.5% or more away filled 1 of 27, and the move happened
-  without us.
+  without us (85).
 - Never wait for a bounce in a falling coin with a resting sell above the price: those fill only when the drop fails (20).
 - Don't chase, and don't re-enter after a stop-out.
 - **Squeeze warning signs**: price and open interest rising together, or open interest falling into your short. They
@@ -36,7 +36,7 @@ Loaded in every session. It holds the rules our data supports; the numbers in br
 - **Move the stop to breakeven** once the trade is up by its initial risk. No automatic trailing on fades (20).
 - **Let the guardian do its automatic actions** (targets, breakeven, time stop). Repeating one by hand races it and
   doubles the close.
-- **Exit early when the written exit conditions hit.** Nothing checks them while no session watches, so keep watching (63).
+- **Exit early when the written exit conditions hit.** Nothing checks them while no session watches, so keep watching (81).
 
 ## How big
 - **Risk per trade** = equity x 1% x market factor (0.75 when cautious, 0.5 when hostile), cut further by the loss

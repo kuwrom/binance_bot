@@ -90,6 +90,15 @@ def no_network(request):
 
 
 @pytest.fixture(autouse=True)
+def no_cited_files(request, tmp_path, monkeypatch):
+    """A brief built in a test checks no citations: the repo's DOCTRINE.md and skills cite the desk's learning ids,
+    which mean nothing in a test journal. test_doctrine_check.py reads the real files and its own."""
+    if "test_doctrine_check" not in request.node.nodeid:
+        monkeypatch.setattr("shortbot.doctrine_check.DOCTRINE", tmp_path / "no-doctrine.md")
+        monkeypatch.setattr("shortbot.doctrine_check.SKILLS", tmp_path / "no-skills")
+
+
+@pytest.fixture(autouse=True)
 def no_real_sleep(monkeypatch):
     async def instant(_s):
         return None

@@ -19,13 +19,14 @@ from datetime import datetime
 from . import alerts_view, desk_limits, gateway_health, killswitch, procs, setup_ladder_view
 from .entries import EntryDesk
 from .journal_writer import connect
-from .untrusted import clean
+from .untrusted import clean, flat
 
 BRIEF_TIMEOUT_S = 20
 GOLIVE_TIMEOUT_S: float = BRIEF_TIMEOUT_S   # the go-live line's bound, as every other line's
 # Claude Code shows a SessionStart hook's output inline only up to 10,000 characters; past that the session sees a
 # 2 KB preview, which cut the rulebook off (2026-10-05). The alerts go last and are trimmed first.
 BRIEF_MAX_CHARS = 9000
+HANDOFF_MAX_CHARS = 700   # the last session's summary in the brief
 BACKUP_MAX_AGE_H = 36
 
 
@@ -81,6 +82,7 @@ async def brief(app) -> str:
         lines.append(f"### entry orders on the book ({len(orders)})")
         lines += [f"- #{e['id']} {e['symbol']} {e['status']}: {e['amount']} @ {e['limit_price']}, stop "
                   f"{e['stop_price'] or 'NONE'}" + (f" ⚠️ {e['hint']}" if e.get("hint") else "") for e in orders]
+    lines += handoff_lines(j)
     try:   # focus coins (coin_memory.py): state, read age and bias, events; never third-party text
         from .coin_memory import brief_lines as coin_lines
         lines += coin_lines(j)
@@ -107,6 +109,20 @@ async def brief(app) -> str:
     except Exception as e:  # noqa: BLE001
         alerts = [f"### ⚠️ could not load alerts: {type(e).__name__}: {e}"]
     return fit(lines, alerts)
+
+
+def handoff_lines(j) -> list[str]:
+    """What this desk's last session left for the next one: its latest session_summary decision (what it did, what
+    to check next), our own text on one line. [] when none was logged."""
+    try:
+        row = j.db.execute("SELECT ts, reasoning FROM decisions WHERE action='session_summary' AND"
+                           " COALESCE(mode, 'demo')=? ORDER BY id DESC LIMIT 1", (j.mode,)).fetchone()
+    except sqlite3.Error as e:
+        return [f"- ⚠️ could not load the last session summary: {type(e).__name__}: {e}"]
+    if not row:
+        return []
+    return [f"### last session's handoff ({str(row[0])[:16].replace('T', ' ')} UTC; log yours with "
+            "log_decision session_summary)", f"- {flat(row[1], HANDOFF_MAX_CHARS)}"]
 
 
 def fit(lines: list[str], alerts: list[str], limit: int = BRIEF_MAX_CHARS) -> str:
