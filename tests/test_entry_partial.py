@@ -82,8 +82,58 @@ async def test_closing_the_trade_cancels_the_remainder_before_it_buys_back():
     assert r["ok"] and fake.position == 0 and fake.limits[oid]["status"] == "canceled"
     assert t.j.get_trade(ev[0]["trade_id"])["status"] == "closed"
     (e,) = await d.poll()
-    assert e["event"] == "remainder_cancelled" and row(d, eid)["status"] == "filled"
+    assert e["event"] == "cancelled" and row(d, eid)["status"] == "filled"
     assert "trade closing" in row(d, eid)["reason"] and d.pending() == []
+
+
+async def test_a_target_taken_on_the_exchange_cancels_the_remainder_at_the_next_poll():
+    plan = {"targets": [{"price": 1.0, "fraction": 0.5}], "auto": {"targets": True}}
+    d, t, fake, sent, eid, oid, amount, ev = await partial(plan=plan)
+    peak = fake.position
+    fake.price = 0.99                                                      # its resting target buys back half
+    assert 0 < fake.position < peak and fake.limits[oid]["status"] == "open"
+    (e,) = await d.poll()
+    assert e["event"] == "cancelled" and fake.limits[oid]["status"] == "canceled"
+    assert row(d, eid)["status"] == "filled" and "shrank" in row(d, eid)["reason"]
+    assert t.j.get_trade(ev[0]["trade_id"])["status"] == "open"           # the trade itself runs on
+
+
+async def test_a_partial_close_cancels_the_remainder_at_once():
+    d, t, fake, sent, eid, oid, amount, ev = await partial()
+    fake.price = 1.0
+    r = await t.close(SYM, "target 1", fraction=0.5)
+    assert r["ok"] and fake.limits[oid]["status"] == "canceled" and fake.position > 0
+    (e,) = await d.poll()
+    assert e["event"] == "cancelled" and "partial close: target 1" in row(d, eid)["reason"]
+
+
+async def test_a_breakeven_stop_at_or_below_the_limit_cancels_the_remainder():
+    d, t, fake, sent, eid, oid, amount, ev = await partial()
+    fake.price = 1.0
+    assert (await t.move_stop(SYM, 1.07, "plan/trail"))["ok"]               # still above the limit 1.04: it rests
+    assert fake.limits[oid]["status"] == "open" and await d.poll() == [] and row(d, eid)["status"] == "pending"
+    assert (await t.move_stop(SYM, 1.04, "plan/breakeven"))["ok"]           # a refill could only follow a stop-out
+    assert fake.limits[oid]["status"] == "canceled"
+    (e,) = await d.poll()
+    assert e["event"] == "cancelled" and "stop moved to 1.04" in row(d, eid)["reason"]
+
+
+async def test_widening_the_stop_cancels_the_remainder_first():
+    from shortbot.positioning import PositionOps
+    d, t, fake, sent, eid, oid, amount, ev = await partial()
+    r = await PositionOps(t).widen_stop(SYM, 1.12, "sweep zone above")
+    assert r.get("ok"), r
+    assert fake.limits[oid]["status"] == "canceled"
+    await d.poll()
+    assert row(d, eid)["status"] == "filled" and "stop widened" in row(d, eid)["reason"]
+
+
+async def test_the_poll_cancels_a_remainder_whose_journal_stop_reached_its_limit():
+    d, t, fake, sent, eid, oid, amount, ev = await partial()
+    t.j.update_trade(ev[0]["trade_id"], stop_price=1.035)                  # a stop moved by a path without the hook
+    (e,) = await d.poll()
+    assert e["event"] == "cancelled" and fake.limits[oid]["status"] == "canceled"
+    assert "at or below the remainder's limit" in row(d, eid)["reason"]
 
 
 async def test_a_trade_closed_on_the_exchange_has_its_remainder_cancelled_by_the_next_poll():
@@ -93,7 +143,7 @@ async def test_a_trade_closed_on_the_exchange_has_its_remainder_cancelled_by_the
     await reconcile.reconcile(t)
     assert t.j.get_trade(ev[0]["trade_id"])["status"] == "closed"
     (e,) = await d.poll()
-    assert e["event"] == "remainder_cancelled" and fake.limits[oid]["status"] == "canceled"
+    assert e["event"] == "cancelled" and fake.limits[oid]["status"] == "canceled"
     assert row(d, eid)["status"] == "filled" and f"trade #{ev[0]['trade_id']} closed" in row(d, eid)["reason"]
 
 
@@ -128,13 +178,13 @@ async def test_expiry_ends_the_remainder_and_settles_the_row():
     d, t, fake, sent, eid, oid, amount, ev = await partial()
     fake.advance(2 * 3600 + 60)                                            # its GTD lapses on the exchange
     (e,) = await d.poll()
-    assert e["event"] == "remainder_ended" and "expired" in row(d, eid)["reason"]
+    assert e["event"] == "expired" and "expired" in row(d, eid)["reason"]
     assert row(d, eid)["status"] == "filled" and t.j.get_trade(ev[0]["trade_id"])["status"] == "open"
     d2, t2, fake2, _, eid2, oid2, _, _ = await partial()
     await d2._update(eid2, expires_ms=0)                                   # the desk's TTL first: cancelled
     assert await d2.poll() == [] and fake2.limits[oid2]["status"] == "canceled"
     (e,) = await d2.poll()
-    assert e["event"] == "remainder_ended" and row(d2, eid2)["status"] == "filled"
+    assert e["event"] == "cancelled" and row(d2, eid2)["status"] == "filled"
 
 
 async def test_cancel_below_and_a_halt_withdraw_the_remainder_but_not_the_cascade_rule():
@@ -145,7 +195,7 @@ async def test_cancel_below_and_a_halt_withdraw_the_remainder_but_not_the_cascad
     await d.poll()
     assert fake.limits[oid]["status"] == "canceled"
     (e,) = await d.poll()
-    assert e["event"] == "remainder_ended" and "without us" in row(d, eid)["reason"]
+    assert e["event"] == "cancelled" and "without us" in row(d, eid)["reason"]
     d2, t2, fake2, _, eid2, oid2, _, _ = await partial()
     out = await d2.gw.submit(Intent("withdraw_entries", {"reason": HALTED_WHY, "ids": None}))   # the HALTED sweep
     assert out["left_for_fill_poll"] == [eid2] and fake2.limits[oid2]["status"] == "canceled"

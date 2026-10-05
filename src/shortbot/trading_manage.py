@@ -111,7 +111,8 @@ class ManageFlow:
                 if isinstance(amount, dict):
                     await targets_sync.after(self, symbol, "a refused partial close")
                     return amount
-            if amount < size:
+            if amount < size:   # taking profit: a resting remainder must not refill toward the original size
+                await entries_partial.pull_for(self, symbol, f"partial close: {reason}")
                 res = await self._close_part(symbol, trade, pos, size, amount, reason, lesson)
                 await targets_sync.after(self, symbol, "partial close")
                 return res
@@ -286,6 +287,8 @@ class ManageFlow:
             trade = self.j.active_trade(symbol)
             if trade:
                 await self.j.write(Journal.update_trade, trade["id"], stop_price=new_stop)
+                # a remainder at or above the new stop could fill only after a stop-out (entries_partial.must_go)
+                await entries_partial.pull_for(self, symbol, f"stop moved to {new_stop:g}", stop=new_stop)
             self.j.log_decision("move_stop", reason, symbol, snapshot={"from": current, "to": new_stop})
             await targets_sync.after(self, symbol, "stop move")   # #65: in case its bridge took a target with it
             return {"ok": True, "symbol": symbol, "old_stop": current, "new_stop": new_stop,

@@ -188,6 +188,10 @@ class PositionOps:
             if refused := await self._widen_room(pos, cur, new_stop, qty, max(cut, 0.0)):
                 tr.j.log_decision("widen_rejected", reason, symbol, snapshot={"from": cur, "to": new_stop, **refused})
                 return refused
+            from .entries_partial import pull_for
+
+            # a resting remainder refilling at the wider stop would take the loss past 1R (entries_partial.must_go)
+            await pull_for(tr, symbol, f"stop widened to {new_stop:g}: {reason}")
             return await self._widen(trade, symbol, old, cur, new_stop, qty, max(cut, 0.0), r1, reason)
 
     async def _widen_room(self, pos: dict, cur: float, new_stop: float, qty: float, cut: float) -> dict | None:

@@ -85,7 +85,11 @@ trade ran at ~5% of its planned size.
   as usual (the closePosition stop covers the whole position); the remainder rests until its expiry and each further
   fill joins the same trade (`entry_increment`, an `action_fill` per increment). It is cancelled by `cancel_below`, a
   kill-switch or governor withdrawal, `cancel_entry_group`, or the trade closing (before a desk close buys back;
-  within 5 s of a stop or target). It counts as pending heat for its remainder only, can't be amended, and blocks
+  within 5 s of a stop or target). It is also cancelled the moment the trade shrinks or widens (any partial close, a
+  target, `widen_stop`, the position below its peak: a refill would rebuild what we started taking off) or its stop
+  reaches the remainder's limit (breakeven, a trail, `move_stop`: for a short the limit can then fill only after a
+  stop-out, as a fresh trade). `move_stop`, `widen_stop` and every close cancel it at once; the poll re-checks each
+  pass. It counts as pending heat for its remainder only, can't be amended, and blocks
   another entry on the symbol. OCO siblings are still cancelled at the first fill.
 
 **Adverse selection.** Limit orders fill more often when you're wrong (Handa & Schwartz 1996; Linnainmaa 2010; Albers et al. 2025 on the Binance BTC perp) [WS]. Assume filled trades win less than the signal until markouts prove otherwise.

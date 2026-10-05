@@ -201,8 +201,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
                 "entry_id": e["id"], "old_limit": e["limit_price"], "new_limit": moved["limit_price"]})
             e = {**e, **moved}
         if e.get("trade_id") is not None:   # filled in part: its remainder rests (entries_partial.py)
-            if partial.due(self, e, o):      # more filled, the order ended, or its trade closed
-                return await self.act("protect_fill", e, order=o)
+            if partial.due(self, e, o) or await partial.must_go_now(self, e):   # more filled, the order ended, its
+                return await self.act("protect_fill", e, order=o)   # trade closed, shrank, or its stop reached the limit
         elif float(o.get("filled") or 0) > 0:
             return await self.act("protect_fill", e, order=o)
         if e.get("tranche"):

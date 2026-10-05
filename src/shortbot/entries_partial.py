@@ -12,8 +12,11 @@ other 29,964 (intent 01M44CHP17FBY9QT6HH77CV3J5) and the trade ran at ~5% of its
   an action_fill alert per increment (more).
 - the remainder dies by the usual rules (GTD expiry, TTL, cancel_below, the OCO sibling rule, a kill-switch / governor
   / market-pause withdrawal, cancel_entry_group) or with its trade: Trader.close pulls it before buying back
-  (pull_for), and the poll cancels it within 5 s of any other close (stop, target, liquidation). Once the order is
-  dead the row is settled 'filled' with what filled. The cascade rule doesn't apply: price is at the level already and
+  (pull_for), and the poll cancels it within 5 s of any other close (stop, target, liquidation). It also goes the
+  moment the trade shrinks or widens (any close, a target, widen_stop, the position below its peak) or its stop
+  reaches its limit (breakeven, a trail, move_stop): for a short a remainder at or above the stop fills only after a
+  stop-out, as a fresh position (must_go: hooked in Trader.close, move_stop and widen_stop, and checked by the poll
+  every pass). Once the order is dead the row is settled 'filled' with what filled. The cascade rule doesn't apply: price is at the level already and
   the trade's stop bounds it. Never moved (amend refuses), and no new entry is placed on its symbol meanwhile.
 - the rest is still pulled at the first fill (pull_reason): no live position (a round trip), a sibling of the group
   filled too (over the single-bet budget), or a split leg whose trade already closed.
@@ -34,6 +37,8 @@ if TYPE_CHECKING:
 log = logging.getLogger("shortbot.entries")
 PARTIAL = "status='pending' AND trade_id IS NOT NULL"   # filled in part, journalled into its trade, the rest resting
 EPS = 1e-9
+REDUCED = ("partial_close", "close_incomplete", "target_fill", "widen_stop")   # size events that shrink or widen
+_UNREAD: dict[str, Any] = {"unread": True}   # must_go: the position wasn't read (decide on the journal alone)
 Done = tuple[dict[str, Any], tuple[str, bool] | None]   # (event, (alert, urgent) or None): fills.announce's input
 
 
@@ -93,6 +98,44 @@ def due(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> bool:
             or (desk.j.get_trade(e["trade_id"]) or {}).get("status") != "open")
 
 
+def must_go(j: Journal, e: dict[str, Any], trade: dict[str, Any],
+            pos: dict[str, Any] | None = _UNREAD) -> str | None:
+    """Why an open trade's resting remainder must be cancelled now; None: it keeps resting.
+    - the trade's stop is at or below the remainder's limit: for a short, price reaches the limit only through the
+      stop, so the remainder could fill only after a stop-out, as a fresh position (breakeven, a trail, move_stop)
+    - the trade got smaller or wider (REDUCED decisions: a target, a partial close, a widen and its size cut), or the
+      position (`pos`, when given; None = flat) is below the trade's peak: a refill would rebuild what we started to
+      take off, or grow the risk past 1R"""
+    stop, limit = float(trade.get("stop_price") or 0), float(e["limit_price"])
+    if 0 < stop <= limit * (1 + 1e-9):
+        return f"its stop {stop:g} is at or below the remainder's limit {limit:g} (it could fill only after a stop-out)"
+    rows = j._rows(f"SELECT action, ts FROM decisions WHERE symbol=? AND ts >= ? AND COALESCE(mode, 'demo')=? AND "
+                   f"action IN ({','.join('?' * len(REDUCED))}) ORDER BY id DESC LIMIT 1",
+                   (e["symbol"], trade.get("opened_at") or "", j.mode, *REDUCED))
+    if rows:
+        return f"the trade was reduced or widened ({rows[0]['action']} at {rows[0]['ts']})"
+    peak, now = float(trade.get("amount") or 0), float((pos or {}).get("contracts") or 0)
+    if pos is not _UNREAD and now < peak * (1 - 1e-9):
+        return f"the position shrank to {now:g} from its peak {peak:g}"
+    return None
+
+
+async def must_go_now(desk: EntryDesk, e: dict[str, Any]) -> bool:
+    """The poll's check, each pass, for a remainder resting beside its open trade (must_go, the position read best
+    effort: unread, it decides on the journal alone)."""
+    trade = desk.j.get_trade(e["trade_id"]) or {}
+    if trade.get("status") != "open":
+        return False   # due() has it
+    if must_go(desk.j, e, trade, _UNREAD):
+        return True
+    try:
+        pos = await desk.tr.position(e["symbol"])
+    except Exception as x:  # noqa: BLE001 - the next pass reads it again
+        log.warning("entry #%s: position unread for its remainder check: %s", e["id"], x)
+        return False
+    return must_go(desk.j, e, trade, pos) is not None
+
+
 PULLED = "remainder "   # a partial row's reason once the desk cancelled its rest (mark_pulled): its end's label
 
 
@@ -122,11 +165,18 @@ async def more(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> Done:
     from .entries_acts import _protect
     from .entries_fills import plan_stop
     tr, sym = desk.tr, e["symbol"]
-    if (desk.j.get_trade(e["trade_id"]) or {}).get("status") != "open":
+    trade = desk.j.get_trade(e["trade_id"]) or {}
+    if trade.get("status") != "open":
         return await _orphaned(desk, e, o)
+    pos = await tr.verified_position(sym)
+    if o.get("status") == "open" and (why := must_go(desk.j, e, trade, pos)):   # the rest goes first (must_go)
+        if await _pull(desk, e, why) == "unknown":
+            return {"entry_id": e["id"], "event": "fill_unsettled"}, None
+        e = {**e, "reason": f"{PULLED}cancelled: {why}"}
+        o = await tr.t.fetch_order(e["order_id"], sym)   # what filled until the cancel landed
+        pos = await tr.verified_position(sym)
     if float(o.get("filled") or 0) <= float(e["filled_qty"] or 0) + EPS:
         return await _ended(desk, e, o)
-    pos = await tr.verified_position(sym)
     if not pos:
         return await _gone(desk, e, o)
     await plan_stop(desk, e, await _protect(desk, e))
@@ -162,13 +212,15 @@ def _journal(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], pos: dict[st
 
 
 async def _ended(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> Done:
-    """No new fill: still resting (nothing to do), or the order ended (expired, cancelled): the row is settled."""
+    """No new fill: still resting (nothing to do), or the order ended (expired, cancelled): the row is settled. The
+    event is the guardian's entry_cancelled / entry_expired notice, as for an unfilled entry."""
     if o.get("status") == "open":
         return {"entry_id": e["id"], "event": "resting"}, None
     why = end_reason(desk.j, e, o, float(e["filled_qty"] or 0))
     ok = await desk.j.write(lambda j: _cas_more(j, e, status="filled", reason=why))
-    return {"entry_id": e["id"], "event": "remainder_ended" if ok else "resolved_elsewhere",
-            "trade_id": e["trade_id"], "why": why}, None
+    ev = "expired" if o.get("status") == "expired" else "cancelled"
+    return {"entry_id": e["id"], "event": ev if ok else "resolved_elsewhere", "trade_id": e["trade_id"],
+            "why": f"remainder (trade #{e['trade_id']}): {why}"}, None
 
 
 async def _pull(desk: EntryDesk, e: dict[str, Any], why: str) -> str:
@@ -229,8 +281,8 @@ async def _orphaned(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> Do
         return ev, alert
     reason = end_reason(desk.j, e, o, filled)
     ok = await desk.j.write(lambda j: _cas_more(j, e, status="filled", filled_qty=filled, reason=reason))
-    return {"entry_id": e["id"], "event": "remainder_cancelled" if ok else "resolved_elsewhere", "trade_id": tid,
-            "why": reason}, None
+    return {"entry_id": e["id"], "event": "cancelled" if ok else "resolved_elsewhere", "trade_id": tid,
+            "why": f"remainder (trade #{tid}): {reason}"}, None
 
 
 def remainders(j: Journal, trade_id: int) -> list[dict[str, Any]]:
@@ -238,15 +290,18 @@ def remainders(j: Journal, trade_id: int) -> list[dict[str, Any]]:
     return _entries(j, f"{PARTIAL} AND trade_id=?", (trade_id,))
 
 
-async def pull_for(tr: Any, symbol: str, reason: str) -> list[int]:
-    """Trader.close (tr: the Trader, seen from its ManageFlow mixin), before a full close buys back (inside its symbol
-    lock): the closing trade's resting remainders go
-    first, so none refills the position after it. Returns the ids whose cancel failed: the poll retries them, and
-    tranches.cancel_legs tries again after the close. The rows are settled by the poll."""
+async def pull_for(tr: Any, symbol: str, reason: str, stop: float | None = None) -> list[int]:
+    """The symbol's open trade's resting remainders cancelled at once, inside the caller's symbol lock (tr: the Trader,
+    seen from a mixin): Trader.close before any close buys back (a full close: before the position is read, so none
+    refills it; a partial one: the trade is shrinking), widen_stop, and move_stop with `stop` (only the remainders
+    whose limit is at or above the new stop: must_go). Returns the ids whose cancel failed: the poll retries them
+    (must_go), and after a full close tranches.cancel_legs tries again. The poll settles the rows."""
     from .entries_cancel import withdraw
     trade = tr.j.active_trade(symbol)
     failed = []
     for e in remainders(tr.j, trade["id"]) if trade else []:
+        if stop is not None and float(e["limit_price"]) * (1 + 1e-9) < stop:
+            continue   # its stop still sits above the remainder's limit: it may rest
         got = await withdraw(tr, {**e, "prearm_id": None}, tr.alert, {"status": "cancelled", "reason": reason})
         if got == "unknown":
             failed.append(e["id"])
