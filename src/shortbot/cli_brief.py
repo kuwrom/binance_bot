@@ -114,7 +114,7 @@ def fit(lines: list[str], alerts: list[str], limit: int = BRIEF_MAX_CHARS) -> st
     the urgent ones first), then a pointer to the rest."""
     out, more = list(lines), "- … more alerts: run `journal` (start_session acknowledges them all)"
     used = len("\n".join(out))
-    for i, ln in enumerate(alerts):
+    for ln in alerts:
         if used + len(ln) + len(more) + 2 > limit:
             out.append(more)
             break
