@@ -46,7 +46,8 @@ HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {}
 # - cap_stop: a tighter closePosition stop, decided again under the lock; one per side.
 # - protect_fill: a fill's whole-position stop (listed before it is placed), its pre-arm's cancel (Gone is done), its
 #   remainder's cancel (withdraw believes what filled), the plan stop (tighten only: a no-op at the same tick), the OCO
-#   siblings' cancels (rows by compare-and-set). A held lock must never delay a fill's stop.
+#   siblings' cancels (rows by compare-and-set), a partly filled entry's increment (compare-and-set on its fill count,
+#   entries_partial.py). A held lock must never delay a fill's stop.
 # - cancel_entry: one resting row withdrawn (cascade, cancel_below, the OCO sibling retry, a closed split's leg,
 #   expiry): re-read under the lock, compare-and-set; withdraw believes fills.
 # - withdraw_entries: the HALTED, governor, pause and resize sweeps and the session watchdog: as cancel_entry, per row.

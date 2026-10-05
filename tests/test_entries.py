@@ -59,13 +59,14 @@ async def test_first_fill_protects_journals_and_cancels_siblings():
     assert sib["status"] == "cancelled" and "filled" in sib["reason"]
 
 
-async def test_partial_fill_cancels_remainder_and_protects():
+async def test_partial_fill_keeps_its_remainder_resting_and_protects():   # owner decision 2026-10-05
     d, t, fake = desk()
     await d.propose_group([prop(1.04)])
     oid = next(iter(fake.limits))
     fake.fill_limit(oid, qty=fake.limits[oid]["amount"] / 2)
     await d.poll()
-    assert fake.limits[oid]["status"] == "canceled" and fake.stops and fake.position > 0
+    assert fake.limits[oid]["status"] == "open" and fake.stops and fake.position > 0   # tests/test_entry_partial.py
+    assert t.j.open_trades()[0]["amount"] == fake.position
 
 
 async def test_cancel_when_move_happens_without_us_and_on_fast_approach():

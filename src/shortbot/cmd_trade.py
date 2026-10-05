@@ -7,6 +7,7 @@ import json
 import operator
 from typing import Any
 
+from . import entry_levels as levels
 from . import news, scanner, setups, targets_sync
 from .app import get_app
 from .commands import Arg, CommandError, command
@@ -204,12 +205,41 @@ async def add_to_winner(symbol: str, notional_usdt: float, new_stop: float, reas
     return await PositionOps(get_app().trader).add_to_winner(symbol, notional_usdt, new_stop, reason)
 
 
+def _prices(text: str) -> list[float]:
+    """'1.02,1.04' -> [1.02, 1.04]."""
+    return [float(x) for x in text.replace(" ", "").split(",") if x]
+
+
+@command(cli="levels", help="pick one limit level from candidates: touch odds x haircut vs threshold (read-only)", args=(
+    Arg("symbol"), Arg("stop", "--stop"), Arg("targets", "--targets", "comma list, e.g. 0.95,0.9", convert=_prices),
+    Arg("candidates", "--candidates", "comma list of levels, e.g. 1.02,1.04,1.06", convert=_prices),
+    Arg("hours", "--hours", "fill window (the entry's TTL)"), Arg("hold_hours", "--hold-hours", "the plan's time stop"),
+    Arg("threshold", "--threshold"), Arg("haircut", "--haircut")))
+async def entry_levels(symbol: str, stop: float, targets: list[float], candidates: list[float], hours: float = 6.0,
+                       hold_hours: float = 24.0, threshold: float = levels.THRESHOLD,
+                       haircut: float = levels.HAIRCUT) -> dict[str, Any]:
+    """Level picker for ONE full-size limit short (docs/POSITION_MANAGEMENT.md §c). Per candidate level (1-4): the
+    no-edge touch probability within `hours`, the fill-adjusted probability (touch x haircut, for queue and partial
+    fills at an exact touch), the odds of the first target before the stop if filled (closed form + Monte Carlo over
+    `hold_hours`) and the R:R at the order price, which rests 2 ticks INSIDE the level. Picks the highest level whose
+    fill-adjusted probability >= threshold, else the likeliest fill (with a note). Read-only, nothing logged:
+    propose_entries with `candidates` places the pick and logs every candidate for calibration."""
+    app = get_app()
+    try:
+        return await levels.assess_live(app.ex, app.trader.t, to_symbol(symbol), stop, targets, candidates, hours,
+                                        hold_hours, levels.unit_interval(threshold, "threshold"),
+                                        levels.unit_interval(haircut, "haircut"))
+    except ValueError as e:
+        raise CommandError(str(e)) from e
+
+
 @command(cli="propose", write=True, orders=True, weight=PROTECTIVE,
          help="limit-entry group: first fill cancels the rest", args=(
     Arg("proposals", help="JSON list of {symbol, limit_price, stop_price, setup, thesis, plan?, leverage?, level_type, "
         "level_reason, cancel_below?, conviction?, size_mult? (0.1-1, only shrinks: pass the read's size_mult), "
-        "tranches? [{limit_price, share}] = split entry (all-or-nothing), veto_override?}", metavar="PROPOSALS_JSON",
-        convert=json.loads),
+        "tranches? [{limit_price, share}] = split entry (all-or-nothing), candidates? [{price, level_type, "
+        "level_reason}] instead of limit_price/tranches = the level picker's one full-size order (fill_threshold?, "
+        "fill_haircut?), veto_override?}", metavar="PROPOSALS_JSON", convert=json.loads),
     Arg("ttl_hours", "--ttl-hours", "at most 24"),
     Arg("prearm", "--no-prearm", action="store_true", convert=operator.not_, cli_only=True),
     Arg("warmup_override", "--warmup-override", "reason to skip the cold-desk warm-up")))
@@ -219,9 +249,12 @@ async def propose_entries(proposals: list[dict[str, Any]], ttl_hours: float = 6.
     thesis, plan?, leverage?, level_type (round_number|prior_high|sweep|vwap_band|ema_retest), level_reason,
     cancel_below?, conviction? (C|B|A|M, default B), veto_override? (research reason; no budget override: always
     sized from the current risk budget)}; plan.uses_learnings and plan.analyst_p as in open_short (carried onto the trade
-    at the fill; analyst_p is logged with the entry's odds).
-    GTD expiry on the exchange (ttl_hours <= 24); pre-armed reduce-only stop;
-    the guardian protects fills within 5 s and cancels the siblings of the first fill. Resting entries are withdrawn
+    at the fill; analyst_p is logged with the entry's odds). The default limit entry: `candidates` [{price, level_type,
+    level_reason}] instead of limit_price (plan targets required): the level picker (entry_levels) places ONE full-size
+    order 2 ticks inside the highest level whose touch odds x haircut clear the threshold, and records every
+    candidate's odds. GTD expiry on the exchange (ttl_hours <= 24); pre-armed reduce-only stop; the guardian protects
+    fills within 5 s and cancels the siblings of the first fill; a partial fill becomes the trade and its remainder
+    keeps resting until expiry (each further fill joins the same trade). Resting entries are withdrawn
     while the governor halts new entries or a market pause is on (one placed over that pause stays). A send whose
     outcome is unknown (timeout, 5xx) is listed under `unknown`: it may rest on the book, so don't re-propose it."""
     return await EntryDesk(get_app().trader).propose_group(proposals, ttl_hours, prearm, warmup_override)

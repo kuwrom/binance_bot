@@ -65,10 +65,11 @@ def own_entries(journal, trade_id: int) -> list[dict[str, Any]]:
 
 
 def own_legs(journal, trade_id: int) -> list[dict[str, Any]]:
-    """Resting legs of the split entry that opened this trade. A pending leg has no trade_id until it fills: its
-    tranche ties it to the trade. Another group's legs on the same symbol are not this trade's."""
-    return _entries(journal, "status='pending' AND tranche IN (SELECT tranche FROM entries WHERE trade_id=? AND "
-                             "tranche IS NOT NULL)", (trade_id,))
+    """Resting legs of the split entry that opened this trade, and the remainders of its entries that filled in part
+    (entries_partial.py: pending with this trade_id). A pending leg has no trade_id until it fills: its tranche ties it
+    to the trade. Another group's legs on the same symbol are not this trade's."""
+    return _entries(journal, "status='pending' AND (trade_id=? OR tranche IN (SELECT tranche FROM entries WHERE "
+                             "trade_id=? AND tranche IS NOT NULL))", (trade_id, trade_id))
 
 
 async def cancel_legs(trader, trade_id: int, reason: str) -> dict[str, list[dict[str, Any]]]:
@@ -88,8 +89,9 @@ async def cancel_legs(trader, trade_id: int, reason: str) -> dict[str, list[dict
 
 def open_trade_id(desk, e: dict[str, Any]) -> int | None:
     """The open trade this fill adds to: one an earlier leg of its split entry opened, or one a same-symbol OCO
-    sibling opened (both filled before the cancel landed: one position, one stop, one journal row)."""
-    for r in desk._rows("group_id=? AND symbol=? AND status='filled' AND trade_id IS NOT NULL",
+    sibling opened (both filled before the cancel landed: one position, one stop, one journal row). A row filled in
+    part (pending, its remainder resting) counts: its trade is open."""
+    for r in desk._rows("group_id=? AND symbol=? AND status IN ('filled','pending') AND trade_id IS NOT NULL",
                         (e["group_id"], e["symbol"])):
         t = desk.j.get_trade(r["trade_id"])
         if t and t.get("status") == "open":
@@ -98,39 +100,45 @@ def open_trade_id(desk, e: dict[str, Any]) -> int | None:
 
 
 def parent_closed(desk, e: dict[str, Any]) -> bool:
-    """True when a leg of this tranche already filled and its trade is closed: the remaining leg must die."""
-    for r in desk._rows("tranche=? AND status='filled' AND trade_id IS NOT NULL", (e["tranche"],)):
+    """True when a leg of this tranche already filled (in full, or in part) and its trade is closed: the remaining leg
+    must die."""
+    for r in desk._rows("tranche=? AND status IN ('filled','pending') AND trade_id IS NOT NULL", (e["tranche"],)):
         t = desk.j.get_trade(r["trade_id"])
         if t and t.get("status") == "closed":
             return True
     return False
 
 
-def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int,
-         filled_at: str | None = None) -> tuple[dict[str, Any], tuple[str, bool] | None]:
+def join(desk, e: dict[str, Any], pos: dict[str, Any], tid: int, filled_at: str | None = None,
+         part: dict[str, Any] | None = None) -> tuple[dict[str, Any], tuple[str, bool] | None]:
     """A later fill on this group's open trade is an add (the closePosition stop already covers the whole size): a
     split entry's next leg, or an OCO sibling whose cancel came too late (then the group is over its budget).
     filled_at: when it filled on the exchange (entries_fills.first_fill_ms), not when the poll saw it. Journal only
-    (inside the symbol lock, entries_acts.on_fill): returns (event, (alert, urgent) or None), alerted after the lock."""
+    (inside the symbol lock, entries_acts.on_fill): returns (event, (alert, urgent) or None), alerted after the lock.
+    part: the row's fields when the order's remainder keeps resting (entries_partial.claim)."""
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
     # amount = peak size; a fill that landed before the first one was adopted is already in it (count it once)
     peak = max(float((desk.j.get_trade(tid) or {}).get("amount") or 0), qty)
     owners = desk._rows("trade_id=?", (tid,))
     leg = e.get("tranche") and any(r["tranche"] == e["tranche"] for r in owners)
-    if not desk._cas_row(e["id"], "pending", status="filled", trade_id=tid, filled_at=filled_at or _now(),
-                        fill_price=e["limit_price"], filled_qty=e["amount"]):
+    f = {"status": "filled", "trade_id": tid, "filled_at": filled_at or _now(), "fill_price": e["limit_price"],
+         "filled_qty": e["amount"], **(part or {})}
+    if part:
+        from .entries_partial import cas_first, note
+    if not (cas_first(desk, e["id"], "pending", **f) if part else desk._cas_row(e["id"], "pending", **f)):
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}, None
+    got, tail = f["filled_qty"], note(e, {"filled": f["filled_qty"]}) if part else ""
     desk.j.update_trade(tid, entry_price=fill, amount=peak, notional=round(fill * qty, 2))
     if not leg:
         desk.j.log_decision("sibling_fill", f"entry #{e['id']} filled before its cancel landed: joined trade #{tid}",
                             e["symbol"], snapshot={"trade_id": tid, "avg_entry": fill, "contracts": qty})
         return ({"entry_id": e["id"], "event": "sibling_joined", "trade_id": tid, "avg": fill, "qty": qty},
                 (f"sibling #{owners[0]['id']} also filled: group over its single-bet budget. Entry #{e['id']} filled "
-                 f"{e['amount']} @ {e['limit_price']}: position {qty} avg {fill}, one stop", True))
+                 f"{got} @ {e['limit_price']}: position {qty} avg {fill}, one stop{tail}", True))
     desk.j.log_decision("tranche_fill", f"leg {e['leg']} of tranche {e['tranche']} joined trade #{tid}",
                         e["symbol"], snapshot={"trade_id": tid, "avg_entry": fill, "contracts": qty})
     return ({"entry_id": e["id"], "event": "tranche_joined", "trade_id": tid, "avg": fill, "qty": qty},
-            (f"tranche leg {e['leg']} filled {e['amount']} @ {e['limit_price']}: position {qty} avg {fill}, same stop",
+            (f"tranche leg {e['leg']} filled {got} @ {e['limit_price']}: position {qty} avg {fill}, same stop{tail}",
              False))
 
 

@@ -4,7 +4,8 @@ add, through this one helper so they can't drift.
 
 - resting limit entries (entry_intents.ON_BOOK: pending, placing, unknown, external): one OCO group fills at most one
   order, but a split entry's legs can ALL fill, so a group counts its biggest single order or its biggest whole tranche;
-  each external order (not placed by shortbot) can fill on its own: one unit each;
+  each external order (not placed by shortbot) can fill on its own: one unit each; an order filled in part counts only
+  its resting remainder (entries_partial.remaining: what filled is in its trade's position);
 - market entries of unknown outcome (trades still 'opening'): they may still fill, at their full intended size
   (entry_features.intended_notional, journalled before the send; a row from before it: the per-coin cap). Not when
   the symbol shows a live position: that position is the fill, already counted.
@@ -18,6 +19,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
+from .entries_partial import remaining
 from .entry_intents import ON_BOOK
 from .risk import AccountState
 
@@ -50,7 +52,7 @@ def pending_units(j: Journal, live: Iterable[str], max_notional: float, group: s
         for r in g_rows:
             key = r.get("tranche") or f"single{r['id']}"
             s, n = units.get(key, (r["symbol"], 0.0))
-            units[key] = (s, n + float(r["amount"] or 0) * float(r["limit_price"] or 0))
+            units[key] = (s, n + remaining(r) * float(r["limit_price"] or 0))   # filled in part: its rest only
         out.append(max(units.values(), key=lambda u: u[1]))
     for t in j.open_trades(include_opening=True):
         if t["status"] == "opening" and t["symbol"] not in live and t["symbol"] != symbol:

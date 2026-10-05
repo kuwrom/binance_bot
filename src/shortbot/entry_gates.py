@@ -136,7 +136,9 @@ def _shrunk(e: dict[str, Any], key: str, now: float | None) -> bool:
 
 
 def _risk(e: dict[str, Any]) -> float:
-    return float(e.get("amount") or 0) * max(0.0, float(e.get("stop_price") or 0) - float(e.get("limit_price") or 0))
+    """At the stop, of what can still fill (a row filled in part: its remainder; its fill is the trade's open risk)."""
+    from .entries_partial import remaining
+    return remaining(e) * max(0.0, float(e.get("stop_price") or 0) - float(e.get("limit_price") or 0))
 
 
 def resized(j, rows: list[dict[str, Any]], ladder_of, now: float | None = None) -> dict[int, str]:

@@ -43,6 +43,9 @@ class EntryAmend:
         if not rows:
             return {"ok": False, "error": "no pending entry with that id"}
         e = rows[0]
+        if e.get("trade_id") is not None:   # entries_partial.py: the rest of a fill keeps its level
+            return {"ok": False, "error": f"entry #{entry_id} filled in part into trade #{e['trade_id']}: its remainder "
+                                          "rests at its level until expiry; cancel it (cancel_entry_group) instead"}
         if e["replaced"]:
             return {"ok": False, "error": "already replaced once (rule: replace at most once, don't chase)"}
         if new_limit >= e["stop_price"]:

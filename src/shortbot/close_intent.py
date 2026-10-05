@@ -23,7 +23,8 @@ from .steps import floor_amount
 
 RECENT_CHANGE_S = 300
 SIZE_EVENTS = ("partial_close", "close_incomplete", "tranche_fill", "sibling_fill", "add", "widen_stop",
-               "target_fill")   # a resting plan target filled on the exchange (targets.py, #65)
+               "target_fill",       # a resting plan target filled on the exchange (targets.py, #65)
+               "entry_increment")   # more of a partly filled entry joined its trade (entries_partial.py)
 
 
 def _g(x: float) -> str:

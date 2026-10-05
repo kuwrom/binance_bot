@@ -1,8 +1,9 @@
 """Managing an open short (mixed into Trader): close (full or partial, then finalize from exchange income),
 tighten-only stop moves, and the guardian's missing-stop safety net.
 
-A full close touches only this trade's own orders (#56): its resting split legs (withdrawn: a leg's pre-armed stop
-goes only if its limit died unfilled), then, once the position is re-read FLAT, the closePosition stop and the
+A full close touches only this trade's own orders (#56): first the resting remainders of its entries that filled in
+part (entries_partial.pull_for: before the position is read, so none refills it), then its resting split legs
+(withdrawn: a leg's pre-armed stop goes only if its limit died unfilled), then, once the position is re-read FLAT, the closePosition stop and the
 pre-armed stops of its own entries. Another group's resting entry keeps its pre-armed stop. A remainder (the close
 filled short, or an order filled mid-close) keeps every stop and gets a closePosition stop at once if it has none.
 
@@ -17,7 +18,18 @@ from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, close_intent, errors, fill_quality, margin, reconcile, stops, targets_sync, tranches
+from . import (
+    clientid,
+    close_intent,
+    entries_partial,
+    errors,
+    fill_quality,
+    margin,
+    reconcile,
+    stops,
+    targets_sync,
+    tranches,
+)
 from .audit import refusals
 from .exchange import to_symbol
 from .journal import Journal
@@ -80,6 +92,8 @@ class ManageFlow:
             return {"ok": False, "error": "fraction must be in (0, 1]"}
         async with self.symbol_lock(symbol, f"close {fraction:g}{' of original' if of_original else ''}: {reason}"):
             await self.ex.trade_markets(symbol)
+            if fraction >= 1:   # a resting remainder of the trade goes first: it must not refill after the close
+                await entries_partial.pull_for(self, symbol, f"trade closing: {reason}")
             pos = await self.position(symbol)
             if not pos:
                 return {"ok": False, "error": f"no open position in {symbol}"}

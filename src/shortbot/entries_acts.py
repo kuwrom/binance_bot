@@ -13,6 +13,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from . import entries_fills as fills
+from . import entries_partial as partial
 from . import errors, targets_sync
 from .entries_cancel import CANCEL_FAILS_ALERT, cancel_resting, drop_prearm, withdraw
 from .entry_intents import unit
@@ -40,37 +41,61 @@ async def protect_fill(desk: EntryDesk, entry_id: int, order: dict[str, Any]) ->
 async def on_fill(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any]) -> dict[str, Any]:
     """Protect, then journal, both inside the symbol lock: a session's close() between the two would find no trade,
     strip the new stop and finalize nothing, and the fill would then be journalled as an open trade on a flat
-    symbol (#60). The row is re-read inside the lock. The remainder of a partial fill is pulled first (withdraw:
-    what filled is believed, the pre-arm is not touched here). Make before break: the pre-armed stop goes only once
-    the whole-position stop rests; if that stop can't be placed the pre-arm stays and the row stays pending
+    symbol (#60). The row is re-read inside the lock. The remainder of a partial fill keeps resting while its position
+    is live (entries_partial.py; a row filled in part before goes to partial.more); otherwise it is pulled first
+    (withdraw: what filled is believed, the pre-arm is not touched here). Make before break: the pre-armed stop goes
+    only once the whole-position stop rests; if that stop can't be placed the pre-arm stays and the row stays pending
     (StopNotPlaced). After the lock (siblings may rest on other symbols): the round trip, the OCO cancel, alerts."""
     tr, sym = desk.tr, e["symbol"]
+    more: partial.Done | None = None
     async with tr.symbol_lock(sym, f"entry #{e['id']} filled: protect and journal it"):
         now = desk._rows("id=? AND status='pending'", (e["id"],))
         if not now:
             return {"entry_id": e["id"], "event": "resolved_elsewhere"}
         e = now[0]
-        rest = await withdraw(tr, {**e, "prearm_id": None}) if o.get("status") == "open" else "filled"
-        pos = await tr.verified_position(sym)
-        try:
-            cps = await _protect(desk, e) if pos else []
-        except fills.StopNotPlaced as x:   # -4509 on a flat position: closed again before its stop landed
-            if errors.classify(x.__cause__ or x) is not errors.ReduceOnlyRejected or not await tr.flat_now(sym):
-                raise
-            pos, cps = None, []   # the round trip below journals it
-        if rest != "unknown":
-            desk._cancel_fails.pop(e["id"], None)
-            await fills.plan_stop(desk, e, cps)
-            trades = await fills.history(tr.t, e, o)
-            done = await desk.j.write(lambda _j: fills.adopt(desk, e, o, pos, trades)) if pos else None
-            if pos:   # another trade's targets never meet this fill (#65); its own rest at once (#71)
-                await targets_sync.clear_stale(tr, sym, (desk.j.active_trade(sym) or {}).get("id"))
-                await targets_sync.at_entry(tr, sym, f"entry #{e['id']} filled")
+        if e.get("trade_id") is not None:   # filled in part before: more of it, its end, or its trade's close
+            more = await partial.more(desk, e, o)
+        else:
+            rest, pos, trades, done = await _first(desk, e, o)
+    if more is not None:
+        return await fills.announce(desk, e, *more)
     if rest == "unknown":
         return await _rest_unknown(desk, e)
     if not pos or done is None:   # filled and closed again before this poll (its pre-armed stop): from history
         return await fills.round_trip(desk, e, o, trades)
     return await fills.announce(desk, e, *done)
+
+
+async def _first(desk: EntryDesk, e: dict[str, Any],
+                 o: dict[str, Any]) -> tuple[str, Any, list[dict[str, Any]], partial.Done | None]:
+    """on_fill's first fill of a row, inside the lock: (withdraw's outcome or "kept", the position, trade history, the
+    journalled fill for fills.announce). A resting remainder is kept while its position is live and nothing says it
+    must go (partial.pull_reason); else it is pulled first and the position read after the pull."""
+    tr, sym = desk.tr, e["symbol"]
+    keep = o.get("status") == "open" and partial.pull_reason(desk, e) is None
+    pos = await tr.verified_position(sym) if keep else None
+    rest = "kept" if pos else "filled"
+    if not pos:   # no position to keep a remainder for (a round trip), or it must go
+        keep = False
+        if o.get("status") == "open":
+            rest = await withdraw(tr, {**e, "prearm_id": None})
+        pos = await tr.verified_position(sym)
+    try:
+        cps = await _protect(desk, e) if pos else []
+    except fills.StopNotPlaced as x:   # -4509 on a flat position: closed again before its stop landed
+        if errors.classify(x.__cause__ or x) is not errors.ReduceOnlyRejected or not await tr.flat_now(sym):
+            raise
+        pos, cps = None, []   # the round trip below journals it
+    if rest == "unknown":
+        return rest, pos, [], None
+    desk._cancel_fails.pop(e["id"], None)
+    await fills.plan_stop(desk, e, cps)
+    trades = await fills.history(tr.t, e, o)
+    done = await desk.j.write(lambda _j: fills.adopt(desk, e, o, pos, trades, rest=keep)) if pos else None
+    if pos:   # another trade's targets never meet this fill (#65); its own rest at once (#71)
+        await targets_sync.clear_stale(tr, sym, (desk.j.active_trade(sym) or {}).get("id"))
+        await targets_sync.at_entry(tr, sym, f"entry #{e['id']} filled")
+    return rest, pos, trades, done
 
 
 async def _protect(desk: EntryDesk, e: dict[str, Any]) -> list[dict[str, Any]]:

@@ -20,8 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 import ccxt.async_support as ccxt
 
-from . import clientid, errors, exposure, killswitch, warmup
+from . import clientid, entry_levels, errors, exposure, killswitch, warmup
 from .audit import refusals
+from .entries_partial import PARTIAL
 from .entry_gates import market_pause, stamps
 from .entry_intents import HINTS, SendUnknown
 from .exchange import to_symbol
@@ -63,8 +64,10 @@ class EntryPlacement:
                             prearm_stop: bool = True, warmup_override: str | None = None) -> dict[str, Any]:
         """proposals: [{symbol, limit_price, stop_price, setup, thesis, plan?, leverage?, level_type, level_reason,
         cancel_below?, conviction?, size_mult? (0.1-1, only shrinks), tranches? [{limit_price, share}] (split entry:
-        2 legs, one stop, one budget; see tranches.py)}]. Sizes from the current risk budget at each limit price.
-        First fill cancels the other proposals (a split entry's own legs stay live)."""
+        2 legs, one stop, one budget; see tranches.py), or candidates? [{price, level_type, level_reason}] instead of
+        limit_price/tranches (the level picker places ONE full-size order inside the best level: entry_levels.py)}].
+        Sizes from the current risk budget at each limit price. First fill cancels the other proposals (a split entry's
+        own legs stay live); a partial fill keeps its remainder resting (entries_partial.py)."""
         tr = self.tr
         if not 1 <= len(proposals) <= 5:
             return {"ok": False, "error": "propose 1-5 entries per group"}
@@ -83,6 +86,8 @@ class EntryPlacement:
         placed, rejected, unknown, warnings = [], [], [], []
         for p in proposals:
             try:
+                if p.get("candidates"):   # the level picker: one full-size order at the best level (entry_levels.py)
+                    p = await entry_levels.for_proposal(tr, p, (expires_ms / 1000 - time.time()) / 3600)
                 # the caps through the send, across processes (#74); a split entry's legs and their rollback are
                 # one hold, so no other session's risk lands between two legs
                 async with tr.account_lock(f"place a limit entry on {p.get('symbol')} (group {gid})"):
@@ -138,11 +143,14 @@ class EntryPlacement:
         sym = to_symbol(p["symbol"])
         if sym not in tr.t.markets:
             raise ValueError(f"{sym} not listed on the connected account")
+        if rest := self._rows(f"symbol=? AND {PARTIAL}", (sym,)):   # (a later fill shows as a position under the lock)
+            raise ValueError(f"entry #{rest[0]['id']}'s remainder still rests on {sym} (filled in part into trade "
+                             f"#{rest[0]['trade_id']}): one trade per symbol")
         st = resolve(p["setup"])
         if str(p.get("budget_override") or "").strip():
             raise ValueError("budget_override is open_short's only: a limit entry is always sized from the current "
                              "risk budget")
-        limit, stop = float(p["limit_price"]), float(p["stop_price"])
+        limit, stop, pick = float(p["limit_price"]), float(p["stop_price"]), p.get("level_pick")
         tk = await tr.t.fetch_ticker(sym)
         last = float(tk["last"])
         if limit <= last:
@@ -230,7 +238,7 @@ class EntryPlacement:
                 "INSERT INTO entries (group_id, symbol, status, created_at, expires_ms, limit_price, stop_price,"
                 " amount, leverage, setup, thesis, plan, level_type, level_reason, cancel_below, atr_1h, ref_price,"
                 " ref_ms, conviction, regime_cell, tranche, leg, client_id, abandon, mode, experiment, limits,"
-                f" overrides, {', '.join(sized)}) VALUES ({','.join('?' * (28 + len(sized)))})",
+                f" overrides, level_pick, {', '.join(sized)}) VALUES ({','.join('?' * (29 + len(sized)))})",
                 (gid, sym, "placing", _now_iso(), expires_ms, px, stop, amount, lev, p["setup"], p["thesis"],
                  json.dumps(plan.to_dict()), p.get("level_type", "unspecified"), p.get("level_reason", ""),
                  p.get("cancel_below"), a, last, int(time.time() * 1000), budget.get("conviction"),
@@ -238,7 +246,7 @@ class EntryPlacement:
                  1 if p.get("tranche") else 0,    # a split leg is withdrawn if unsure
                  # what it was sized under: the guardian that journals the fill has no research params (#32)
                  self.j.mode, tr.ex.experiment, json.dumps(lim.__dict__), json.dumps(overrides) if overrides else None,
-                 *sized.values()))
+                 json.dumps(pick) if pick else None, *sized.values()))
             try:
                 order = await tr.place_limit(sym, amount, px, expires_ms, cid)
             except Exception as e:  # noqa: BLE001 - journal the outcome first: refused, or unknown (may rest)
@@ -265,7 +273,12 @@ class EntryPlacement:
                         "odds_label": pe["label"]}
         except Exception:  # noqa: BLE001 - odds are informational; never block placement
             pass
-        return {**odds, "entry_id": eid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
+        if pick:   # every candidate's touch, for calibration (entry_levels.SOURCE); never blocks placement
+            try:
+                entry_levels.log_candidates(self.j, sym, pick, eid, {"setup": p["setup"], "regime": regime})
+            except Exception:  # noqa: BLE001 - research data
+                log.warning("entry #%s: level predictions not logged", eid, exc_info=True)
+        return {**odds, **({"level_pick": pick} if pick else {}), "entry_id": eid, "symbol": sym, "limit_price": px, "stop_price": stop, "amount": amount,
                 "risk_usdt": round(amount * (stop - px), 2), "leverage": lev, "prearmed_stop": bool(prearm_id),
                 "client_id": cid, **({"overrides": overrides} if overrides else {}),
                 "expires": datetime.fromtimestamp(expires_ms / 1000, UTC).isoformat(timespec="minutes")}

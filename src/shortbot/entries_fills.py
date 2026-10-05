@@ -106,21 +106,24 @@ async def plan_stop(desk: EntryDesk, e: dict[str, Any], cps: list[dict[str, Any]
 
 
 def adopt(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, Any],
-          trades: list[dict[str, Any]]) -> tuple[dict[str, Any], tuple[str, bool] | None]:
+          trades: list[dict[str, Any]], rest: bool = False) -> tuple[dict[str, Any], tuple[str, bool] | None]:
     """A fill whose position is open, journalled (inside the symbol lock): an add to the open trade of its split entry
-    or of a same-symbol sibling (tranches.join), else a new trade. Returns (event, (alert, urgent) or None) for
+    or of a same-symbol sibling (tranches.join), else a new trade. rest: the order's remainder keeps resting, so the
+    row stays pending with what filled so far (entries_partial.py). Returns (event, (alert, urgent) or None) for
     announce(), which runs after the lock."""
+    from . import entries_partial as partial
     from . import tranches
     at = first_fill_ms(trades, e, o)
+    part = partial.claim(o) if rest else None
     tid = tranches.open_trade_id(desk, e)   # a split entry's later leg, or a same-symbol sibling that filled too
     if tid:
-        return _referenced(desk, e, o, trades, tranches.join(desk, e, pos, tid, iso(at)))
+        return _referenced(desk, e, o, trades, tranches.join(desk, e, pos, tid, iso(at), part))
     sib = desk._filled_sibling(e)            # a sibling on another symbol filled too: two positions, one budget
     orphan = bool(e.get("tranche")) and tranches.parent_closed(desk, e)   # a fresh position nobody asked for
     fill, qty = float(pos["entryPrice"]), float(pos["contracts"])
     tid = new_trade(desk, e, at)
-    if not desk._cas_row(e["id"], "pending", status="filled", trade_id=tid, filled_at=iso(at), fill_price=fill,
-                        filled_qty=qty):
+    f = {"status": "filled", "trade_id": tid, "filled_at": iso(at), "fill_price": fill, "filled_qty": qty, **(part or {})}
+    if not (partial.cas_first(desk, e["id"], "pending", **f) if rest else desk._cas_row(e["id"], "pending", **f)):
         desk.j.abort_trade(tid, f"entry #{e['id']} was resolved elsewhere first")
         return {"entry_id": e["id"], "event": "resolved_elsewhere"}, None
     desk.j.activate_trade(tid, fill, qty, round(fill * qty, 2))
@@ -128,7 +131,8 @@ def adopt(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], pos: dict[str, 
             + (f"leg filled after its trade closed: new trade #{tid}. " if orphan else ""))
     return _referenced(desk, e, o, trades, ({"entry_id": e["id"], "event": "filled", "trade_id": tid, "fill": fill,
                                              "qty": qty},
-                       (head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed", bool(head))))
+                       (head + f"limit short filled {qty} @ {fill}, stop {e['stop_price']} placed"
+                        + (partial.note(e, o) if rest else ""), bool(head))))
 
 
 def _referenced(desk: EntryDesk, e: dict[str, Any], o: dict[str, Any], trades: list[dict[str, Any]],
@@ -162,6 +166,8 @@ def new_trade(desk: EntryDesk, e: dict[str, Any], fill_ms: int | None, **feature
     at = datetime.fromtimestamp(fill_ms / 1000, UTC) if fill_ms else datetime.now(UTC)
     j = desk.j
     over = json.loads(e["overrides"]) if e.get("overrides") else {}   # a veto override at placement (#11)
+    if e.get("level_pick"):   # the level picker's choice and every candidate's odds (entry_levels.record)
+        over = {**over, "level_pick": json.loads(e["level_pick"])}
     tid = j.create_trade(e["symbol"], e["setup"], e["thesis"], e["stop_price"], e["leverage"], e["plan"],
                          {"entry_type": "limit", "level_type": e["level_type"], "level_reason": e["level_reason"],
                           "group_id": e["group_id"], "limit_price": e["limit_price"],

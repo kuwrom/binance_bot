@@ -103,6 +103,7 @@ module = [
     "shortbot.clientid", "shortbot.order_ids", "shortbot.stops", "shortbot.risk", "shortbot.risk_budget",
     "shortbot.killswitch", "shortbot.killswitch_ops", "shortbot.killswitch_rearm", "shortbot.entries_place",
     "shortbot.entries_amend", "shortbot.entries_cancel", "shortbot.entries_fills", "shortbot.entries_acts",
+    "shortbot.entries_partial",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true

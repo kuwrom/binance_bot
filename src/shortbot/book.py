@@ -42,27 +42,31 @@ def pending_book(db, exclude_symbol: str, mode: str | None = None) -> tuple[dict
         cols = {r[1] for r in db.execute("PRAGMA table_info(entries)")}
         if not cols:
             return {}, []
-        tr = "tranche" if "tranche" in cols else "NULL"
+        tr, tid, fq = (c if c in cols else "NULL" for c in ("tranche", "trade_id", "filled_qty"))
         by_mode = bool(mode) and "mode" in cols
-        q = (f"SELECT id, group_id, symbol, setup, amount, limit_price, stop_price, {tr} FROM entries"
-             f" WHERE status IN ({','.join('?' * len(PENDING_STATUSES))}) AND symbol != ?"
+        q = (f"SELECT id, group_id, symbol, setup, amount, limit_price, stop_price, {tr}, status, {tid}, {fq}"
+             f" FROM entries WHERE status IN ({','.join('?' * len(PENDING_STATUSES))}) AND symbol != ?"
              + (" AND mode = ?" if by_mode else ""))
         rows = db.execute(q, (*PENDING_STATUSES, exclude_symbol, *((mode,) if by_mode else ()))).fetchall()
     except Exception:  # noqa: BLE001 - no entries table yet
         return {}, []
-    groups: dict[str, dict[str, tuple[str, str, float]]] = {}
-    for rid, gid, sym, setup, amount, limit, stop, tranche in rows:
-        risk = max(0.0, float(amount or 0) * (float(stop or 0) - float(limit or 0)))
+    from .entries_partial import remaining
+    groups: dict[str, dict[str, tuple[str, str, float, bool]]] = {}
+    for rid, gid, sym, setup, amount, limit, stop, tranche, status, tid, filled in rows:
+        # an order filled in part counts its remainder: what filled is its open trade's (already in the book)
+        left = remaining({"status": status, "trade_id": tid, "amount": amount, "filled_qty": filled})
+        risk = max(0.0, left * (float(stop or 0) - float(limit or 0)))
         unit = tranche or f"single{rid}"
         units = groups.setdefault(gid or f"row{rid}", {})
-        s, st, r0 = units.get(unit, (sym, setup, 0.0))
-        units[unit] = (s, st, r0 + risk)
+        s, st, r0, held = units.get(unit, (sym, setup, 0.0, False))
+        units[unit] = (s, st, r0 + risk, held or tid is not None)
     risks: dict[str, float] = {}
     book: list[dict[str, Any]] = []
     for units in groups.values():
-        sym, setup, risk = max(units.values(), key=lambda u: u[2])
+        sym, setup, risk, held = max(units.values(), key=lambda u: u[2])
         risks[sym] = risks.get(sym, 0.0) + risk
-        book.append({"symbol": sym, "setup": setup, "kind": "pending"})
+        if not held:   # one bet: its trade is in the book as open
+            book.append({"symbol": sym, "setup": setup, "kind": "pending"})
     return risks, book
 
 

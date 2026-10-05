@@ -46,6 +46,7 @@ from . import (
     errors,
 )
 from . import entries_fills as fills
+from . import entries_partial as partial
 from .entries_amend import EntryAmend
 from .entries_cancel import EntryCancel, amended_on_the_book, dead_label
 from .entries_place import EntryPlacement
@@ -84,7 +85,7 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         for col, typ in (("conviction", "TEXT"), ("regime_cell", "TEXT"), ("tranche", "TEXT"), ("leg", "INTEGER"),
                          ("client_id", "TEXT"), ("prearm_cid", "TEXT"), ("abandon", "INTEGER DEFAULT 0"),
                          ("mode", "TEXT NOT NULL DEFAULT 'demo'"), ("experiment", "TEXT"), ("limits", "TEXT"),
-                         ("overrides", "TEXT"), *((k, "REAL") for k in STAMPED)):
+                         ("overrides", "TEXT"), ("level_pick", "TEXT"), *((k, "REAL") for k in STAMPED)):
             if col not in have:
                 try:
                     self.j.db.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
@@ -149,6 +150,10 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
         for r in rows:
             if r["status"] in HINTS:
                 r["hint"] = HINTS[r["status"]]
+            elif partial.is_partial(r):
+                r["hint"] = (f"filled {r['filled_qty']:g} of {r['amount']:g} into trade #{r['trade_id']}: the remaining "
+                             f"{partial.remaining(r):g} rests until expiry and joins that trade if it fills; cancelled "
+                             "if the trade closes")
         return rows
 
     # ------------------------------------------------------------ the 5 s loop (guardian)
@@ -195,7 +200,10 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             self.j.log_decision("amend_entry", moved["reason"], e["symbol"], snapshot={
                 "entry_id": e["id"], "old_limit": e["limit_price"], "new_limit": moved["limit_price"]})
             e = {**e, **moved}
-        if float(o.get("filled") or 0) > 0:
+        if e.get("trade_id") is not None:   # filled in part: its remainder rests (entries_partial.py)
+            if partial.due(self, e, o):      # more filled, the order ended, or its trade closed
+                return await self.act("protect_fill", e, order=o)
+        elif float(o.get("filled") or 0) > 0:
             return await self.act("protect_fill", e, order=o)
         if e.get("tranche"):
             from .tranches import parent_closed
@@ -251,7 +259,8 @@ class EntryDesk(EntryPlacement, EntryAmend, EntryCancel):
             return None
         if e["cancel_below"] and last <= e["cancel_below"]:
             return f"price {last} fell below {e['cancel_below']} without filling: the move happened without us"
-        if e["atr_1h"] and now_ms - e["ref_ms"] <= FAST_APPROACH_WINDOW_MS and last - e["ref_price"] >= e["atr_1h"]:
+        if e["atr_1h"] and e.get("trade_id") is None and now_ms - e["ref_ms"] <= FAST_APPROACH_WINDOW_MS \
+                and last - e["ref_price"] >= e["atr_1h"]:   # (a remainder: price is at the level, its stop bounds it)
             return f"price rose {last - e['ref_price']:.6g} (≥ 1 ATR) toward the limit within 15 min: cascade risk"
         if now_ms - e["ref_ms"] > FAST_APPROACH_WINDOW_MS:
             self.j.post(lambda _j: self._set_row(e["id"], ref_price=last, ref_ms=now_ms))  # rolling 15-min reference

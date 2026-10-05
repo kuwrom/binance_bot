@@ -1,6 +1,6 @@
 """Fills the 5 s poll learns about late (#8): a limit that filled and was closed again before the poll is rebuilt from
 trade history as one closed trade; every limit trade opens at its fill (exchange clock), not at the poll; protection
-is make-before-break and a partial fill's remainder is pulled without losing track of it. Moving `fake.price` fills
+is make-before-break (a partial fill's remainder keeps resting: tests/test_entry_partial.py). Moving `fake.price` fills
 and triggers on its own (fake_engine.py); the journal is compared with the fake's fills and income."""
 
 from datetime import UTC, datetime, timedelta
@@ -178,22 +178,6 @@ async def test_a_fill_keeps_its_prearmed_stop_until_the_whole_position_stop_rest
     assert len(d.pending()) == 1 and [u for k, m, s, u in sent if k == "entry_poll_failing"] == [True]
     assert [x["event"] for x in await d.poll()] == ["filled"]
     assert list(fake.stops.values()) == [1.10] and fake.prearms == {}
-
-
-async def test_a_partial_fill_whose_remainder_wont_cancel_is_protected_and_journalled_once_settled():
-    d, t, fake = desk()
-    fake.price = 1.035
-    await d.propose_group([prop(1.04)])
-    oid = next(iter(fake.limits))
-    fake.fill_limit(oid, qty=fake.limits[oid]["amount"] / 2)
-    fail_cancel(fake, oid, times=1)
-    assert [x["event"] for x in await d.poll()] == ["fill_unsettled"]
-    assert list(fake.stops.values()) == [1.10] and fake.prearms == {}   # protected before anything else
-    assert t.j.trades() == [] and len(d.pending()) == 1                 # still tracked: more may fill
-    fake.fill_limit(oid, qty=fake.limits[oid]["amount"] / 4)            # and more does, before the retry
-    assert [x["event"] for x in await d.poll()] == ["filled"]
-    (tr,) = t.j.trades()
-    assert tr["amount"] == pytest.approx(fake.position) and fake.limits[oid]["status"] == "canceled"
 
 
 async def test_a_split_entry_leg_that_joins_is_stamped_at_its_own_fill(monkeypatch):

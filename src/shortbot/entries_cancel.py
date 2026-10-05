@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import ccxt.async_support as ccxt
 
 from . import clientid, errors, intent_changes
+from . import entries_partial as partial
 from .entry_gates import RESTING
 from .entry_intents import GRACE_S, located
 from .symlock import SymbolBusy
@@ -137,6 +138,7 @@ async def cancel_resting(desk: EntryDesk, reason: str,
 class EntryCancel:
     """Uses EntryDesk's trader, journal and entry-row storage (_rows, _settle)."""
     tr: Trader
+    j: Journal
     _cancel_fails: dict[int, int]
 
     if TYPE_CHECKING:   # EntryDesk's
@@ -169,12 +171,15 @@ class EntryCancel:
             got = await withdraw(self.tr, e, self.tr.alert, {"status": status, "reason": reason})
             if got == "unfilled":
                 await self._settle(e["id"], frm, status=status, reason=reason, order_id=e["order_id"])
+            elif got == "filled" and e.get("trade_id") is not None:   # a remainder: the poll settles the row
+                await self.j.write(lambda j: partial.mark_pulled(j, e, status, reason))
         return got
 
     def _filled_sibling(self, e: dict[str, Any]) -> int | None:
-        """Another order of this OCO group that already filled ('error' = a fill was reported); a split entry's own
-        legs don't count, they are one unit."""
-        rows = self._rows("group_id=? AND id!=? AND status IN ('filled','error')"
+        """Another order of this OCO group that already filled ('error' = a fill was reported; pending with a trade =
+        filled in part, entries_partial.py); a split entry's own legs don't count, they are one unit."""
+        rows = self._rows("group_id=? AND id!=? AND (status IN ('filled','error') OR (status='pending' AND trade_id IS "
+                          "NOT NULL))"
                           " AND (tranche IS NULL OR tranche IS NOT ?)", (e["group_id"], e["id"], e.get("tranche")))
         return rows[0]["id"] if rows else None
 
@@ -184,17 +189,20 @@ class EntryCancel:
         answer was lost must not fill after the group's first fill (#60).
         filled_first: filled before the cancel landed, so they keep their stops and the guardian's poll adopts them.
         cancel_failed: (maybe) still live; call again (after a fill, the poll's sibling rule retries it). A symbol busy
-        with a session's action is one of those: the fill that called this must still be journalled and announced."""
-        got: dict[str, list[int]] = {"unfilled": [], "filled": [], "unknown": []}
+        with a session's action is one of those: the fill that called this must still be journalled and announced.
+        remainders_cancelled (only when there are some): rows filled in part whose resting rest is now cancelled; what
+        filled stays in its trade, the poll settles the row."""
+        got: dict[str, list[int]] = {"unfilled": [], "filled": [], "unknown": [], "rest": []}
         for e in self._rows(RESTING + " AND group_id=?", (group_id,)):
             if e["id"] != keep and not (keep_tranche and e.get("tranche") == keep_tranche):
                 try:
-                    got[await self._cancel_entry(e, "cancelled", reason)].append(e["id"])
+                    out = await self._cancel_entry(e, "cancelled", reason)
                 except SymbolBusy as x:
                     log.info("entry #%s not cancelled: %s", e["id"], x)
-                    got["unknown"].append(e["id"])
+                    out = "unknown"
+                got["rest" if out == "filled" and e.get("trade_id") else out].append(e["id"])
         return {"ok": not got["unknown"], "cancelled": len(got["unfilled"]), "filled_first": got["filled"],
-                "cancel_failed": got["unknown"]}
+                "cancel_failed": got["unknown"], **({"remainders_cancelled": got["rest"]} if got["rest"] else {})}
 
     async def _cancel_by_rule(self, e: dict[str, Any], why: str) -> str:
         """A cancel rule fired. When the OCO retry keeps failing, a second order stays live in a group that already

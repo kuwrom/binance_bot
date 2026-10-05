@@ -16,9 +16,9 @@ order_trade_update_o.py, algo_update_o.py, account_update_a.py, listen_key_expir
 - listenKeyExpired {e, E, listenKey}: the stream reconnects with a fresh key.
 
 What wakes what (the handler is the job that already reconciles it on schedule, so a missed event costs latency only):
-- entries (the fill poll) on our entry's FILLED, CANCELED or EXPIRED. Not on PARTIALLY_FILLED: the poll adopts a
-  partial fill and withdraws the rest, so adopting it at the first print would cut positions short, a strategy change;
-  partial->full times are measured instead (user_stream.py).
+- entries (the fill poll) on our entry's FILLED, CANCELED or EXPIRED. Not on PARTIALLY_FILLED: the 5 s poll adopts a
+  partial fill and each later increment (its remainder keeps resting, entries_partial.py), and a print-by-print
+  wake-up would run the poll once per trade of a slow fill; partial->full times are measured (user_stream.py).
 - positions (the stop/plan pass: stop-outs, target settles, restores) on a target's fill, our stops' trigger,
   rejection or expiry, the whole-position stop's cancel (the app may have removed it), and Binance's own closes.
 - Nothing on the sessions' own market orders (they journal them), probes, or orders without our prefix (`foreign`:
