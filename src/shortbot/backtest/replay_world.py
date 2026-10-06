@@ -43,8 +43,10 @@ def snapshot(live_db: Path | str, dest: Path | str) -> Path:
 
 def world(snap: Path | str, dest: Path | str) -> Path:
     """Writable copy of the snapshot for the replayed DataHub stores and Journal, minus the logged scans (the replay
-    writes its own) and minus the guardian's market-map cache (the replay rebuilds maps as of each moment)."""
+    writes its own), minus the guardian's market-map cache (the replay rebuilds maps as of each moment) and minus its
+    on-chain snapshot (today's values: no point-in-time history)."""
     from ..market.market_map import KV_LAST, KV_PREV_RANKS
+    from ..market.onchain import KV_KEY as KV_ONCHAIN
     dest = Path(dest)
     _remove(dest)
     shutil.copyfile(snap, dest)
@@ -55,7 +57,7 @@ def world(snap: Path | str, dest: Path | str) -> Path:
         if t in have:
             db.execute(f"DELETE FROM {t}")
     if "kv" in have:
-        db.executemany("DELETE FROM kv WHERE k=?", [(KV_LAST,), (KV_PREV_RANKS,)])
+        db.executemany("DELETE FROM kv WHERE k=?", [(KV_LAST,), (KV_PREV_RANKS,), (KV_ONCHAIN,)])
     db.commit()
     db.close()
     return dest
@@ -167,7 +169,7 @@ def offline_feeds(oracle: Oracle | None = None) -> Iterator[None]:
     """Block the live network feeds the pipeline would call while replaying (they would return TODAY's data);
     with an oracle, CoinGecko trending and Binance hype come from the logged scan instead."""
     from .. import news
-    from ..market import sectors, social
+    from ..market import onchain, sectors, social
     from .replay_exchange import ReplayUnavailable
 
     async def unavailable(*a: Any, **k: Any) -> Any:
@@ -181,7 +183,7 @@ def offline_feeds(oracle: Oracle | None = None) -> Iterator[None]:
 
     patches = [(social, "coingecko_trending", cg), (social, "binance_hype", hype),
                (news, "news_for", unavailable), (news, "listing_announcements", unavailable),
-               (sectors, "fetch_tags", unavailable)]
+               (sectors, "fetch_tags", unavailable), (onchain, "fetch_json", unavailable)]
     saved = [(m, n, getattr(m, n)) for m, n, _ in patches]
     try:
         for m, n, f in patches:

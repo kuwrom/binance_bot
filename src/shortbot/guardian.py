@@ -81,7 +81,7 @@ MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600,
            "market_feed": (300, 30)}   # only without the market jobs: is the market guardian's feed fresh?   # #69: re-enable check; stops to Telegram
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600),
-            "long_shadow": (900, 900)}
+            "long_shadow": (900, 900), "onchain": (600, 300)}
 SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
         "cadence_shadow": (60, 50),   # #40: logs two rules every minute on live bars; no deep scores, no alerts
         "mtf_views": (60, 50)}        # #41: every coin's 5m-1d state at each 15m close, logged; no exchange calls
@@ -90,7 +90,7 @@ COINS = {"coin_memory": (900, 300)}   # focus coins: state, events, break scores
 # docs/DESKS.md). The rest, and coin_memory on its own book, are this account's and always run.
 MARKET_JOBS = frozenset({"social", "refresh", "housekeeping", "processes", "metrics", "research", "calendar",
                          "market_map", "sweeps", "supply", "laggard", "long_shadow", "scan", "cadence_shadow",
-                         "mtf_views"})
+                         "mtf_views", "onchain"})
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
 DELAYED_LANES = ("research", "scan", "coins")   # they start RESEARCH_START_DELAY_S after the others
 # a user-data event runs its job at once, but no sooner than this after the job's last start: a burst is one run, and
@@ -152,6 +152,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "gateway": self.check_gateway,
                "metrics": self.record_metrics, "research": self.label_research, "calendar": self.refresh_calendar,
                "market_map": self.market_map, "sweeps": self.sweep_study, "supply": self.refresh_supply,
+               "onchain": self.refresh_onchain,
                "ladder": self.ladder_shadow, "laggard": self.laggard_study, "long_shadow": self.long_shadow,
                "scan": self.tiered_scan, "cadence_shadow": self.cadence_shadow, "mtf_views": self.mtf_views,
                "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops,

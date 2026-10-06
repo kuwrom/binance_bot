@@ -297,6 +297,15 @@ class MarketContext:
         cache = (kv.get("coin_supply") if kv else None) or {}
         return (cache.get("coins") or {}).get(base_of(self.symbol))
 
+    async def onchain(self) -> dict | None:
+        """This coin's on-chain shadow features from the guardian's snapshot (market/onchain.py) or None. Read
+        only: a scan never calls the web3 endpoints itself."""
+        from .onchain import KV_KEY
+        from .sectors import base_of
+        kv = self.hub.extensions.get("kv")
+        snap = (kv.get(KV_KEY) if kv else None) or {}
+        return (snap.get("coins") or {}).get(base_of(self.symbol).upper())
+
 
 async def _as_async(value):
     return value
