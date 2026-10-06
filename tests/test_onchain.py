@@ -149,3 +149,63 @@ async def test_the_signal_is_features_only_and_they_reach_the_logged_candidate(m
 async def test_a_coin_the_guardian_never_snapshotted_reads_none(tmp_path):
     out = await REGISTRY["onchain"].fn(DataHub(ex_on(tmp_path / "x.db")).context("ABC/USDT:USDT"))
     assert out.features == {"oc_status": "none"} and not out.points and not out.vetoes
+
+
+async def test_a_failed_dynamic_keeps_the_coins_earlier_values_and_their_time(monkeypatch):
+    web3(monkeypatch)
+    j = Journal(":memory:")
+    await OC.refresh(j, ["KITE/USDT:USDT"], NOW_S)
+    before = snap(j)["coins"]["KITE"]
+    fake = web3(monkeypatch, fail_at="dynamic")                     # second run: lists fine, dynamic HTTP 503
+    await OC.refresh(j, ["KITE/USDT:USDT"], NOW_S + 600)
+    assert fake.count("dynamic") == 1 and snap(j)["coins"]["KITE"] == before   # holders kept, oc_ts not re-stamped
+    web3(monkeypatch, limit_at="dynamic")                           # and a 100004 on dynamic alone
+    res = await OC.refresh(j, ["KITE/USDT:USDT"], NOW_S + 1200)
+    assert res["rate_limited"] and snap(j)["coins"]["KITE"] == before
+
+
+async def test_the_dynamic_calls_share_the_budget_left_after_the_searches(monkeypatch):
+    many = {f"C{i}": [{**SEARCH["KITE"][0], "symbol": f"C{i}", "contractAddress": f"0x{i:040x}"}] for i in range(6)}
+    fake = web3(monkeypatch, search=many)
+    j = Journal(":memory:")
+    await OC.refresh(j, [f"C{i}/USDT:USDT" for i in range(6)], NOW_S)             # 6 searches + 6 dynamic
+    monkeypatch.setattr(OC, "CALLS_PER_RUN", 4)
+    fake.calls.clear()
+    res = await OC.refresh(j, [f"C{i}/USDT:USDT" for i in range(6)], NOW_S + 600)  # matches cached: dynamic only
+    assert fake.count("search") == 0 and fake.count("dynamic") == res["dynamic"] == 4
+    ts = {c: v["oc_ts"] for c, v in snap(j)["coins"].items()}
+    assert sorted(ts.values()).count(int((NOW_S + 600) * 1000)) == 4 and len(ts) == 6   # 2 kept their last time
+
+
+async def test_a_run_past_its_deadline_sends_nothing_more_and_still_writes(monkeypatch):
+    clock_s = [1000.0]
+    monkeypatch.setattr(OC.time, "monotonic", lambda: clock_s[0])
+    fake = FakeWeb3(search={f"C{i}": [{**SEARCH["KITE"][0], "symbol": f"C{i}", "contractAddress": f"0x{i:040x}"}]
+                            for i in range(5)})
+
+    async def slow(*a, **k):
+        clock_s[0] += 50.0                                            # each call takes 50 s on a slow host
+        return await fake(*a, **k)
+    monkeypatch.setattr(OC, "fetch_json", slow)
+    j = Journal(":memory:")
+    res = await OC.refresh(j, [f"C{i}/USDT:USDT" for i in range(5)], NOW_S)
+    assert res["deadline"] and fake.count("search") == 3 and fake.count("dynamic") == 0   # 120 s: 3 calls
+    assert set(snap(j)["matches"]) == {"C0", "C1", "C2"}          # what it had is written
+
+
+async def test_a_malformed_row_or_answer_is_skipped_not_the_whole_run(monkeypatch):
+    fake = web3(monkeypatch)
+    real = fake.__call__
+
+    async def odd(method, path, params=None, body=None):
+        out = await real(method, path, params, body)
+        if path == OC.INFLOW:
+            out = {**out, "data": ["junk", 7, *out["data"]]}
+        if path == OC.SIGNALS:
+            return ["not", "an", "object"]
+        return out
+    monkeypatch.setattr(OC, "fetch_json", odd)
+    j = Journal(":memory:")
+    await OC.refresh(j, ["KITE/USDT:USDT"], NOW_S)
+    k = snap(j)["coins"]["KITE"]
+    assert k["oc_inflow_rank"] == 2 and "oc_sm_signals" not in k and k["oc_holders"] == 9665

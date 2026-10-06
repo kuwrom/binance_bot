@@ -30,6 +30,8 @@ def _journal(tmp_path):
 def test_snapshot_is_read_only_and_world_is_clean(tmp_path):
     j = _journal(tmp_path)
     j.set("market_map_last", "{}")
+    j.set("onchain", '{"coins": {"KITE": {"oc_status": "matched"}}}')   # today's on-chain values: not point-in-time
+    j.set("coin_supply", "{}")
     snap = W.snapshot(tmp_path / "live.db", tmp_path / "s" / "snap.db")
     with pytest.raises(sqlite3.OperationalError):
         sqlite3.connect(str(snap)).execute("DELETE FROM candidates")
@@ -38,6 +40,7 @@ def test_snapshot_is_read_only_and_world_is_clean(tmp_path):
     assert db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
     assert db.execute("SELECT COUNT(*) FROM kv WHERE k='market_map_last'").fetchone()[0] == 0
+    assert db.execute("SELECT k FROM kv WHERE k IN ('onchain', 'coin_supply')").fetchall() == [("coin_supply",)]
     scans = W.logged_scans(snap, T - 1, T + 1)
     assert len(scans) == 1 and scans[0]["regime"] == "neutral" and len(scans[0]["rows"]) == 2
     assert scans[0]["rows"][0]["setups"] == ["pump_fade"] and scans[0]["rows"][0]["features"]["change_24h"] == 12.5

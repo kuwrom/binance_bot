@@ -13,8 +13,9 @@ kept MATCH_TTL_S. Holder and supply fields are the matched CHAIN's (a bridged to
 
 Like the social feeds, the guardian snapshots this (job `onchain`, every 10 min, market-wide) into the kv table and a
 scan only reads it (MarketContext.onchain): a scan never waits on these calls. Per run: each market-wide list once per
-chain a matched coin lives on, then at most CALLS_PER_RUN per-coin calls (search for a new coin, dynamic per coin);
-a coin left over keeps its last features, which carry their own time (oc_ts)."""
+chain a matched coin lives on (at most 13), then at most CALLS_PER_RUN per-coin calls (search for a new coin, dynamic
+per coin), all within RUN_DEADLINE_S. A coin not reached, or whose `dynamic` failed, keeps its last features, which
+carry their own time (oc_ts)."""
 
 from __future__ import annotations
 
@@ -48,6 +49,8 @@ MIN_LIQUIDITY_USD = 100_000.0
 MATCH_TTL_S = 86_400.0
 CALLS_PER_RUN = 40
 PER_COIN_CONCURRENCY = 4
+RUN_DEADLINE_S = 120.0    # well under the lane's 300 s timeout (guardian.RESEARCH): a slow host ends the run, which
+                          # still writes what it has (+ at most one TIMEOUT_S call in flight)
 KV_KEY = "onchain"
 
 
@@ -70,13 +73,18 @@ async def _data(method: str, path: str, params: dict | None = None, body: dict |
     except Exception as e:  # noqa: BLE001 - an unreachable feed is a missing feature, never a broken job
         log.info("onchain %s: %s: %s", path.rsplit("/", 3)[-3], type(e).__name__, e)
         return None
-    code = str((payload or {}).get("code"))
+    code = str(payload.get("code")) if isinstance(payload, dict) else "not an object"
     if code == RATE_LIMITED:
         raise RateLimited(path)
     if code != OK:
         log.info("onchain %s: code %s", path.rsplit("/", 3)[-3], code)
         return None
     return payload.get("data")
+
+
+def _rows(data: Any) -> list[dict[str, Any]]:
+    """The dict rows of a list answer: a malformed row is skipped, never the whole run."""
+    return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
 
 def _f(x: Any) -> float | None:
@@ -96,8 +104,7 @@ def key_of(ca: Any) -> str:
 # ------------------------------------------------------------ parsers (pure; real response shapes in tests/fakes_onchain)
 def parse_match(data: Any, base: str, now_s: float) -> dict[str, Any]:
     """The perp's token from a search answer (module doc), or {"matched": False}."""
-    rows = [x for x in (data if isinstance(data, list) else [])
-            if str(x.get("symbol") or "").upper() == base and str(x.get("chainId")) in CHAINS]
+    rows = [x for x in _rows(data) if str(x.get("symbol") or "").upper() == base and str(x.get("chainId")) in CHAINS]
     best = max(rows, key=lambda x: _f(x.get("liquidity")) or 0.0, default=None)
     liq = _f(best.get("liquidity")) if best else None
     if best is None or liq is None or liq < MIN_LIQUIDITY_USD or not best.get("contractAddress"):
@@ -108,7 +115,7 @@ def parse_match(data: Any, base: str, now_s: float) -> dict[str, Any]:
 
 def parse_inflow(data: Any) -> dict[str, dict[str, Any]]:
     """{contract: {inflow, traders, rank}}: the chain's smart-money net inflow ranking (24h), 1 = largest."""
-    rows = data if isinstance(data, list) else []
+    rows = _rows(data)
     return {key_of(x.get("ca")): {"inflow": _f(x.get("inflow")), "traders": _f(x.get("traders")), "rank": i + 1}
             for i, x in enumerate(rows) if x.get("ca")}
 
@@ -116,7 +123,7 @@ def parse_inflow(data: Any) -> dict[str, dict[str, Any]]:
 def parse_signals(data: Any) -> dict[str, dict[str, Any]]:
     """{contract: the latest smart-money signal plus how many the page holds for it}."""
     out: dict[str, dict[str, Any]] = {}
-    for x in data if isinstance(data, list) else []:
+    for x in _rows(data):
         k, t = key_of(x.get("contractAddress")), _f(x.get("signalTriggerTime"))
         if not k or t is None:
             continue
@@ -131,8 +138,8 @@ def parse_signals(data: Any) -> dict[str, dict[str, Any]]:
 
 def parse_rank(data: Any) -> dict[str, int]:
     """{contract: rank} of a token-rank list (1 = top)."""
-    rows = (data or {}).get("tokens") if isinstance(data, dict) else None
-    return {key_of(x.get("contractAddress")): i + 1 for i, x in enumerate(rows or []) if x.get("contractAddress")}
+    rows = _rows(data.get("tokens")) if isinstance(data, dict) else []
+    return {key_of(x.get("contractAddress")): i + 1 for i, x in enumerate(rows) if x.get("contractAddress")}
 
 
 def parse_dynamic(data: Any, now_s: float) -> dict[str, Any]:
@@ -204,17 +211,25 @@ class _Run:
 
     def __init__(self) -> None:
         self.budget, self.limited = CALLS_PER_RUN, False
-        self.stats: dict[str, Any] = {"searched": 0, "dynamic": 0, "lists": 0, "rate_limited": False}
+        self.ends = time.monotonic() + RUN_DEADLINE_S
+        self.stats: dict[str, Any] = {"searched": 0, "dynamic": 0, "lists": 0, "rate_limited": False,
+                                      "deadline": False}
+
+    def stopped(self) -> bool:
+        if not self.stats["deadline"] and time.monotonic() >= self.ends:
+            self.stats["deadline"] = True
+            log.warning("onchain: run deadline (%.0f s) reached; the rest keep their earlier values", RUN_DEADLINE_S)
+        return self.limited or self.stats["deadline"]
 
     def spend(self) -> bool:
-        if self.limited or self.budget <= 0:
+        if self.stopped() or self.budget <= 0:
             return False
         self.budget -= 1
         return True
 
     async def call(self, fn, *a: Any) -> Any:
-        """fn(*a), or None once the source has said 100004 (then nothing more is sent this run)."""
-        if self.limited:
+        """fn(*a), or None once the source has said 100004 or the deadline passed (nothing more is sent)."""
+        if self.stopped():
             return None
         try:
             return await fn(*a)
@@ -257,14 +272,15 @@ async def refresh(journal: Any, symbols: list[str], now_s: float | None = None) 
     sem = asyncio.Semaphore(PER_COIN_CONCURRENCY)
 
     async def one(base: str, m: dict[str, Any]) -> None:
-        if not run.spend():
-            if base not in coins:   # out of budget: a known coin keeps its last snapshot, a new one gets the lists
-                coins[base] = coin_features(m, lists, None, now)
-            return
-        async with sem:
-            data = await run.call(_data, "GET", DYNAMIC, {"chainId": m["chain"], "contractAddress": m["contract"]})
-        run.stats["dynamic"] += 1
-        coins[base] = coin_features(m, lists, parse_dynamic(data, now) if data is not None else None, now)
+        data = None
+        if run.spend():
+            async with sem:
+                data = await run.call(_data, "GET", DYNAMIC, {"chainId": m["chain"], "contractAddress": m["contract"]})
+            run.stats["dynamic"] += 1
+        if data is not None:
+            coins[base] = coin_features(m, lists, parse_dynamic(data, now), now)
+        elif base not in coins:   # not reached, or its dynamic failed: a known coin keeps its last snapshot and oc_ts
+            coins[base] = coin_features(m, lists, None, now)
     await asyncio.gather(*(one(b, m) for b, m in live.items()))
     for b in bases:
         if (matches.get(b) or {}).get("matched") is False:

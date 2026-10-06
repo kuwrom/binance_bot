@@ -94,8 +94,10 @@ are the matched chain's, so a bridged token's top-10 share includes bridges and 
 
 **Cadence:** the guardian's market-wide job `onchain` (every 10 min) snapshots the same coins as the social snapshot
 (top 30 movers plus every coin held or resting) into the kv table; a scan only reads it (`oc_age_min` = snapshot age).
-Per run: each list once per chain a matched coin lives on (at most 11 calls) and at most 40 per-coin calls (a search
-for a new coin, then `dynamic`); a match is kept 24h. A rate limit stops the run and keeps the earlier values.
+Per run: each list once per chain a matched coin lives on (at most 13 calls: 3 inflow, 2 signal, 8 rank) and at most 40
+per-coin calls (a search for a new coin, then `dynamic`), within a 120 s deadline (the lane's timeout is 300 s); a match
+is kept 24h. A rate limit or the deadline stops the run, which still writes what it has; a coin not reached, or whose
+`dynamic` failed, keeps its earlier values and their time.
 
 **Expect little overlap:** the smart-money lists are mostly young BSC and Solana DEX tokens; most perps will show
 `oc_inflow_listed = false` and no signal. The holder structure and flows of new listings and Alpha coins are the
