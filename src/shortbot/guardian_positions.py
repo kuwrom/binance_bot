@@ -219,6 +219,8 @@ class PositionChecks:
             restored = await self._restore_stop(sym)
             if p["UNPROTECTED"] or not close:
                 return restored
+        else:   # seen resting: the failure count is of consecutive restores (KITE #22, 2026-10-06: a listing gap)
+            self.stop_fails.pop(sym, None)
         await self._untracked_trip(p)
         if p["stop_distance_pct"] is not None and p["stop_distance_pct"] < STOP_NEAR_PCT:
             await self.n.send("stop_near", f"Mark {p['mark']} is {p['stop_distance_pct']}% from stop "

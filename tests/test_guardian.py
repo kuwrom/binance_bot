@@ -68,6 +68,24 @@ async def test_forced_close_after_repeated_restore_failures():
     assert fake.position == 0 and "forced_close" in kinds(g)
 
 
+async def test_a_pass_that_sees_the_stop_resets_the_restore_failure_count():
+    fake = FakeCcxt()
+    g = guardian_with(fake)
+    await open_trade(g)
+    resting = dict(fake.stops)
+    fake.stops.clear()                     # the listing hides the stop (KITE #22, 2026-10-06): restores fail twice
+    fake.fail_stop = 2
+    for _ in range(2):
+        await g.check_positions()
+    fake.stops.update(resting)             # the next pass sees it resting again
+    await g.check_positions()
+    fake.stops.clear()                     # a later, unrelated gap: one failure is a first failure, not the third
+    fake.fail_stop = 1
+    await g.check_positions()
+    assert fake.position != 0 and "forced_close" not in kinds(g)
+    assert [a["message"][:11] for a in g.j.alerts(100) if a["kind"] == "stop_restore_failed"][0] == "attempt 1/3"
+
+
 async def test_stop_out_on_exchange_is_reconciled_with_real_pnl():
     fake = FakeCcxt()
     g = guardian_with(fake)
