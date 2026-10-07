@@ -106,17 +106,26 @@ class MarketJobs:
             return
 
         async def run() -> None:
-            perps = await self.ex.coin_perps()
-            tickers = await self.ex.public.fetch_tickers()
-            movers = sorted((t for sym, t in tickers.items() if sym in perps),
-                            key=lambda t: -abs(t.get("percentage") or 0))[:SOCIAL_TOP_MOVERS]
-            syms = {t["symbol"] for t in movers} | {t["symbol"] for t in self.j.open_trades(all_modes=True)} | \
-                {e["symbol"] for e in self.entries.pending()}
-            bases = sorted({x.split("/")[0].removeprefix("1000") for x in syms})
+            bases = sorted({x.split("/")[0].removeprefix("1000") for x in await self._attention_symbols()})
             n = await social_snapshot(self.social_store, bases)
             log.info("social snapshot: %d rows for %d coins", n, len(bases))
 
         self._social_task = asyncio.create_task(guarded("social", run(), self.n))
+
+    async def _attention_symbols(self) -> set[str]:
+        """The top movers by |24h| plus every coin held or resting, on both desks."""
+        perps = await self.ex.coin_perps()
+        tickers = await self.ex.public.fetch_tickers()
+        movers = sorted((t for sym, t in tickers.items() if sym in perps),
+                        key=lambda t: -abs(t.get("percentage") or 0))[:SOCIAL_TOP_MOVERS]
+        return {t["symbol"] for t in movers} | {t["symbol"] for t in self.j.open_trades(all_modes=True)} | \
+            {e["symbol"] for e in self.entries.pending()}
+
+    async def refresh_onchain(self) -> None:
+        """On-chain shadow features (market/onchain.py) for the same coins as the social snapshot, every 10 min:
+        scans read the kv snapshot and never call the web3 endpoints themselves."""
+        from .market import onchain
+        log.info("onchain: %s", await onchain.refresh(self.j, sorted(await self._attention_symbols())))
 
     async def research_refresh(self) -> None:
         """Weekly walk-forward refresh (refresh.py) in a child process: the guardian never waits on it."""

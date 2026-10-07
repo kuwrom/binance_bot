@@ -71,6 +71,38 @@ Weight each signal by age: `w = exp(−Δt·ln2/HL)`. Model "hotness" as a Hawke
 
 **Flag:** `hype_fade` = z ≥ 3 within 48h AND the fast/slow ratio is falling AND price is ≥ 20% above its 3-day low AND funding is positive. It's a confirmation or veto for `pump_fade`, never a standalone entry. Validate over 50+ events against matched non-hype gainers.
 
+### 3b. On-chain shadow features (Binance Skills Hub; owner decision 2026-10-06)
+**Shadow only:** logged as `oc_*` features on every scan candidate; no points, no vetoes, never a `data_missing`
+input. A research review (`research_report.by_feature_tertile`) decides whether any of them earns a place in a score.
+
+**Source:** the hub's public, keyless Binance Wallet ("web3") endpoints, called as its skills call them
+(github.com/binance/binance-skills-hub @ 9960c67; a read-only copy lives outside the repo in `~/refs/`):
+- `crypto-market-rank`: smart-money net inflow (`.../tracker/wallet/token/inflow/rank/query/ai`, 24h, chains BSC,
+  Solana, Base) and token-rank Alpha and Trending (`.../pulse/unified/rank/list/ai`).
+- `trading-signal`: smart-money buy/sell signals (`.../web/signal/smart-money/ai`, BSC and Solana).
+- `query-token-info`: `search` (find the token) and `dynamic` (holders, top-10 share, KYC holders, smart-money / dev /
+  insider / sniper / bundler shares, buy and sell volume by window, the Binance-routed net).
+
+They are undocumented web endpoints: no SLA, no published rate limit (business code `100004` = rate-limited), fields
+can change, and the unit of most holder shares is undocumented (logged as reported). Third-party text (names, tags)
+is not kept.
+
+**Which token is the perp's:** `search` by the base symbol, exact symbol matches on Ethereum, BSC, Base and Solana,
+the deepest pool wins (never the largest market cap: clones report fake caps, e.g. a Solana "MOVR" at $3.2B cap on a
+$17k pool) and only at ≥ $100k liquidity; otherwise `oc_status = no_match` and no features. Holder and supply fields
+are the matched chain's, so a bridged token's top-10 share includes bridges and exchanges.
+
+**Cadence:** the guardian's market-wide job `onchain` (every 10 min) snapshots the same coins as the social snapshot
+(top 30 movers plus every coin held or resting) into the kv table; a scan only reads it (`oc_age_min` = snapshot age).
+Per run: each list once per chain a matched coin lives on (at most 13 calls: 3 inflow, 2 signal, 8 rank) and at most 40
+per-coin calls (a search for a new coin, then `dynamic`), within a 120 s deadline (the lane's timeout is 300 s); a match
+is kept 24h. A rate limit or the deadline stops the run, which still writes what it has; a coin not reached, or whose
+`dynamic` failed, keeps its earlier values and their time.
+
+**Expect little overlap:** the smart-money lists are mostly young BSC and Solana DEX tokens; most perps will show
+`oc_inflow_listed = false` and no signal. The holder structure and flows of new listings and Alpha coins are the
+likeliest to carry information (the listing-fade edge).
+
 **Legal red lines:**
 - Trading on material non-public information is illegal (SEC v. Wahi; MiCA Arts 89–91).
 - **Never:**
