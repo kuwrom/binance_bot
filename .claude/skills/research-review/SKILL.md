@@ -40,7 +40,9 @@ print(lab.group_mean(rows, lambda r: (r["features"]["funding_8h"] or 0) > 0.001,
 print(lab.group_mean(rows, lambda r: r["features"]["lower_high"], "max_adverse_24h"))
 PY
 ```
-Also available: `lab.ohlcv`, `lab.oi_history`, `lab.funding_history`, `lab.taker_ratio`, `lab.tickers`, `lab.snapshot`, `lab.metrics` (guardian history), `lab.trades`, `lab.report`, plus the indicators `lab.rsi/ema/atr/vwap_bands`. The module is read-only: no orders.
+Also available: `lab.ohlcv`, `lab.oi_history`, `lab.funding_history`, `lab.taker_ratio`, `lab.tickers`, `lab.snapshot`, `lab.metrics` (guardian history), `lab.trades`, `lab.report`, `lab.get(path, params)` (any public endpoint), plus the indicators `lab.rsi/ema/atr/vwap_bands`. The module is read-only: no orders.
+
+**Scripts never call fapi.binance.com directly** (no urllib, requests, httpx or curl, no thread pools of raw calls). Use `shortbot.lab` or `shortbot.http.get(path, params)`: both go through the host-wide weight guard, paced, so a study can't spend the IP's budget the guardian needs (a raw script got the IP banned for 14 min on 2026-10-07). Bulk history comes from data.binance.vision (`shortbot.histdata`, `data/hist.db`), which costs no API weight (docs/SCANNING.md "Weight guard").
 
 ## Acting on findings
 Settle each change with the data, not by asking the owner which option they prefer: run the study, record it, change it openly, then tell the owner what changed and why. Ask only on a genuine risk-appetite trade-off, with each option quantified. Code changes need tests (`.venv/bin/pytest -q`).

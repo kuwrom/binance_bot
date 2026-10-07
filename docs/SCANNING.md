@@ -97,7 +97,7 @@ One IP budget (2,400/min) is shared by:
 A 429 or a -1003/418 ban blinds the stop checks, so research must never be the call that tips it.
 
 **Rules:**
-1. **Every client reads `x-mbx-used-weight-1m` on each response.**
+1. **Every client reads `x-mbx-used-weight-1m` on each response**, and shares it with every process on the host (`weight_ledger.py`). Scripts never call fapi.binance.com directly: they use `shortbot.http` or `shortbot.lab`, and data.binance.vision for bulk history (see "Built" below).
    - Research jobs (scan, tier 2, labelling) pause while used weight > 50% (1,200).
    - They also pause for 2 minutes after any 429.
    - The protective lane never waits.
@@ -139,9 +139,16 @@ A 429 or a -1003/418 ban blinds the stop checks, so research must never be the c
   - `x-mbx-used-weight-1m` arrives lowercase.
 - **Ignored readings:** responses from `ticker/bookTicker` and `ticker/price`. The official SDK calls their header inaccurate.
 - **Reading lifetime:** Binance doesn't document whether the minute is fixed or rolling, so a reading is trusted for 60 s.
+- **Host-wide (`weight_ledger.py`, built after the 2026-10-07 ban):** Binance limits weight per IP, so every process on the host shares one budget. A raw-urllib script (472 klines limit=1000 + ticker/24hr, 8 threads, ~2,400 weight in under a minute) got the IP banned (418, -1003) for 14 min and the guardian went blind; the desk's processes had never seen its usage.
+  - One SQLite file, `data/weight_ledger.db` (`SHORTBOT_WEIGHT_LEDGER` overrides the path; `off` disables it), WAL and synchronous=OFF: it holds seconds-old state. Docker's `./data` volume is the host's `data/`, so the containers and host processes share it.
+  - Every guarded response writes its reading (the freshest wins), its exchangeInfo limit and any 429/418/-1003 with Retry-After (wall times). Every non-protective request reads that state first, plus the weight other processes have in flight (reserved at admission with its up-front cost, released on the answer, ignored after 30 s), and applies the class rules above. A ban one process saw stops research and desk calls in all of them; protective calls never read the ledger and never wait.
+  - Best-effort: a ledger error is logged once and the process falls back to its own readings.
+  - **Pacing** (`weight.tagged(..., paced=True)`: `shortbot.lab`, `shortbot.http`): research weight is capped at 150 per 10 s per host (900/min, 37.5% of 2,400) across processes and threads, so a loop or a thread pool can't burst. `/futures/data/*` (1,000 requests/5 min/IP) is paced at 30 calls and `fundingRate`/`fundingInfo` (500/5 min/IP) at 15 calls per 10 s.
+- **Scripts never call fapi.binance.com directly** (urllib, requests, httpx, curl, ccxt clients of their own). Use `shortbot.http.get(path, params)` (research, paced, costed up front from the published weights, recorded host-wide; `lab.get` is the same) or `shortbot.lab`. Bulk history comes from data.binance.vision (`shortbot.histdata`, `histdata_vision`): a CDN, no API weight. `level_watch` reads through `shortbot.http` as desk and pauses its polls while the IP is near its limit or banned.
+- **Published weights** (`http.cost`, https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api, read 2026-10-07): klines and its variants by limit [1,100) 1, [100,500) 2, [500,1000] 5, >1000 10 (default 500, max 1500); ticker/24hr 1 with a symbol, 40 without; premiumIndex 1 / 10; ticker/price and bookTicker 1 / 2; depth 2/5/10/20 for limit ≤50/100/500/1000; aggTrades 20; exchangeInfo and openInterest 1; `/futures/data/*` 0 (own request limit). The IP limit is REQUEST_WEIGHT 2,400/min (exchangeInfo `rateLimits`).
 - **Follow-ups:**
-  - the state is per process: the MCP server, CLI, guardian and lab learn the IP's usage only from their own responses. Sharing the last reading through kv is a follow-up.
-  - `lifecycle_data.py` calls fapi over raw httpx, so it is not guarded.
+  - `lifecycle_data.py` (raw httpx) and `backtest/replay_fetch.py` call fapi outside the guard.
+  - A worktree's relative `data/` is its own: a script run from `~/wt-*` shares the desk's ledger only with `SHORTBOT_WEIGHT_LEDGER` (or `SHORTBOT_DB`) pointing at the desk checkout's `data/`.
 
 ## Build (who)
 1. **Stream collector + local candle store** (`market/streams.py`): tickers, mark/premium/funding, klines for the liquid universe, a reconnect at 24h, SQLite. It is a guardian process like `LiquidationRecorder` (wired in #72).

@@ -1,7 +1,8 @@
 """Between-scan watch for a session (docs/DOCTRINE.md "The loop"): every 45 s, one stdout line only when a watched coin
 crosses one of its levels (entry, stop, targets, triggers), its funding changes sign, or a new alert lands for this
 desk. Meant for Claude Code's Monitor tool, which wakes the session on each line. Read-only: public mark price and
-funding, and the journal opened read-only.
+funding, and the journal opened read-only. Its reads go through the weight guard (shortbot.http, desk class): while
+the IP is near its limit or banned (a 429/418 any process on the host saw) it skips polls and says so once.
 
     .venv/bin/python -m shortbot.level_watch --level ZRO=1.85,1.909,2.005 --level GTC=0.17,0.21
 """
@@ -9,20 +10,19 @@ funding, and the journal opened read-only.
 from __future__ import annotations
 
 import argparse
-import json
 import sqlite3
 import sys
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any
 
+from . import http, weight
 from .alerts_view import MINE
 from .config import Settings
 
 EVERY_S = 45
+_sleep = time.sleep   # tests replace it
 BUFFER = 0.003   # a crossing counts once price is 0.3% past the level: no line per tick while it sits on it
-PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex?symbol={}"
 
 
 def zone(price: float, levels: list[float], prev: int | None = None, buffer: float = BUFFER) -> int:
@@ -48,9 +48,18 @@ def parse_levels(specs: list[str]) -> dict[str, list[float]]:
 
 
 def _premium(sym: str) -> tuple[float, float]:
-    with urllib.request.urlopen(PREMIUM_URL.format(sym), timeout=10) as r:
-        d = json.load(r)
+    """Mark price and funding (premiumIndex, weight 1). Never waits: a blocked poll is skipped (weight.BudgetWait)."""
+    d = http.get("/fapi/v1/premiumIndex", {"symbol": sym}, cls=weight.DESK, wait_s=0)
     return float(d["markPrice"]), float(d["lastFundingRate"])
+
+
+def _backoff(e: Exception) -> str | None:
+    """Why polls pause, for a budget wait or a limit answer (429/418/-1003); None for any other error."""
+    if isinstance(e, weight.BudgetWait):
+        return str(e)
+    if isinstance(e, http.BinanceHTTPError) and e.limited:
+        return str(e)
+    return None
 
 
 def _alerts(db: Path, mode: str, after: int | None) -> tuple[int, list[str]]:
@@ -66,10 +75,14 @@ def _alerts(db: Path, mode: str, after: int | None) -> tuple[int, list[str]]:
         c.close()
 
 
-def run(levels: dict[str, list[float]], db: Path, mode: str, every_s: float = EVERY_S, out: Any = sys.stdout) -> None:
+def run(levels: dict[str, list[float]], db: Path, mode: str, every_s: float = EVERY_S, out: Any = sys.stdout,
+        polls: int | None = None) -> None:
+    """Poll every `every_s` until killed (`polls`: stop after that many, for tests)."""
     state: dict[str, tuple[int, bool]] = {}
     last_alert: int | None = None
-    while True:
+    paused = False
+    while polls is None or polls > 0:
+        polls = None if polls is None else polls - 1
         try:
             for sym, lv in levels.items():
                 px, fr = _premium(sym)
@@ -78,12 +91,23 @@ def run(levels: dict[str, list[float]], db: Path, mode: str, every_s: float = EV
                 if old and (old[0] != z or old[1] != neg):
                     print(f"{sym} {px:g} zone {old[0]}->{z} of {lv}; funding {fr:+.5f}", file=out, flush=True)
                 state[sym] = (z, neg)
+            if paused:
+                print("watch resumed: prices readable again", file=out, flush=True)
+                paused = False
+        except Exception as e:  # noqa: BLE001 - one failed poll never ends the watch
+            why = _backoff(e)
+            if why is None:
+                print(f"watch error: {type(e).__name__}: {e}", file=out, flush=True)
+            elif not paused:   # one line per pause: every line wakes the session
+                print(f"watch paused (weight guard, prices not read): {why}", file=out, flush=True)
+                paused = True
+        try:
             last_alert, lines = _alerts(db, mode, last_alert)
             for ln in lines:
                 print(ln, file=out, flush=True)
         except Exception as e:  # noqa: BLE001 - one failed poll never ends the watch
             print(f"watch error: {type(e).__name__}: {e}", file=out, flush=True)
-        time.sleep(every_s)
+        _sleep(every_s)
 
 
 def main() -> None:

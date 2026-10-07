@@ -121,18 +121,31 @@ def wire(client, session: FakeSession):
     return client
 
 
+class FakeClock:
+    """The guard's clocks: `t` (monotonic) advances through the guard's own sleeps (async and blocking) or a test's
+    `clock.t += s`; `wall` moves with it (the host-wide ledger keeps wall times)."""
+
+    def __init__(self, t: float = 1000.0, wall: float = 1_759_400_100.0):
+        self.t, self.slept, self._off = t, 0.0, wall - t
+
+    @property
+    def wall(self) -> float:
+        return self.t + self._off
+
+    def sleep_sync(self, s: float) -> None:
+        self.t += s
+        self.slept += s
+
+
 def fake_clock(monkeypatch, weight):
-    """The guard's clocks: `t` (monotonic) and `wall` advance only through the guard's own sleeps."""
     import asyncio
-    from types import SimpleNamespace
-    c = SimpleNamespace(t=1000.0, wall=1_759_400_100.0, slept=0.0)
+    c = FakeClock()
 
     async def sleep(s):
-        c.t += s
-        c.wall += s
-        c.slept += s
+        c.sleep_sync(s)
         await asyncio.sleep(0)
     monkeypatch.setattr(weight, "_now", lambda: c.t)
     monkeypatch.setattr(weight, "_wall", lambda: c.wall)
     monkeypatch.setattr(weight, "_sleep", sleep)
+    monkeypatch.setattr(weight, "_sleep_sync", c.sleep_sync)
     return c
