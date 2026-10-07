@@ -16,12 +16,12 @@ must never be the call that tips it.
 - A write (any non-GET: orders, stops, cancels) starts an order sequence: the rest of the tagged scope never waits.
 - Yielding is waiting, polled every POLL_S, up to the scope's deadline (a guardian job's timeout, an MCP/CLI call's
   ENTRY_WAIT_S), then BudgetWait. A waiting call holds no lock or connection: it waits before the request is sent.
-- Host-wide (weight_ledger.py): every reading and limit answer is also written to a ledger every process on the host
-  reads before a non-protective call, with the weight other processes have in flight. A ban one process saw stops
-  research and desk calls in all of them; protective calls never read it and never wait.
-- Pacing (a `paced` scope: lab, shortbot.http): research weight per host is capped at PACE_WEIGHT_CAP per PACE_WINDOW_S
-  across processes and threads, so a script's loop can't burst; the /futures/data and funding-rate endpoints, which have
-  their own per-IP request limits, are paced by call count.
+- Host-wide (weight_ledger.py, weight_share.py): every desk/research reading and limit answer is also written to a
+  ledger every process on the host reads before a desk/research call, with the weight other processes have in flight.
+  A ban one process saw stops research and desk calls in all of them. Protective calls never touch the ledger (not
+  before sending, not when recording) and never wait; nothing waits on a contended ledger.
+- Pacing (a `paced` scope: lab, shortbot.http): research weight per host is capped (weight_share.PACE_WEIGHT_CAP per
+  PACE_WINDOW_S) across processes and threads, so a script's loop can't burst; in-process when the ledger is off.
 """
 
 from __future__ import annotations
@@ -38,8 +38,9 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from . import weight_ledger
-from .weight_ledger import Pace
+from . import weight_share
+from .weight_ledger import Ledger
+from .weight_share import Ticket
 
 log = logging.getLogger("shortbot.weight")
 
@@ -61,12 +62,6 @@ UNGUARDED = ("data.binance.vision",)
 # the official SDK's docstrings: "The field X-MBX-USED-WEIGHT-1M in response header is not accurate from this endpoint,
 # please ignore" (binance-connector-python, derivatives_trading_usds_futures rest_api.py: bookTicker, ticker price v2)
 INACCURATE = ("/ticker/bookTicker", "/ticker/price")
-# pacing (paced scopes only): 900 research weight/min per host, 37.5% of fapi's 2,400; separate request limits by call
-# count: /futures/data/* "IP rate limit 1000 requests/5min", fundingRate + fundingInfo "share 500/5min/IP"
-# (https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api, 2026-10-07)
-PACE_WINDOW_S, PACE_WEIGHT_CAP = 10.0, 150.0
-PACE_LANES = (("/futures/data/", "futures_data", 30.0), ("/fapi/v1/fundingRate", "funding", 15.0),
-              ("/fapi/v1/fundingInfo", "funding", 15.0))
 _CODE_1003 = re.compile(r'"code"\s*:\s*-1003\b')
 _RATE_LIMITS = re.compile(r'"rateLimits"\s*:\s*(\[[^\]]*\])')
 
@@ -80,7 +75,6 @@ GUARDIAN_JOBS = {"governor": PROTECTIVE,       # the kill-switch drawdown trip; 
 _CLASS: contextvars.ContextVar[str | None] = contextvars.ContextVar("shortbot_weight_class", default=None)
 _DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar("shortbot_weight_deadline", default=None)
 _PACED: contextvars.ContextVar[bool] = contextvars.ContextVar("shortbot_weight_paced", default=False)
-Ticket = tuple[weight_ledger.Ledger, int] | None   # an admitted call's in-flight reservation, released on its answer
 _now = time.monotonic
 _wall = time.time
 
@@ -130,7 +124,7 @@ def reset() -> None:
     """Forget this process's state (the ledger file keeps the host's: a reset process is a new process)."""
     _hosts.clear()
     _tier2[:] = [-1, 0.0]
-    weight_ledger.close_all()
+    weight_share.reset()
 
 
 def budget(host: str) -> HostBudget:
@@ -203,16 +197,6 @@ def _learn_limit(body: str) -> int | None:
     return None
 
 
-_ledger_warned = [False]
-
-
-def _ledger_failed(what: str) -> None:
-    """The ledger is best-effort: warn once per process, then fall back to this process's own readings."""
-    log.log(logging.DEBUG if _ledger_warned[0] else logging.WARNING, "weight ledger %s failed: local readings only",
-            what, exc_info=True)
-    _ledger_warned[0] = True
-
-
 def record(url: str, status: int | None, headers: Mapping[str, str] | None, body: str | None) -> None:
     """Every response of a guarded client: its usage reading, a 429/418/-1003, an exchangeInfo limit. Shared with the
     host's other processes through the ledger."""
@@ -243,32 +227,19 @@ def record(url: str, status: int | None, headers: Mapping[str, str] | None, body
     lim = _learn_limit(body) if path.endswith("/exchangeInfo") and body and status == 200 else None
     if lim:
         b.limit = lim
-    if reading is None and lim is None and not limited:
-        return
-    try:
-        led = weight_ledger.get()
-        if led is not None:
-            wall = _wall()
-            off = wall - now   # monotonic -> wall
-            led.note(host, wall, used=reading, limit=lim,
-                     full_until=b.full_until + off if limited else None,
-                     cooldown_until=b.cooldown_until + off if limited else None,
-                     last_limit=b.last_limit if limited else None)
-    except Exception:  # noqa: BLE001 - bookkeeping must never fail a request
-        _ledger_failed("write")
+    if (reading is None and lim is None and not limited) or current() == PROTECTIVE:
+        return   # a protective call's answer never touches the ledger
+    off = _wall() - now   # monotonic -> wall
+    weight_share.note(host, now + off, reading, lim, b.full_until + off if limited else None,
+                      b.cooldown_until + off if limited else None, b.last_limit if limited else None)
 
 
-def _sync(b: HostBudget, now: float) -> weight_ledger.Ledger | None:
+def _sync(b: HostBudget, now: float) -> Ledger | None:
     """Merge the host-wide state (every process's readings, limit answers and in-flight weight) into this process's
-    view of the host; the ledger, or None when it is off or failing."""
-    try:
-        led = weight_ledger.get()
-        if led is None:
-            return None
-        wall = _wall()
-        s = led.state(b.host, wall)
-    except Exception:  # noqa: BLE001
-        _ledger_failed("read")
+    view of the host; the ledger, or None when it is off, failing or contended (local readings only)."""
+    wall = _wall()
+    led, s = weight_share.shared(b.host, wall)
+    if s is None:
         return None
     off = now - wall   # wall -> monotonic
     if s.used is not None and s.seen is not None and s.seen + off > b.seen:
@@ -305,13 +276,6 @@ def tier2_usage() -> tuple[int, float]:
     return int(_tier2[0]), float(_tier2[1])
 
 
-def _pace_of(path: str, cost: float) -> Pace:
-    for prefix, lane, cap in PACE_LANES:
-        if path.startswith(prefix):
-            return Pace(lane, 1.0, cap, PACE_WINDOW_S)
-    return Pace("weight", cost, PACE_WEIGHT_CAP, PACE_WINDOW_S)
-
-
 def _admission(url: str, method: str, cost: float) -> Generator[float, None, Ticket]:
     """The admission policy, clock-agnostic: yields each pause, returns the call's ticket or raises BudgetWait."""
     host = _guarded_host(url)
@@ -327,18 +291,14 @@ def _admission(url: str, method: str, cost: float) -> Generator[float, None, Tic
     deadline = _DEADLINE.get()
     if deadline is None:
         deadline = start + DEFAULT_WAIT_S[cls]
-    pace = _pace_of(urlsplit(url).path, cost) if _PACED.get() and cls in (RESEARCH, TIER2) else None
+    pace = weight_share.pace_of(urlsplit(url).path, cost) if _PACED.get() and cls in (RESEARCH, TIER2) else None
     while True:
         now = _now()
         led = _sync(b, now)
         why = b.blocked(cls, now) or (_tier2_blocked(cost) if cls == TIER2 else None)
         ticket: Ticket = None
-        if why is None and led is not None:
-            try:
-                rid, why = led.reserve(host, cost, _wall(), pace)
-                ticket = (led, rid) if rid is not None else None
-            except Exception:  # noqa: BLE001
-                _ledger_failed("reserve")
+        if why is None:
+            ticket, why = weight_share.reserve(led, host, cost, _wall(), pace)
         if why is None:
             break
         if now + POLL_S > deadline:
@@ -378,8 +338,4 @@ def admit_blocking(url: str, method: str = "GET", cost: float = 1.0) -> Ticket:
 
 def release(ticket: Ticket) -> None:
     """The admitted call was answered or failed: its weight is no longer in flight."""
-    if ticket is not None:
-        try:
-            ticket[0].done(ticket[1])
-        except Exception:  # noqa: BLE001
-            _ledger_failed("release")
+    weight_share.release(ticket)

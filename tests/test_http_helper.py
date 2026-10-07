@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from shortbot import http, level_watch, weight
+from shortbot import http, level_watch, weight, weight_share
 from shortbot.weight import BudgetWait
 from tests.fake_http import FakeHost, fake_clock
 
@@ -73,24 +73,25 @@ def test_pacing_caps_a_loop_like_the_one_that_got_the_ip_banned(clock, fapi):
     for _ in range(80):
         http.get("/fapi/v1/klines", {"symbol": "BTCUSDT", "interval": "1h", "limit": 1000}, wait_s=1e9)
     times = [t for t, _, _ in fapi.log]
+    win, cap = weight_share.PACE_WINDOW_S, weight_share.PACE_WEIGHT_CAP
     for t0 in times:
-        assert sum(c for t, _, c in fapi.log if t0 <= t < t0 + weight.PACE_WINDOW_S) <= weight.PACE_WEIGHT_CAP
-    assert times[-1] - times[0] >= (80 * 5 / weight.PACE_WEIGHT_CAP - 1) * weight.PACE_WINDOW_S
+        assert sum(c for t, _, c in fapi.log if t0 <= t < t0 + win) <= cap
+    assert times[-1] - times[0] >= (80 * 5 / cap - 1) * win
 
 
 def test_futures_data_endpoints_are_paced_by_call_count(clock, fapi):
     fapi.at = lambda: clock.t
     for _ in range(40):
         http.get("/futures/data/openInterestHist", {"symbol": "BTCUSDT", "period": "1h"}, wait_s=1e9)
-    first = [t for t, _, _ in fapi.log if t < fapi.log[0][0] + weight.PACE_WINDOW_S]
+    first = [t for t, _, _ in fapi.log if t < fapi.log[0][0] + weight_share.PACE_WINDOW_S]
     assert len(first) == 30
 
 
 def test_threads_cannot_burst_past_the_pacing_cap(fapi, monkeypatch):
     """Eight threads on the real clock (the 2026-10-07 script's shape), with a small cap and window."""
     weight.reset()
-    monkeypatch.setattr(weight, "PACE_WEIGHT_CAP", 20.0)
-    monkeypatch.setattr(weight, "PACE_WINDOW_S", 0.4)
+    monkeypatch.setattr(weight_share, "PACE_WEIGHT_CAP", 20.0)
+    monkeypatch.setattr(weight_share, "PACE_WINDOW_S", 0.4)
     monkeypatch.setattr(weight, "POLL_S", 0.02)
 
     def work():

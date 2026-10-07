@@ -14,17 +14,20 @@ Each call goes through the weight guard (weight.py) as RESEARCH (or DESK for a s
 cost known up front from Binance's published per-endpoint weights (COSTS below), so the host-wide ledger
 (weight_ledger.py) holds it in flight for every other process. Its answer is recorded like a ccxt client's: the
 used-weight reading, and a 429/418/-1003 with Retry-After stops research and desk calls in every process on the host.
-Thread-safe; a loop or a thread pool can't burst past the pacing cap (weight.PACE_WEIGHT_CAP per 10 s).
+Thread-safe; a loop or a thread pool can't burst past the pacing cap (weight_share.PACE_WEIGHT_CAP per 10 s).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import TracebackType
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -33,6 +36,7 @@ from . import weight
 log = logging.getLogger("shortbot.http")
 
 BASE = "https://fapi.binance.com"
+DEMO_BASE = "https://demo-fapi.binance.com"
 VISION = "https://data.binance.vision"
 TIMEOUT_S = 15.0
 HISTORY_HINT_S = 3 * 86400   # klines starting further back than this belong to the archive
@@ -50,7 +54,7 @@ FLAT = {"/fapi/v1/exchangeInfo": 1, "/fapi/v1/openInterest": 1, "/fapi/v1/time":
         "/fapi/v1/trades": 5, "/fapi/v1/aggTrades": 20, "/fapi/v1/historicalTrades": 20,
         "/fapi/v1/fundingRate": 1, "/fapi/v1/fundingInfo": 0}   # funding: its own 500/5min/IP limit (paced by count)
 # /futures/data/* (openInterestHist, takerlongshortRatio, globalLongShortAccountRatio, topLongShort*): weight 0, own
-# limit 1,000 requests/5min/IP (paced by count, weight.PACE_LANES)
+# limit 1,000 requests/5min/IP (paced by count, weight_share.PACE_LANES)
 DATA_PREFIX = "/futures/data/"
 UNKNOWN_COST = 5   # an endpoint not in the table: assume a heavy one
 
@@ -103,26 +107,73 @@ def _history_hint(path: str, params: Mapping[str, Any]) -> None:
                     "which costs no API weight", int((time.time() - int(start) / 1000) // 86400))
 
 
-def get(path: str, params: Mapping[str, Any] | None = None, *, cls: str = weight.RESEARCH,
-        wait_s: float = weight.ENTRY_WAIT_S, base: str = BASE, timeout: float = TIMEOUT_S) -> Any:
-    """GET a public Binance endpoint through the weight guard; the parsed JSON. Waits its turn up to `wait_s`
-    (weight.BudgetWait after that); BinanceHTTPError on an error answer (`.limited` for 429/418/-1003).
-    `cls`: RESEARCH (paced; the default) or DESK (a session's watcher: waits above 80% or during a ban, unpaced)."""
+@dataclass
+class Response:
+    """An answer, error statuses included (the shape the replay builders read from httpx)."""
+    status_code: int
+    headers: dict[str, str]
+    text: str
+
+    def json(self) -> Any:
+        return json.loads(self.text) if self.text else None
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            retry = next((v for k, v in self.headers.items() if k.lower() == "retry-after"), None)
+            raise BinanceHTTPError(self.status_code, self.text, retry)
+
+
+def fetch(url: str, params: Mapping[str, Any] | None = None, *, cls: str = weight.RESEARCH,
+          wait_s: float = weight.ENTRY_WAIT_S, timeout: float = TIMEOUT_S) -> Response:
+    """GET `url` (a path on BASE, or a full Binance URL) through the weight guard; the answer, whatever its status.
+    Waits its turn up to `wait_s` (weight.BudgetWait after that). `cls`: RESEARCH (paced; the default) or DESK (a
+    session's watcher: waits above 80% or during a ban, unpaced). A transport failure raises OSError (URLError)."""
     if cls not in (weight.RESEARCH, weight.DESK):
         raise ValueError(f"shortbot.http serves research and desk reads, not {cls!r}: protective calls go through "
                          "the desk's own clients")
-    if not path.startswith("/") or urlsplit(path).netloc:
-        raise ValueError(f"a path like /fapi/v1/klines, not {path!r}")
+    full = f"{BASE}{url}" if url.startswith("/") else url
+    u = urlsplit(full)
+    if u.scheme != "https" or not u.hostname:
+        raise ValueError(f"a path like /fapi/v1/klines or an https URL, not {url!r}")
     p = dict(params or {})
-    _history_hint(path, p)
-    url = f"{base.rstrip('/')}{path}{'?' + urlencode(p) if p else ''}"
+    _history_hint(u.path, p)
+    full = f"{full}{('&' if u.query else '?') + urlencode(p) if p else ''}"
     with weight.tagged(cls, wait_s=wait_s, paced=cls == weight.RESEARCH):
-        ticket = weight.admit_blocking(url, "GET", cost(path, p))
+        ticket = weight.admit_blocking(full, "GET", cost(u.path, p))
         try:
-            status, headers, body = _send(url, timeout)
-            weight.record(url, status, headers, body)
+            status, headers, body = _send(full, timeout)
+            weight.record(full, status, headers, body)
         finally:
             weight.release(ticket)
-    if status >= 400:
-        raise BinanceHTTPError(status, body, next((v for k, v in headers.items() if k.lower() == "retry-after"), None))
-    return json.loads(body) if body else None
+    return Response(status, headers, body)
+
+
+def get(path: str, params: Mapping[str, Any] | None = None, *, cls: str = weight.RESEARCH,
+        wait_s: float = weight.ENTRY_WAIT_S, base: str = BASE, timeout: float = TIMEOUT_S) -> Any:
+    """GET a public Binance endpoint through the weight guard (see `fetch`); the parsed JSON. BinanceHTTPError on an
+    error answer (`.limited` for 429/418/-1003)."""
+    if not path.startswith("/") or urlsplit(path).netloc:
+        raise ValueError(f"a path like /fapi/v1/klines, not {path!r}")
+    r = fetch(f"{base.rstrip('/')}{path}", params, cls=cls, wait_s=wait_s, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+class AsyncClient:
+    """httpx.AsyncClient's `get` for async batch code (the replay builders): each call is a guarded `fetch` in a
+    worker thread (contextvars carry over), so the event loop never waits on the guard."""
+
+    def __init__(self, cls: str = weight.RESEARCH, wait_s: float = weight.ENTRY_WAIT_S):
+        self.cls, self.wait_s = cls, wait_s
+
+    async def get(self, url: str, params: Mapping[str, Any] | None = None,
+                  timeout: float | None = None) -> Response:  # noqa: ASYNC109 - httpx's signature
+        return await asyncio.to_thread(fetch, url, params, cls=self.cls, wait_s=self.wait_s,
+                                       timeout=timeout or TIMEOUT_S)
+
+    async def __aenter__(self) -> AsyncClient:
+        return self
+
+    async def __aexit__(self, et: type[BaseException] | None, e: BaseException | None,
+                        tb: TracebackType | None) -> None:
+        return None
