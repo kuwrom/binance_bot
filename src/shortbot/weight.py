@@ -18,8 +18,10 @@ must never be the call that tips it.
   ENTRY_WAIT_S), then BudgetWait. A waiting call holds no lock or connection: it waits before the request is sent.
 - Host-wide (weight_ledger.py, weight_share.py): every desk/research reading and limit answer is also written to a
   ledger every process on the host reads before a desk/research call, with the weight other processes have in flight.
-  A ban one process saw stops research and desk calls in all of them. Protective calls never touch the ledger (not
-  before sending, not when recording) and never wait; nothing waits on a contended ledger.
+  A ban one process saw stops research and desk calls in all of them. Protective calls never wait on the ledger: they
+  never read it, and only their limit answers are shared, by a background thread. Nothing waits on a contended ledger.
+- Count lanes (/futures/data, funding: their own request limits): every desk/research call is counted; research waits
+  at the lane's cap, and a 429 there cools only that lane (`lane_until`), not the IP's weight budget.
 - Pacing (a `paced` scope: lab, shortbot.http): research weight per host is capped (weight_share.PACE_WEIGHT_CAP per
   PACE_WINDOW_S) across processes and threads, so a script's loop can't burst; in-process when the ledger is off.
 """
@@ -35,7 +37,8 @@ import re
 import time
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlsplit
 
 from . import weight_share
@@ -101,13 +104,16 @@ class HostBudget:
     cooldown_until: float = -math.inf  # research yields until then
     last_limit: str = ""                # the last limit answer: HTTP 429 / HTTP 418 / -1003
     inflight: float = 0.0               # weight admitted host-wide but not answered yet (the ledger)
+    lane_until: dict[str, float] = field(default_factory=dict)   # a count lane's own 429: that lane waits until then
 
     def usage(self, now: float) -> int:
         u = (self.used if now - self.seen < WINDOW_S else 0) + math.ceil(self.inflight)
         return max(u, self.limit) if now < self.full_until else u
 
-    def blocked(self, cls: str, now: float) -> str | None:
-        """Why a `cls` call must wait now, or None."""
+    def blocked(self, cls: str, now: float, lane: str | None = None) -> str | None:
+        """Why a `cls` call (in count lane `lane`, if any) must wait now, or None."""
+        if lane and now < self.lane_until.get(lane, -math.inf):
+            return f"HTTP 429 on {lane} endpoints, cooling down {self.lane_until[lane] - now:.0f}s more"
         u = self.usage(now)
         if cls == DESK:
             return f"{u}/{self.limit} weight used (> {DESK_FRAC:.0%})" if u > DESK_FRAC * self.limit else None
@@ -214,11 +220,16 @@ def record(url: str, status: int | None, headers: Mapping[str, str] | None, body
             pass
     status = status or 0
     limited = status in (418, 429) or (status >= 400 and bool(body) and bool(_CODE_1003.search((body or "")[:512])))
-    if limited:
-        try:
-            retry = float(_header(headers, "retry-after") or 0)
-        except ValueError:
-            retry = 0.0
+    try:
+        retry = float(_header(headers, "retry-after") or 0) if limited else 0.0
+    except ValueError:
+        retry = 0.0
+    lane = weight_share.count_lane(path) if limited and status != 418 else None
+    if lane:   # its own request limit is spent, not the IP's weight: only that lane waits
+        b.lane_until[lane] = max(b.lane_until.get(lane, -math.inf), now + max(WINDOW_S, retry))
+        log.warning("%s answered %s on %s (Retry-After %ss): that lane waits", host, status, lane,
+                    _header(headers, "retry-after"))
+    elif limited:
         b.full_until = max(b.full_until, now + max(WINDOW_S, retry))
         b.cooldown_until = max(b.cooldown_until, now + max(COOLDOWN_S, retry))
         b.last_limit = f"HTTP {status}" if status in (418, 429) else "-1003"
@@ -227,11 +238,18 @@ def record(url: str, status: int | None, headers: Mapping[str, str] | None, body
     lim = _learn_limit(body) if path.endswith("/exchangeInfo") and body and status == 200 else None
     if lim:
         b.limit = lim
-    if (reading is None and lim is None and not limited) or current() == PROTECTIVE:
-        return   # a protective call's answer never touches the ledger
+    if reading is None and lim is None and not limited:
+        return
     off = _wall() - now   # monotonic -> wall
-    weight_share.note(host, now + off, reading, lim, b.full_until + off if limited else None,
-                      b.cooldown_until + off if limited else None, b.last_limit if limited else None)
+    ip_wide = limited and not lane
+    news: dict[str, Any] = {
+        "used": reading, "limit": lim, "full_until": b.full_until + off if ip_wide else None,
+        "cooldown_until": b.cooldown_until + off if ip_wide else None, "last_limit": b.last_limit if ip_wide else None,
+        "lane_until": (lane, b.lane_until[lane] + off) if lane else None}
+    if current() != PROTECTIVE:
+        weight_share.note(host, now + off, **news)
+    elif limited:   # a protective call never waits on the ledger: its limit answer is shared in the background
+        weight_share.note_later(host=host, now=now + off, **news)
 
 
 def _sync(b: HostBudget, now: float) -> Ledger | None:
@@ -240,8 +258,11 @@ def _sync(b: HostBudget, now: float) -> Ledger | None:
     wall = _wall()
     led, s = weight_share.shared(b.host, wall)
     if s is None:
+        b.inflight = 0.0   # nothing current to say what is in flight elsewhere
         return None
     off = now - wall   # wall -> monotonic
+    for lane, until in s.lanes:
+        b.lane_until[lane] = max(b.lane_until.get(lane, -math.inf), until + off)
     if s.used is not None and s.seen is not None and s.seen + off > b.seen:
         b.used, b.seen = s.used, s.seen + off
     if s.limit:
@@ -291,11 +312,13 @@ def _admission(url: str, method: str, cost: float) -> Generator[float, None, Tic
     deadline = _DEADLINE.get()
     if deadline is None:
         deadline = start + DEFAULT_WAIT_S[cls]
-    pace = weight_share.pace_of(urlsplit(url).path, cost) if _PACED.get() and cls in (RESEARCH, TIER2) else None
+    path = urlsplit(url).path
+    pace = weight_share.pace_of(path, cost, cls in (RESEARCH, TIER2), _PACED.get())
+    lane = weight_share.count_lane(path)
     while True:
         now = _now()
         led = _sync(b, now)
-        why = b.blocked(cls, now) or (_tier2_blocked(cost) if cls == TIER2 else None)
+        why = b.blocked(cls, now, lane) or (_tier2_blocked(cost) if cls == TIER2 else None)
         ticket: Ticket = None
         if why is None:
             ticket, why = weight_share.reserve(led, host, cost, _wall(), pace)

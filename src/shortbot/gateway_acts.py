@@ -20,7 +20,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from . import audit, entry_gates, entry_intents, intents, origin, reconcile, resolver, targets_sync, write_guard
+from . import audit, entry_gates, entry_intents, intents, origin, reconcile, resolver, targets_sync, weight, write_guard
 from . import killswitch as ks
 from .guardian_loop import send_safe
 from .guardian_plan import PlanChecks
@@ -54,7 +54,9 @@ async def start_up(acts: GuardianActs, desk_gw: LocalGateway, gw: LocalGateway) 
         return {"skipped": "no trade keys"}
     try:
         async with asyncio.timeout(STARTUP_S), tr.symlocks.reconciling("gateway start-up", LEASE_WAIT_S):
-            with audit.acting("gateway:startup"), origin.guardian(n.as_trader_alert), write_guard.writing("gateway"):
+            # protective (weight.py): the stop restores and reconciliation never wait for weight budget
+            with audit.acting("gateway:startup"), origin.guardian(n.as_trader_alert), write_guard.writing("gateway"), \
+                    weight.tagged(weight.PROTECTIVE):
                 done = await _steps(acts, desk_gw.ctx, gw)
     except ReconcileBusy as e:
         log.info("start-up reconciliation left to the guardian: %s", e)

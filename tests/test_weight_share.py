@@ -24,24 +24,36 @@ def fresh():
     weight.reset()
 
 
-def test_a_protective_call_never_touches_the_ledger_even_when_it_hangs(monkeypatch):
+def test_a_protective_call_never_waits_on_the_ledger_even_when_it_hangs(monkeypatch):
     touched = []
 
     def hang(*a, **k):
-        touched.append(a)
-        time.sleep(0.5)
+        touched.append(threading.current_thread().name)
+        time.sleep(0.3)
     for name in ("state", "note", "reserve", "done"):
         monkeypatch.setattr(weight_ledger.Ledger, name, hang)
-    monkeypatch.setattr(weight_ledger, "get", lambda: hang() or None)
     t0 = time.monotonic()
     with weight.tagged(PROTECTIVE):
         weight.release(weight.admit_blocking(FAPI))
-        weight.record(FAPI, 418, BAN, '{"code":-1003}')                   # its answer: a ban, kept locally only
+        weight.record(FAPI, 200, {"x-mbx-used-weight-1m": "7"}, "")      # an ordinary reading: stays local
+        weight.record(FAPI, 418, BAN, '{"code":-1003}')                   # a ban: shared, in the background
     with weight.tagged(DESK):
         weight.admit_blocking("https://fapi.binance.com/fapi/v1/order", "POST")   # a write: the scope turns protective
         weight.record("https://fapi.binance.com/fapi/v1/order", 200, {"x-mbx-used-weight-1m": "5"}, "{}")
-    assert time.monotonic() - t0 < 0.05 and touched == []
-    assert weight.budget("fapi.binance.com").last_limit == "HTTP 418"
+    assert time.monotonic() - t0 < 0.05 and weight.budget("fapi.binance.com").last_limit == "HTTP 418"
+    weight_share.flush()
+    assert touched == ["weight-ledger"]                                  # only the background writer, once
+
+
+def test_a_protective_ban_reaches_the_other_processes(monkeypatch):
+    with weight.tagged(PROTECTIVE):
+        weight.record(FAPI, 418, BAN, '{"code":-1003}')
+    weight.reset()                                                       # flushes, then forgets: another process
+    with pytest.raises(weight.BudgetWait, match="418"):
+        with weight.tagged(RESEARCH, wait_s=0):
+            weight.admit_blocking(FAPI)
+    with weight.tagged(PROTECTIVE):
+        assert weight.admit_blocking(FAPI) is None
 
 
 def test_a_contended_ledger_costs_a_call_milliseconds_and_falls_back(tmp_path):
@@ -107,21 +119,32 @@ def _git(*args, cwd):
                    capture_output=True)
 
 
-def test_a_worktree_script_uses_the_main_checkouts_ledger(tmp_path, monkeypatch):
-    main, wt = tmp_path / "binance_bot", tmp_path / "wt-x"
-    main.mkdir()
+def test_the_ledger_follows_the_codes_checkout_never_the_cwd(tmp_path, monkeypatch):
+    main, wt, elsewhere = tmp_path / "binance_bot", tmp_path / "wt-x", tmp_path / "scratch"
+    for d in (main / "src" / "shortbot", main / "data", elsewhere):
+        d.mkdir(parents=True)
+    (main / "pyproject.toml").write_text("[project]\nname = 'shortbot'\n")
     _git("init", "-q", cwd=main)
-    _git("commit", "-q", "--allow-empty", "-m", "init", cwd=main)
+    _git("add", "-A", cwd=main)
+    _git("commit", "-q", "-m", "init", cwd=main)
     _git("worktree", "add", "-q", str(wt), cwd=main)
-    (main / "data").mkdir()
     assert weight_ledger.main_checkout(wt) == main.resolve()
     assert weight_ledger.main_checkout(main) is None and weight_ledger.main_checkout(tmp_path) is None
-    monkeypatch.setattr(weight_ledger, "_paths", {})
-    monkeypatch.setattr(weight_ledger, "CODE_ROOT", wt)
-    monkeypatch.chdir(wt)
-    monkeypatch.delenv("SHORTBOT_DB")                                    # the default, relative data/
-    assert weight_ledger.path() == main.resolve() / "data" / weight_ledger.FILENAME
-    monkeypatch.setenv("SHORTBOT_DB", str(tmp_path / "elsewhere" / "shortbot.db"))   # Docker: /app/data
-    assert weight_ledger.path() == (tmp_path / "elsewhere").resolve() / weight_ledger.FILENAME
+    monkeypatch.chdir(elsewhere)                                          # a script run from the scratchpad
+    monkeypatch.delenv("SHORTBOT_DB")
+    want = main.resolve() / "data" / weight_ledger.FILENAME
+    for root in (wt, main):                                               # the worktree's code, the main venv's
+        monkeypatch.setattr(weight_ledger, "_paths", {})
+        monkeypatch.setattr(weight_ledger, "CODE_ROOT", root)
+        assert weight_ledger.path() == want
+    monkeypatch.setenv("SHORTBOT_DB", "data/shortbot.db")                 # relative: the checkout's, not the cwd's
+    assert weight_ledger.path() == want
+    monkeypatch.setenv("SHORTBOT_DB", str(tmp_path / "app" / "data" / "shortbot.db"))   # Docker: /app/data
+    assert weight_ledger.path() == (tmp_path / "app" / "data").resolve() / weight_ledger.FILENAME
     monkeypatch.setenv(weight_ledger.ENV, str(tmp_path / "x.db"))
     assert weight_ledger.path() == (tmp_path / "x.db").resolve()
+    monkeypatch.delenv(weight_ledger.ENV)
+    monkeypatch.delenv("SHORTBOT_DB")
+    monkeypatch.setattr(weight_ledger, "_paths", {})
+    monkeypatch.setattr(weight_ledger, "CODE_ROOT", tmp_path / "site-packages")   # an installed copy
+    assert weight_ledger.path() is None and not (elsewhere / "data").exists()

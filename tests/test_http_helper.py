@@ -79,12 +79,13 @@ def test_pacing_caps_a_loop_like_the_one_that_got_the_ip_banned(clock, fapi):
     assert times[-1] - times[0] >= (80 * 5 / cap - 1) * win
 
 
-def test_futures_data_endpoints_are_paced_by_call_count(clock, fapi):
+def test_futures_data_endpoints_are_paced_by_call_count(clock, fapi, monkeypatch):
+    monkeypatch.setattr(weight_share, "COUNT_LANES", (("/futures/data/", "futures_data", 30.0),))
     fapi.at = lambda: clock.t
     for _ in range(40):
         http.get("/futures/data/openInterestHist", {"symbol": "BTCUSDT", "period": "1h"}, wait_s=1e9)
-    first = [t for t, _, _ in fapi.log if t < fapi.log[0][0] + weight_share.PACE_WINDOW_S]
-    assert len(first) == 30
+    first = [t for t, _, _ in fapi.log if t < fapi.log[0][0] + weight_share.COUNT_WINDOW_S]
+    assert len(first) == 30                                               # 30 per 5 min here (900 for real)
 
 
 def test_threads_cannot_burst_past_the_pacing_cap(fapi, monkeypatch):

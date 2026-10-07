@@ -47,11 +47,11 @@ KLINES = ("/fapi/v1/klines", "/fapi/v1/continuousKlines", "/fapi/v1/indexPriceKl
           "/fapi/v1/premiumIndexKlines")
 # (with symbol, without symbol)
 BY_SYMBOL = {"/fapi/v1/ticker/24hr": (1, 40), "/fapi/v1/ticker/price": (1, 2), "/fapi/v2/ticker/price": (1, 2),
-             "/fapi/v1/ticker/bookTicker": (1, 2), "/fapi/v1/premiumIndex": (1, 10)}
+             "/fapi/v1/ticker/bookTicker": (2, 5), "/fapi/v1/premiumIndex": (1, 10)}
 # depth by limit: 5/10/20/50 -> 2, 100 -> 5, 500 -> 10, 1000 -> 20; default 500
 DEPTH = ((50, 2), (100, 5), (500, 10), (1000, 20))
 FLAT = {"/fapi/v1/exchangeInfo": 1, "/fapi/v1/openInterest": 1, "/fapi/v1/time": 1, "/fapi/v1/ping": 1,
-        "/fapi/v1/trades": 5, "/fapi/v1/aggTrades": 20, "/fapi/v1/historicalTrades": 20,
+        "/fapi/v1/trades": 5, "/fapi/v1/aggTrades": 20, "/fapi/v1/historicalTrades": 200,
         "/fapi/v1/fundingRate": 1, "/fapi/v1/fundingInfo": 0}   # funding: its own 500/5min/IP limit (paced by count)
 # /futures/data/* (openInterestHist, takerlongshortRatio, globalLongShortAccountRatio, topLongShort*): weight 0, own
 # limit 1,000 requests/5min/IP (paced by count, weight_share.PACE_LANES)

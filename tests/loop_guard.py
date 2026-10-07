@@ -11,6 +11,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from shortbot import weight_ledger
+
 WRITES = ("INSERT", "UPDATE", "DELETE", "REPLACE")
 STORES = ("journal.py", "journal_research.py", "journal_learnings.py", "journal_writer.py", "intents.py")
 
@@ -36,6 +38,9 @@ def connections(g: Any) -> list[Any]:
         store = getattr(g, name, None)
         if store is not None:
             out.append(store.db)
+    led = weight_ledger.get()   # the host-wide weight ledger: the guardian writes it on the loop, never waiting
+    if led is not None:
+        out.append(led.connection())
     return out
 
 
@@ -51,6 +56,8 @@ def loop_writes(*dbs: Any) -> Iterator[list[str]]:
                 bad.append(f"{_site()}: {' '.join(sql.split())[:70]}")
         return cb
     for db in dbs:
+        if db.execute("PRAGMA busy_timeout").fetchone()[0] == 0:
+            continue   # busy_timeout 0 (the weight ledger in the guardian): a write there fails, it never sleeps
         db.set_trace_callback(watch(db))
     try:
         yield bad
