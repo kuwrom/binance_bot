@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from . import audit, procs, symlock, uptime
+from . import audit, procs, symlock, uptime, weight_ledger
 from .app import FLUSH_S, close_app, get_app
 from .config import Settings
 from .entries import EntryDesk
@@ -107,6 +107,7 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
 
     def __init__(self, app=None):
         self.app = app or get_app(research=False)
+        weight_ledger.fail_fast()   # this event loop never waits on the host-wide weight ledger (busy_timeout 0)
         self.n = Notifier(self.app.settings, self.app.journal)
         self.app.trader.set_alert(self.n.as_trader_alert)
         self.app.trader.symlocks.wait_s = GUARDIAN_WAIT_S   # a busy symbol is skipped, never waited out

@@ -18,9 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from .. import histdata_vision as V
+from .. import http
 from . import replay_bars as RB
 from .replay_fetch import DEMO_FAPI, FAPI, build_meta, exchange_info, funding_from_hist, hist_coins
 from .replay_store import Store, daily_from_inputs, parse_klines, ro_connect
@@ -152,7 +151,7 @@ async def build_window(cache: Path | str, t0: int, t1: int, times: list[int], hi
                        concurrency: int = 16, log=print) -> dict[str, Any]:
     store, f = Store(cache), V.Fetcher(concurrency)
     out: dict[str, Any] = {"t0": t0, "t1": t1, "scans": len(times)}
-    async with httpx.AsyncClient() as client:
+    async with http.AsyncClient() as client:
         prod, demo = await asyncio.gather(exchange_info(client, FAPI), exchange_info(client, DEMO_FAPI))
     meta = build_meta(prod, demo, hist_coins(hist_db), t0, t1)
     store.put_meta(meta)
@@ -165,7 +164,7 @@ async def build_window(cache: Path | str, t0: int, t1: int, times: list[int], hi
     out["daily_rows"] = daily_from_inputs(store, raws, hist_db, daily_db, (t0 - PERP_LOOKBACK) // DAY * DAY + DAY)
     out["funding_rows"] = funding_from_hist(store, hist_db, raws, t0 - 30 * DAY)
     out["metrics_rows"] = metrics_from_hist(store, hist_db, raws, t0 - 3 * DAY, t1 + LABEL_AHEAD)
-    async with httpx.AsyncClient() as client:
+    async with http.AsyncClient() as client:
         out["gaps"] = await fill_gaps(store, f, client, raws, t0 - 3 * DAY, t1 + DAY)
     mv = movers(store, raws, times, depth, margin)
     out["movers"] = len(mv)

@@ -3,7 +3,7 @@
 - perp universe + listing/delisting dates + product tags: fapi /exchangeInfo (onboardDate, deliveryDate,
   status SETTLING = delisted, underlyingSubType = Alpha/Meme/AI/Layer-1...). Symbols already purged from
   exchangeInfo are recovered from the data.binance.vision S3 listing (monthly 1d zips).
-- daily klines since listing: fapi /klines (1 call per symbol, sequential; the guardian shares the IP)
+- daily klines since listing: fapi /klines through shortbot.http (research, paced; the guardian shares the IP)
 - spot listing date: data-api.binance.vision (market-data-only host) first 1d candle of BASEUSDT
 - listing type: Binance CMS announcements (catalog 48 new listings, 161 delistings), the same public endpoint
   news.py uses
@@ -28,15 +28,16 @@ from typing import Any
 
 import httpx
 
+from . import http
 from .news import CMS_LIST, UA, normalize_base
 
-FAPI = "https://fapi.binance.com/fapi/v1"
 SPOT_DATA = "https://data-api.binance.vision/api/v3/klines"
 S3 = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 VISION = "https://data.binance.vision/"
 LIFE_DB, DESK_DB = Path("data/lifecycle.db"), Path("data/shortbot.db")
 SINCE = datetime(2025, 3, 1, tzinfo=UTC)          # ~18 months of listings
 DAY_MS = 86_400_000
+BATCH_WAIT_S = 900.0                               # a batch job waits out a busy minute or a short ban
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS coins (symbol TEXT PRIMARY KEY, base TEXT, onboard_ms INTEGER, status TEXT,
@@ -74,7 +75,7 @@ def _get(c: httpx.Client, url: str, **params):
 # ------------------------------------------------------------------ universe
 def universe(c: httpx.Client, db: sqlite3.Connection) -> list[str]:
     since = SINCE.timestamp() * 1000
-    info = _get(c, f"{FAPI}/exchangeInfo").json()["symbols"]
+    info = http.get("/fapi/v1/exchangeInfo", wait_s=BATCH_WAIT_S)["symbols"]   # the weight guard (research, paced)
     rows = [(s["symbol"], normalize_base(s["baseAsset"]), s["onboardDate"], s["status"], s["deliveryDate"],
              s["underlyingType"], json.dumps(s.get("underlyingSubType") or []), "exchangeInfo")
             for s in info if s["contractType"] == "PERPETUAL" and s["quoteAsset"] == "USDT"
@@ -134,14 +135,15 @@ def klines(c: httpx.Client, db: sqlite3.Connection, symbols: list[str]) -> None:
     for sym in symbols + ["BTCUSDT"]:
         last = db.execute("SELECT MAX(ts) FROM klines WHERE symbol=?", (sym,)).fetchone()[0]
         start = last if last else (int(SINCE.timestamp() * 1000) - 60 * DAY_MS if sym == "BTCUSDT" else 0)
-        r = _get(c, f"{FAPI}/klines", symbol=sym, interval="1d", startTime=start, limit=1000)
-        if r.status_code != 200:
+        try:   # the weight guard paces the loop (shortbot.http); a 429/418 holds every research caller on the host
+            bars = http.get("/fapi/v1/klines", {"symbol": sym, "interval": "1d", "startTime": start, "limit": 1000},
+                            wait_s=BATCH_WAIT_S)
+        except http.BinanceHTTPError:
             continue
-        rows = [(sym, k[0], *map(float, k[1:6]), float(k[7])) for k in r.json()
+        rows = [(sym, k[0], *map(float, k[1:6]), float(k[7])) for k in bars
                 if k[6] < time.time() * 1000]                       # closed candles only
         db.executemany("INSERT OR REPLACE INTO klines VALUES (?,?,?,?,?,?,?,?)", rows)
         db.commit()
-        time.sleep(0.35)
 
 
 def spot_dates(c: httpx.Client, db: sqlite3.Connection) -> None:

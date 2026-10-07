@@ -22,9 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
-
-from .. import clock
+from .. import clock, http
 from .. import histdata_vision as V
 from ..exchange import NO_DELIVERY
 from ..histdata import INDEX_PERPS
@@ -32,8 +30,7 @@ from . import replay_bars as RB
 from .replay_store import Store, daily_from_inputs, parse_klines, ro_connect
 
 log = logging.getLogger("shortbot.replay")
-FAPI = "https://fapi.binance.com"
-DEMO_FAPI = "https://demo-fapi.binance.com"
+FAPI, DEMO_FAPI = http.BASE, http.DEMO_BASE   # REST only through the weight guard (shortbot.http: research, paced)
 DAY, HOUR = RB.DAY, RB.HOUR
 PERP_LOOKBACK = 8 * DAY          # market map: 170 hourly bars
 FINE_LOOKBACK = 2 * DAY          # 5m x 288, the forming day, premium since the last funding
@@ -49,7 +46,7 @@ def days(a_ms: int, b_ms: int) -> list[str]:
     return [V.day_str(d) for d in range(a_ms // DAY * DAY, min(b_ms, today), DAY)]
 
 
-async def exchange_info(client: httpx.AsyncClient, base: str) -> list[dict[str, Any]]:
+async def exchange_info(client: http.AsyncClient, base: str) -> list[dict[str, Any]]:
     r = await client.get(f"{base}/fapi/v1/exchangeInfo", timeout=30)
     r.raise_for_status()
     return r.json()["symbols"]
@@ -117,7 +114,7 @@ async def fetch_kind(f: V.Fetcher, store: Store, kind: str, raws: list[str], day
     return n
 
 
-async def fetch_funding(client: httpx.AsyncClient, store: Store, raws: list[str], a: int, b: int,
+async def fetch_funding(client: http.AsyncClient, store: Store, raws: list[str], a: int, b: int,
                         pace_s: float = 0.4) -> int:
     """Settled funding from REST (weight shared with fundingInfo: 500 / 5 min / IP, so paced)."""
     n = 0
@@ -131,7 +128,7 @@ async def fetch_funding(client: httpx.AsyncClient, store: Store, raws: list[str]
                 r = await client.get(f"{FAPI}/fapi/v1/fundingRate", timeout=30,
                                      params={"symbol": raw, "startTime": a, "endTime": b, "limit": 1000})
                 break
-            except httpx.HTTPError as e:
+            except OSError as e:   # a transport failure (urllib's URLError, a timeout)
                 log.warning("fundingRate %s: %s (try %d)", raw, type(e).__name__, attempt + 1)
                 await asyncio.sleep(2 * 2 ** attempt)
         if r is not None and r.status_code == 200:
@@ -178,7 +175,7 @@ async def build(cache: Path | str, t0: int, t1: int, times: list[int], hist_db: 
     store = Store(cache)
     f = V.Fetcher(concurrency)
     out: dict[str, Any] = {"t0": t0, "t1": t1}
-    async with httpx.AsyncClient() as client:
+    async with http.AsyncClient() as client:
         prod, demo = await asyncio.gather(exchange_info(client, FAPI), exchange_info(client, DEMO_FAPI))
         meta = build_meta(prod, demo, hist_coins(hist_db), t0, t1)
         store.put_meta(meta)

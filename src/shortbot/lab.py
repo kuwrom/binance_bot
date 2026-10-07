@@ -5,10 +5,14 @@ no MCP tool anticipated can still be answered without adding a tool, and raw dat
     .venv/bin/python - <<'PY'
     from shortbot import lab
     c = lab.ohlcv("QNT", "15m", 96)                      # [[ts, o, h, l, c, v], ...]
+    oi = lab.get("/futures/data/openInterestHist", {"symbol": "QNTUSDT", "period": "1h", "limit": 48})   # any endpoint
     print(lab.pct(c[0][4], c[-1][4]))
     rows = lab.candidates(labelled=True)                 # logged scans + real outcomes
     print(lab.group_mean(rows, lambda r: r["features"]["rsi_1h"] > 85, "short_ret_24h"))
     PY
+
+Every call is research for the weight guard, paced host-wide (weight.py, weight_ledger.py): never call
+fapi.binance.com directly from a script; for bulk history use data.binance.vision (shortbot.histdata).
 
 Read-only on purpose: no order functions live here. Orders only go through shortbot's order paths (the MCP tools or
 the `shortbot` CLI), where the risk checks, the kill switch and the audit trail apply.
@@ -23,6 +27,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import fee_audit as _fee_audit
+from . import http as _http
 from . import indicators as ind
 from . import research as _research
 from . import scanner as _scanner
@@ -40,7 +45,8 @@ def _with_ex(fn: Callable[[Exchanges], Any]) -> Any:
         ex = Exchanges(Settings.from_env())
         ex.journal = journal()   # scans see the desk's limits (desk_limits.py)
         try:
-            with weight.tagged(weight.RESEARCH, wait_s=weight.ENTRY_WAIT_S):   # yields to the desk and guardian (#70)
+            # yields to the desk and guardian (#70), paced host-wide like shortbot.http (weight_ledger.py)
+            with weight.tagged(weight.RESEARCH, wait_s=weight.ENTRY_WAIT_S, paced=True):
                 return await fn(ex)
         finally:
             await ex.close()
@@ -53,6 +59,12 @@ def journal() -> Journal:
 
 
 # ------------------------------------------------------------ market data (prod, public)
+def get(path: str, params: dict[str, Any] | None = None) -> Any:
+    """Any public fapi endpoint, raw JSON, through the weight guard (shortbot.http: research, paced, costed up front).
+    Never urllib/requests on fapi.binance.com; bulk history comes from data.binance.vision (shortbot.histdata)."""
+    return _http.get(path, params)
+
+
 def ohlcv(symbol: str, timeframe: str = "1h", limit: int = 200, since: int | None = None) -> list[list[float]]:
     return _with_ex(lambda ex: ex.public.fetch_ohlcv(to_symbol(symbol), timeframe, since=since, limit=limit))
 

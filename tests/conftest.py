@@ -76,6 +76,13 @@ def isolated_data(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def ledger_busy_default(monkeypatch):
+    """A Guardian built in a test makes the weight ledger fail fast (weight_ledger.fail_fast): only for that test."""
+    from shortbot import weight_ledger
+    monkeypatch.setattr(weight_ledger, "BUSY_MS", weight_ledger.BUSY_MS)
+
+
+@pytest.fixture(autouse=True)
 def no_network(request):
     """No test reaches the network or starts a shortbot process (#80, tests/net_guard.py): an attempt fails the test
     that made it, even when the code under test swallowed the refusal."""

@@ -60,13 +60,15 @@ class _Guarded:
             raise call["limited"]   # ccxt retrying a 418/429: the same answer, nothing sent
         if why := write_guard.refusal(method, url):   # #36 step 7: no write bypasses the order gateway
             raise write_guard.WriteRefused(None, why)
-        await weight.admit(url, method, call["cost"] if call else 1)
+        ticket = await weight.admit(url, method, call["cost"] if call else 1)
         try:
             return await super().fetch(url, method, headers, body)
         except ccxt.DDoSProtection as e:
             if call is not None:
                 call["limited"] = e
             raise
+        finally:
+            weight.release(ticket)   # answered (on_rest_response recorded it) or failed: no longer in flight
 
     async def sleep(self, milliseconds):
         call = _CALL.get()
