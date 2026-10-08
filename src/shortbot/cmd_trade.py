@@ -142,6 +142,25 @@ async def move_stop(symbol: str, new_stop: float, reason: str) -> dict[str, Any]
     return await get_app().trader.move_stop(symbol, new_stop, reason)
 
 
+@command(cli="adopt", write=True, orders=True, weight=PROTECTIVE,
+         help="journal a hand-placed short as a trade with a stop and a plan (demo for now)",
+         args=(Arg("symbol"), Arg("stop_price", "--stop", "tighten only: at or below the stop resting now"),
+               Arg("setup", "--setup"), Arg("thesis", "--thesis"),
+               Arg("plan", "--plan", "JSON plan fields over the setup's defaults", metavar="JSON", convert=json.loads),
+               Arg("lookback_days", "--lookback-days", "how far back its entry fills are looked for"),
+               Arg("cross_override", "--cross-override", "reason to adopt a CROSS-margin position anyway")))
+async def adopt_position(symbol: str, stop_price: float, setup: str, thesis: str, plan: dict[str, Any] | None = None,
+                         lookback_days: float = 7.0, cross_override: str | None = None) -> dict[str, Any]:
+    """Adopt a short opened outside shortbot (in the Binance app) into the journal: setup, thesis, stop and plan, so
+    its targets, breakeven, time stop, R and exit lesson work like a desk trade's. The stop goes on first (tighten
+    only); the entry fills are rebuilt from trade history and refused if they don't explain the position. Refused for
+    a long, an existing journal trade, a stop resting at or below the entry, a symbol with any resting order that
+    could fill into it (the desk's: cancel_entry_group; not the desk's: cancel_external), and cross margin unless
+    cross_override gives a reason (recorded and alerted). Works while the kill switch is REDUCING or HALTED and never
+    clears it: an untracked position still trips REDUCING, and only the human clears that. Demo desk only for now."""
+    return await get_app().trader.adopt(symbol, stop_price, setup, thesis, plan, lookback_days, cross_override)
+
+
 @command(cli="update-plan", write=True, orders=True, weight=PROTECTIVE,
          help="change an open trade's plan (the update_plan MCP tool)",
          args=(Arg("symbol"), Arg("changes", "--changes", 'JSON plan fields, e.g. {"time_stop_hours": 30}',
@@ -276,6 +295,17 @@ async def cancel_entry_group(group_id: str, reason: str) -> dict[str, Any]:
     landed: they keep their stops and the guardian journals them within 5 s. cancel_failed (ok false) = still live:
     call again."""
     return await EntryDesk(get_app().trader).cancel_group(group_id, reason)
+
+
+@command(cli="cancel-external", write=True, orders=True, weight=PROTECTIVE,
+         help="cancel a resting order the desk did not place (demo for now)",
+         args=(Arg("symbol"), Arg("order_id"), Arg("reason", "--reason")))
+async def cancel_external(symbol: str, order_id: str, reason: str) -> dict[str, Any]:
+    """Cancel ONE resting order the desk did not place (pending_entries lists it as `external`), by symbol and exchange
+    order id, with a reason: it may be the owner's. Never a desk order (cancel_entry_group) and never a conditional
+    order (a stop). status external_gone = cancelled; external_filled = it filled first (its position keeps the
+    guardian's stop: adopt or close it); ok false = not confirmed, call again. Demo desk only for now."""
+    return await EntryDesk(get_app().trader).cancel_external(symbol, order_id, reason)
 
 
 @command(cli="amend", write=True, orders=True, weight=PROTECTIVE, help="move a pending limit once",

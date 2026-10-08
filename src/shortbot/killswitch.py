@@ -44,7 +44,8 @@ STALE_HEARTBEAT_S = 600                # 240 s job timeout + retry stays under i
 VERIFIED_S = 180                       # 3 positions passes (60 s), the lane's escalation: older = new risk refused
 AUTO_CLEAR_CHECKS = 2                  # distinct verified heartbeats (guardian passes) before a stale halt lifts
 STALE = "stale_heartbeat"
-ALLOWED = "close, partial close, move_stop (tighten), cancel entries, flatten"
+ALLOWED = ("close, partial close, move_stop (tighten), cancel entries, flatten; on the demo desk also adopt and "
+           "cancel-external")   # text only: what is refused is decided by gate() at each risk-adding path
 CLEAR_HINT = "only a human clears it: `.venv/bin/shortbot-admin clear --reason '...'` from a real terminal"
 _KEEP = ("state", "by", "reason", "at", "cause")
 

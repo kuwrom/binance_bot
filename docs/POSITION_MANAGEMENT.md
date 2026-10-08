@@ -102,6 +102,22 @@ trade ran at ~5% of its planned size.
 
 **Replace or chase.** Replace an order at most once. Don't chase: a market entry only if EV_now is still positive after taker fees.
 
+## (c2) Trades the owner places by hand: `shortbot adopt`, `shortbot cancel-external` (demo desk only for now)
+A short opened in the Binance app has no journal row: the guardian gives it a stop and trips the kill switch to
+REDUCING (docs/RISK_GOVERNANCE.md), and `close` / `move-stop` work on it, but it has no plan, no R and no lesson.
+- **`adopt SYMBOL --stop P --setup S --thesis ...`** journals it as a trade: the stop goes on first (tighten only), the
+  entry fills are rebuilt from trade history by order id, and its size is the position's peak. From then on the plan's
+  targets, breakeven and time stop run, and the close records R and a lesson. Refused when the history doesn't explain
+  the position, when any order that could fill into it rests on the symbol, for a stop at or below the entry, and for
+  cross margin unless `--cross-override "<reason>"` (a logged exception). Adopted trades carry
+  `entry_features.entry_type = "adopted"`.
+- **`cancel-external SYMBOL ORDER_ID --reason ...`** cancels one resting regular order the desk did not place. Never
+  a stop, never a desk order.
+- **The kill switch stays the human's.** Neither command clears or avoids it: adopting an unexplained position trips
+  REDUCING at once, and so do fills of an order the sweep had not recorded. `shortbot-admin clear` is the only way
+  back; once the position is adopted, that clear holds.
+- Both refuse on the live desk until a demo drill has run them.
+
 ## (d) What we measure
 - **Per trade, in R:** result, MAE, MFE, time-to-MFE, fees, funding, slippage.
 - **Per setup:** E[R], SQN = E[R]/σ_R·√min(N,100), shrunk Kelly, MAE of winners (for stop width), MFE quantiles (for targets).

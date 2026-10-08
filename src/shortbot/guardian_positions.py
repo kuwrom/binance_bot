@@ -247,7 +247,7 @@ class PositionChecks:
             if age >= UNTRACKED_GRACE_S:   # alerted only now: an early alert would arm a 24 h cooldown on a false alarm
                 seen = (self.user_stream.last_foreign.get(sym) if self.user_stream else None)
                 await send_safe(self.n, "untracked_position", "Position not opened via shortbot: stop is enforced but "
-                                "no plan/thesis. Journal it or close it." + (
+                                "no plan/thesis. Close it, or journal it (adopt: demo desk only)." + (
                                     f" The user-data stream saw an order not placed by shortbot on it: {seen}."
                                     if seen else ""), sym, cooldown_s=86400)
                 await ks.trip(self.j, self.app.settings, REDUCING, "guardian", f"reconciliation: {sym} position "
