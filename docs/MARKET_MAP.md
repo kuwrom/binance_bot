@@ -71,3 +71,24 @@ Tags: [S] strong/replicated, [M] one solid study, [W] weak/folklore, [P] officia
   - Event = the first 1m bar above a level after ≥ 60 min below it, with a 240-min cooldown per level.
   - Fake-out = the max excursion until a close below L − 0.25 ATR(1h), measured on last and mark.
   - Trust p90 with n ≥ 300 and p95 with n ≥ 500. Events co-move with BTC, so they are not independent.
+
+## Market news: unscheduled market-wide headlines (shadow, #92)
+- **Why:** on 2026-10-08 every sector fell 3.6-4.8% in 4h on BTC-level headlines that had sat in `coin_news BTC` for
+  hours (US government moving $770M then $1B of seized BTC, record ETF outflows, US-Iran strike fears). The calendar
+  covers scheduled macro, the map's pause covers BTC impulses and `news_on_position` covers our own coins; nothing
+  covered unscheduled market-wide news.
+- **Job:** the market guardian's research lane, every 5 min (`market_news.py`). It reads BTC and ETH headlines from the
+  existing sources (`news.news_for`: Binance announcements and the RSS feeds, cleaned as untrusted text) and tags titles
+  with a keyword classifier: `holder_transfer` (government, whale, miner or treasury moving or selling coins),
+  `etf_flow`, `hack_insolvency` (a hack naming a venue or $50M+, or withdrawals halted), `geopolitics` (war, strikes,
+  tariffs) and `regulation` (an agency plus an enforcement or approval verb). Deduped by link and by normalised title;
+  items older than 3h and everything present at the first run are marked seen, never alerted.
+- **Alert:** one `market_news` alert per new tagged item, urgent, to both desks (`alerts_view.MARKET_ACTORS`). After 3 in
+  an hour, the rest of the burst arrive as routine `market_news_more`. The first line is ours (classes, coin, source,
+  time); the headline is third-party text: read it with `coin_news BTC` / `coin_news ETH`.
+- **Research log:** `market_news_events` keeps each item with BTC, ETH and the 20 most liquid alts' prices and the map's
+  header at detection. The hourly research job labels it after 24h: BTC/ETH returns at +1h/+4h/+24h and their lowest
+  low within 4h/24h, and the alt basket's median return and share of alts down. `shortbot study market_news` reports by
+  class, one mean per UTC day (one story's headlines cluster).
+- **Status:** context, not a trigger. It changes no gate, size or order. Before it becomes an entry gate it needs a
+  registered test against the unconditional returns of the same weeks, on enough distinct days.

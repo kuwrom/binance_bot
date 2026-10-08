@@ -12,6 +12,7 @@ warmup the exchange layer). A table grows by adding columns to COLUMNS; the Jour
 - ladder_shadow, trial_ledger: the ladder's shadow log and its variants (ladder.py)
 - warmups: cold-start warm-ups (warmup.py)
 - laggard_events: the sector-laggard study (laggard.py)
+- market_news_events: tagged market-wide headlines and their next 1h/4h/24h (market_news.py, shadow, #92)
 - level_sweeps: the level-sweep study (sweeps.py)
 - guardian_gaps: verified-heartbeat gaps over uptime.GAP_S, from the last stamp to the next, tagged `drill` inside a
   drill window (uptime.py, #46)
@@ -36,6 +37,9 @@ CREATE TABLE IF NOT EXISTS warmups (
 CREATE TABLE IF NOT EXISTS laggard_events (id INTEGER PRIMARY KEY, ts TEXT, ts_ms INTEGER, sector TEXT,
     leader TEXT, leader_ret4h REAL, laggard TEXT, laggard_ret4h REAL, laggard_px REAL, control TEXT,
     control_ret4h REAL, control_px REAL, breadth REAL, outcome TEXT, labelled_at TEXT);
+CREATE TABLE IF NOT EXISTS market_news_events (id INTEGER PRIMARY KEY, ts TEXT, ts_ms INTEGER, published TEXT,
+    source TEXT, coin TEXT, classes TEXT, title TEXT, url TEXT, key TEXT UNIQUE, ref TEXT, context TEXT, outcome TEXT,
+    labelled_at TEXT);
 CREATE TABLE IF NOT EXISTS level_sweeps (symbol TEXT, ts INTEGER, kind TEXT, tier INTEGER, level REAL,
     data TEXT, PRIMARY KEY (symbol, ts, kind, level));
 CREATE TABLE IF NOT EXISTS guardian_gaps (

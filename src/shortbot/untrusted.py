@@ -18,9 +18,10 @@ _MARKUP = re.compile(
 _ROLE = re.compile(r"\b(system|assistant|human|user|developer)\s*:", re.IGNORECASE)
 _URL = re.compile(r"https?://[^\s<>\"'`{}|\\^]{1,500}")
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z _-]{0,19}")
-# Alert kinds whose message carries third-party text: the guardian's news_on_position (headline) and binance_*
-# (announcement title). The brief never prints their message; tools wrap it.
-THIRD_PARTY_ALERTS = ("news_on_position", "binance_")
+# Alert kinds whose message carries third-party text: the guardian's news_on_position (headline), binance_*
+# (announcement title) and market_news* (headline after our own first line). The brief never prints their
+# third-party part; tools wrap the whole message.
+THIRD_PARTY_ALERTS = ("news_on_position", "binance_", "market_news")
 # Learning provenance tags that mean "the evidence came from third-party text" (see add_learning).
 THIRD_PARTY_SOURCES = ("coin_news", "latest_announcements", "coin_snapshot.news", "news", "announcement", "rss",
                        "social", "web", "url")

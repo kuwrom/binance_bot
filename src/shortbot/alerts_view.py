@@ -23,6 +23,7 @@ URGENT_KINDS = (
     "margin_asset", "margin_thin", "margin_check_error", "multi_assets_mode", "target_cancel_failed",
     "prearm_left", "stop_left", "orphan_stop_*", "unexpected_error",   # #37: stops left behind, order-path bugs
     "break_watch",   # an open short's break score reached 2 of #81's checks (guardian_coins.py); alerts never exit
+    "market_news",   # #92 shadow: a tagged market-wide headline (market_news.py); context, never a trigger
 )
 URGENT_ON_BOOK = ("binance_delisting",)   # urgent when it names a coin on our book (#23: the alert carries its symbol)
 RECOVERED, FAILED = "guardian_recovered:", ("guardian_failing:", "guardian_error:")   # + the guardian job's name
@@ -45,7 +46,7 @@ def _rows(j, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
 # alerts, and the general listing/delisting heads-up (guardian_jobs._announce: no symbol on a book).
 MARKET_ACTORS = tuple(f"guardian:{j}" for j in (
     "social", "refresh", "housekeeping", "processes", "metrics", "research", "calendar", "market_map", "sweeps",
-    "supply", "laggard", "long_shadow", "scan", "cadence_shadow", "mtf_views", "onchain"))
+    "supply", "laggard", "long_shadow", "scan", "cadence_shadow", "mtf_views", "onchain", "market_news"))
 # this desk's alerts (rows from before #32 have no mode: demo's) and the shared market ones
 MINE = (f"(COALESCE(mode, 'demo') = ? OR actor IN ({', '.join(repr(a) for a in MARKET_ACTORS)}) OR "
         "(kind IN ('binance_new_listing', 'binance_delisting') AND symbol IS NULL))")
@@ -67,6 +68,8 @@ def ack_id(j) -> int:
 def _line(a: dict[str, Any], mark: str = "", n: int = 1) -> str:
     head = f"- {mark}#{a['id']} {a['ts'][5:16].replace('T', ' ')} {a['kind']} {a['symbol'] or ''}".rstrip()
     head += f" ({n}x)" if n > 1 else ""
+    if a["kind"].startswith("market_news"):   # first line ours (classes, coin, source, time); the headline isn't
+        return f"{head}: {flat(a['message'].split(chr(10))[0], 200)} (headline: third-party, via coin_news BTC/ETH)"
     if third_party_alert(a["kind"]):
         where = f"coin_news {a['symbol'].split('/')[0]}" if a["kind"] == "news_on_position" and a["symbol"] \
             else "latest_announcements"
