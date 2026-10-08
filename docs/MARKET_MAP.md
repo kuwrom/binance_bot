@@ -71,3 +71,30 @@ Tags: [S] strong/replicated, [M] one solid study, [W] weak/folklore, [P] officia
   - Event = the first 1m bar above a level after ≥ 60 min below it, with a 240-min cooldown per level.
   - Fake-out = the max excursion until a close below L − 0.25 ATR(1h), measured on last and mark.
   - Trust p90 with n ≥ 300 and p95 with n ≥ 500. Events co-move with BTC, so they are not independent.
+
+## Market news: unscheduled market-wide headlines (shadow, #92)
+- **Why:** on 2026-10-08 every sector fell 3.6-4.8% in 4h on BTC-level headlines that had sat in `coin_news BTC` for
+  hours (US government moving $770M then $1B of seized BTC, record ETF outflows, US-Iran strike fears). The calendar
+  covers scheduled macro, the map's pause covers BTC impulses and `news_on_position` covers our own coins; nothing
+  covered unscheduled market-wide news.
+- **Job:** the market guardian's research lane, every 5 min (`market_news.py`). It reads BTC and ETH headlines from the
+  existing sources (`news.news_for`: Binance announcements and the RSS feeds, cleaned as untrusted text) and tags titles
+  with a keyword classifier: `holder_transfer` (a government, whale, long-term holder or miner moving or selling coins),
+  `etf_flow` (record/largest flows, or $500M+), `hack_insolvency` (a hack naming a venue or $50M+, or withdrawals halted
+  other than for maintenance or an upgrade), `geopolitics` (war, strikes, sanctions or tariffs tied to a country or
+  region) and `regulation` (an agency plus an enforcement or approval verb, or an executive order). Deduped by link and
+  by normalised title; an item is marked seen only once alerted and logged. Items older than 3h and everything present
+  at the first run are marked, never alerted. Every source down (all RSS feeds and the announcements) fails the job.
+- **Alert:** one `market_news` alert per new tagged item to both desks (`alerts_view.MARKET_ACTORS`), urgent on Telegram
+  for the first 3 an hour; the rest of a burst are routine `market_news_more` rows (Telegram: one an hour). The brief and
+  `start_session` list them after every protective alert, collapsed to one line, never inside the 8 urgent slots. The
+  first line is ours (classes, coin, source, time); the headline is third-party text: read it with `coin_news BTC` /
+  `coin_news ETH`. The level watch prints the same line, never the headline.
+- **Research log:** `market_news_events` keeps each item with BTC, ETH and the 20 most liquid alts' prices and the map's
+  header at detection. The hourly research job labels it after 24h on 15m bars from the first full bar after
+  detection: `r1h`/`r4h`/`r24h` are the closes 1h/4h/24h after that bar opens (so 0-15 min later than detection + h),
+  `low4h`/`low24h` the deepest lows in the window, and the alt basket's median return and share of alts down. A failed
+  BTC/ETH fetch is retried for 6 runs, then marked `failed`. `shortbot study market_news` reports by class, one mean
+  per UTC day (one story's headlines cluster).
+- **Status:** context, not a trigger. It changes no gate, size or order. Before it becomes an entry gate it needs a
+  registered test against the unconditional returns of the same weeks, on enough distinct days.

@@ -23,6 +23,7 @@ URGENT_KINDS = (
     "margin_asset", "margin_thin", "margin_check_error", "multi_assets_mode", "target_cancel_failed",
     "prearm_left", "stop_left", "orphan_stop_*", "unexpected_error",   # #37: stops left behind, order-path bugs
     "break_watch",   # an open short's break score reached 2 of #81's checks (guardian_coins.py); alerts never exit
+    "market_news",   # #92 shadow: a tagged market-wide headline (market_news.py); context, never a trigger
 )
 URGENT_ON_BOOK = ("binance_delisting",)   # urgent when it names a coin on our book (#23: the alert carries its symbol)
 RECOVERED, FAILED = "guardian_recovered:", ("guardian_failing:", "guardian_error:")   # + the guardian job's name
@@ -45,7 +46,7 @@ def _rows(j, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
 # alerts, and the general listing/delisting heads-up (guardian_jobs._announce: no symbol on a book).
 MARKET_ACTORS = tuple(f"guardian:{j}" for j in (
     "social", "refresh", "housekeeping", "processes", "metrics", "research", "calendar", "market_map", "sweeps",
-    "supply", "laggard", "long_shadow", "scan", "cadence_shadow", "mtf_views", "onchain"))
+    "supply", "laggard", "long_shadow", "scan", "cadence_shadow", "mtf_views", "onchain", "market_news"))
 # this desk's alerts (rows from before #32 have no mode: demo's) and the shared market ones
 MINE = (f"(COALESCE(mode, 'demo') = ? OR actor IN ({', '.join(repr(a) for a in MARKET_ACTORS)}) OR "
         "(kind IN ('binance_new_listing', 'binance_delisting') AND symbol IS NULL))")
@@ -64,14 +65,30 @@ def ack_id(j) -> int:
     return int(row[0] or 0)
 
 
-def _line(a: dict[str, Any], mark: str = "", n: int = 1) -> str:
-    head = f"- {mark}#{a['id']} {a['ts'][5:16].replace('T', ' ')} {a['kind']} {a['symbol'] or ''}".rstrip()
-    head += f" ({n}x)" if n > 1 else ""
+NEWS_KINDS = "market_news"   # prefix: market_news (urgent, for Telegram) and market_news_more (routine)
+
+
+def is_news(kind: str) -> bool:
+    """A market-wide headline (#92): urgent for Telegram, but the brief and start_session rank it after every
+    protective alert and collapse it to one line, so a burst of headlines never pushes one out of the urgent slots."""
+    return kind.startswith(NEWS_KINDS)
+
+
+def body(a: dict[str, Any]) -> str:
+    """An alert's text as the brief and the level watch print it: ours flat, third-party text never."""
+    if is_news(a["kind"]):   # first line ours (classes, coin, source, time); the headline isn't
+        return f"{flat(a['message'].split(chr(10))[0], 200)} (headline: third-party, via coin_news BTC/ETH)"
     if third_party_alert(a["kind"]):
         where = f"coin_news {a['symbol'].split('/')[0]}" if a["kind"] == "news_on_position" and a["symbol"] \
             else "latest_announcements"
-        return f"{head}: third-party text, fetch via {where}"
-    return f"{head}: {flat(a['message'])}"
+        return f"third-party text, fetch via {where}"
+    return flat(a["message"])
+
+
+def _line(a: dict[str, Any], mark: str = "", n: int = 1) -> str:
+    head = f"- {mark}#{a['id']} {a['ts'][5:16].replace('T', ' ')} {a['kind']} {a['symbol'] or ''}".rstrip()
+    head += f" ({n}x)" if n > 1 else ""
+    return f"{head}: {body(a)}"
 
 
 def brief_lines(j) -> list[str]:
@@ -84,10 +101,12 @@ def brief_lines(j) -> list[str]:
     n_urgent = sum(r["n"] for r in counts if r["u"])
     out = [f"### alerts: {total} unacknowledged since #{after} ({n_urgent} urgent); start_session acknowledges them"]
     if n_urgent:
-        urgent, over = _urgent_first_open(j, after)
+        urgent, over, news = _urgent_first_open(j, after)
         out += [_line(a, "🚨 (recovered since) " if a["recovered"] else "🚨 ") for a in urgent]
-        if n_urgent > URGENT_CAP:
-            out.append(f"- 🚨 {n_urgent - URGENT_CAP} more urgent"
+        if news:   # every market headline in one line, after the protective ones (newest shown, count in "(Nx)")
+            out.append(_line(news[0], "🚨 market headlines: ", n=len(news)))
+        if n_urgent - len(news) > URGENT_CAP:
+            out.append(f"- 🚨 {n_urgent - len(news) - URGENT_CAP} more urgent"
                        + (f" ({over} of them guardian errors that recovered)" if over else "")
                        + ": see the journal tool")
     routine = [r for r in counts if not r["u"]]
@@ -103,22 +122,24 @@ def brief_lines(j) -> list[str]:
     return out
 
 
-def _urgent_first_open(j, after: int) -> tuple[list[dict[str, Any]], int]:
-    """(the URGENT_CAP urgent alerts to list, how many recovered ones the cap left out). A guardian job's
+def _urgent_first_open(j, after: int) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+    """(the URGENT_CAP urgent alerts to list, how many recovered ones the cap left out, the market headlines newest
+    first: never in the cap, the brief collapses them into one line, is_news). A guardian job's
     guardian_failing / guardian_error with a later guardian_recovered for the same job is over: it stays urgent and
     counted, but is listed after the alerts still open, so a timeout that healed never pushes a live one past the cap.
     Newest first within each part."""
     healed = {r["job"]: r["id"] for r in _rows(
         j, f"SELECT substr(kind, {len(RECOVERED) + 1}) AS job, MAX(id) AS id FROM alerts WHERE id > ? AND {MINE} AND "
            "kind LIKE ? GROUP BY job", (after, j.mode, RECOVERED + "%"))}
-    ids = _rows(j, f"SELECT id, kind FROM alerts WHERE id > ? AND {MINE} AND urgent(kind, symbol) ORDER BY id DESC",
-                (after, j.mode))
+    every = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND {MINE} AND urgent(kind, symbol) ORDER BY id DESC",
+                  (after, j.mode))
+    news = [a for a in every if is_news(a["kind"])]
+    ids = [a for a in every if not is_news(a["kind"])]
     done = {a["id"] for a in ids if a["kind"].startswith(FAILED) and healed.get(a["kind"].split(":", 1)[1], 0) > a["id"]}
     order = [a["id"] for a in ids if a["id"] not in done] + [a["id"] for a in ids if a["id"] in done]
     show = order[:URGENT_CAP]
-    rows = {r["id"]: r for r in _rows(j, f"SELECT * FROM alerts WHERE id IN ({','.join('?' * len(show))})",
-                                      tuple(show))}
-    return [{**rows[i], "recovered": i in done} for i in show], len(done - set(show))
+    rows = {a["id"]: a for a in ids}
+    return [{**rows[i], "recovered": i in done} for i in show], len(done - set(show)), news
 
 
 def acknowledge(j) -> dict[str, Any]:
@@ -128,11 +149,16 @@ def acknowledge(j) -> dict[str, Any]:
     through = int(j.db.execute(f"SELECT MAX(id) FROM alerts WHERE {MINE}", (j.mode,)).fetchone()[0] or after)
     rows = _rows(j, f"SELECT kind, COUNT(*) AS n FROM alerts WHERE id > ? AND id <= ? AND {MINE} GROUP BY kind "
                     "ORDER BY n DESC", (after, through, j.mode))
-    items = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND id <= ? AND {MINE} AND urgent(kind, symbol) "
-                     "ORDER BY id DESC LIMIT ?", (after, through, j.mode, URGENT_CAP))
+    items = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND id <= ? AND {MINE} AND urgent(kind, symbol) AND kind "
+                     "NOT LIKE ? ORDER BY id DESC LIMIT ?", (after, through, j.mode, NEWS_KINDS + "%", URGENT_CAP))
+    news = _rows(j, f"SELECT * FROM alerts WHERE id > ? AND id <= ? AND {MINE} AND urgent(kind, symbol) AND kind "
+                    "LIKE ? ORDER BY id DESC", (after, through, j.mode, NEWS_KINDS + "%"))
     j.set(j.mode_key(ACK_KEY), str(through))
-    return {"through_id": through, "count": sum(r["n"] for r in rows), "by_kind": {r["kind"]: r["n"] for r in rows},
-            "urgent": [for_agent(a) for a in items]}
+    out = {"through_id": through, "count": sum(r["n"] for r in rows), "by_kind": {r["kind"]: r["n"] for r in rows},
+           "urgent": [for_agent(a) for a in items]}
+    if news:   # after the protective ones, never in their cap: the newest, with the count (coin_news BTC/ETH)
+        out["market_headlines"] = {"count": len(news), "newest": for_agent(news[0])}
+    return out
 
 
 def for_agent(a: dict[str, Any]) -> dict[str, Any]:

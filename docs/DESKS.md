@@ -27,7 +27,7 @@ the brief show each limit with its source.
 Per desk in the journal: trades, entries, intents, decisions, target orders, alerts and their acknowledgement, alert
 cooldowns, the kill switch, the guardian heartbeat, equity peak and marks, governor, setup ladders, warm-ups, coin
 events seen, symbol locks, desk limits. Shared: learnings, the registry, scans, coin memory states, market data, research, and the
-market jobs' alerts (scan, processes, social, listing heads-ups), which both sessions see.
+market jobs' alerts (scan, processes, social, market news, listing heads-ups), which both sessions see.
 
 **Live depends on the demo guardian.** It runs the market jobs for both desks: the market map and its pause veto,
 scans, liquidations, streams, calendar. The live guardian protects live positions on its own, but while `guardian` is

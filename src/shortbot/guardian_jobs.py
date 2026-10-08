@@ -181,7 +181,8 @@ class MarketJobs:
                               urgent=True)
 
     async def housekeeping(self) -> None:
-        n = await self.j.write(Journal.prune_kv, ("news_seen:", "ann_seen:", "alert_ts:", KV_STOP_SENT), 30 * 86400)
+        n = await self.j.write(Journal.prune_kv, ("news_seen:", "ann_seen:", "mnews_seen:", "alert_ts:",
+                                                         KV_STOP_SENT), 30 * 86400)
         n += await self.j.write(Journal.prune_kv, (scan_job.KV_SEEN,), scan_job.RENOTIFY_S)   # alert dedup, expired
         m = await self.liq_store.prune()
         b = await asyncio.to_thread(stream_task.prune, self.streams_db) if self.streams_db else 0
@@ -261,6 +262,8 @@ class MarketJobs:
         x = await research.label_post_exit(self.ex, self.j, now)
         from .laggard import label as label_laggards
         x += await label_laggards(self.ex, self.j)
+        from .market_news_label import label as label_market_news
+        x += await label_market_news(self.ex, self.j)
         from . import registry
         path = self.j.w.path   # labelled scans -> registry node episodes, off the loop (in-memory journal: none)
         fed = await asyncio.to_thread(_feed, path, self.j.mode) if n and path else 0
@@ -283,6 +286,14 @@ class MarketJobs:
         await self.j.write(log_snapshot, m)
         if m["vetoes"]["pause"]:
             await self.n.send("market_pause", "; ".join(m["vetoes"]["pause"]), cooldown_s=3600)
+
+    async def market_news(self) -> None:
+        """#92 shadow (market_news.py): new BTC/ETH headlines tagged market-moving, one alert each to both desks, logged
+        with the market's next 1h/4h/24h (labelled by label_research). No orders, no gates."""
+        from . import market_news
+        r = await market_news.poll(self.ex, self.j, self.n)
+        if r["new"] or r["errors"]:
+            log.info("market news: %s", r)
 
     async def sweep_study(self) -> None:
         """Daily: extend the level-sweep study with the last ~day of 1m data (regime-aware stop guide)."""

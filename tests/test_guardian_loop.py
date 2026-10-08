@@ -19,7 +19,7 @@ from tests.test_guardian import SETTINGS, guardian_with, kinds, open_trade
 # the scan lane's jobs run for real: they must never block the loop (#78; test_scan_lane_lag.py on real-sized data)
 SLOW_JOBS = ("watch_positions", "check_governor", "check_announcements", "record_social", "research_refresh",
              "housekeeping", "record_metrics", "label_research", "refresh_calendar", "market_map", "sweep_study",
-             "refresh_supply", "ladder_shadow", "laggard_study", "coin_memory")
+             "refresh_supply", "ladder_shadow", "laggard_study", "coin_memory", "market_news")
 
 
 def lane_with(*jobs, journal=None, **kw):

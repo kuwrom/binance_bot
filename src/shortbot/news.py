@@ -126,12 +126,15 @@ async def listing_announcements(pages: int = LISTING_PAGES) -> list[dict]:
 
 
 async def rss_headlines(max_age_h: float = 48) -> list[dict]:
-    async def fetch_one(c: httpx.AsyncClient, src: str, url: str) -> list[dict]:
+    """Every feed's recent items. A feed that fails is skipped; when every feed fails this raises (news_for reports
+    it as an error: no headlines from dead feeds is not "no news")."""
+    async def fetch_one(c: httpx.AsyncClient, src: str, url: str) -> list[dict] | None:
         try:
             r = await c.get(url)
-            feed = feedparser.parse(r.content)
+            r.raise_for_status()
+            feed = await asyncio.to_thread(feedparser.parse, r.content)   # CPU-bound: off the event loop
         except Exception:
-            return []
+            return None
         items = []
         for e in feed.entries[:40]:
             ts = e.get("published_parsed") or e.get("updated_parsed")
@@ -146,7 +149,9 @@ async def rss_headlines(max_age_h: float = 48) -> list[dict]:
     async def fetch():
         async with httpx.AsyncClient(headers=UA, timeout=15, follow_redirects=True) as c:
             batches = await asyncio.gather(*(fetch_one(c, s, u) for s, u in RSS_FEEDS.items()))
-        return sorted((i for b in batches for i in b), key=lambda x: x["time"], reverse=True)
+        if all(b is None for b in batches):
+            raise RuntimeError(f"every RSS feed failed ({len(batches)})")   # raised, so never cached
+        return sorted((i for b in batches if b for i in b), key=lambda x: x["time"], reverse=True)
     return await _cached("rss", 300, fetch)
 
 

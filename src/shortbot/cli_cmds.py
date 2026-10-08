@@ -20,12 +20,13 @@ async def brief() -> str:
 
 
 @command(mcp=False, cli="study", weight=RESEARCH, help="shadow study results: ladder variants vs hold | laggard "
-         "catch-up | sweeps | patterns (week event study: pumps, sweeps, squeezes, funding x liquidity)", args=(
-    Arg("name", choices=("ladder", "laggard", "sweeps", "patterns")),
+         "catch-up | sweeps | patterns (week event study: pumps, sweeps, squeezes, funding x liquidity) | market_news "
+         "(tagged market-wide headlines vs the next 1h/4h/24h, #92)", args=(
+    Arg("name", choices=("ladder", "laggard", "sweeps", "patterns", "market_news")),
     Arg("fetch", "--fetch", "patterns: refresh 10 days of hourly data for every perp")))
 async def study(name: str, fetch: bool = False) -> dict[str, Any]:
     """Every study's trials go into the trial register (#31). sweeps is descriptive (fake-out size quantiles for stop
-    placement), not a test."""
+    placement), not a test; so is market_news until its test is registered."""
     from . import trial_register as TR
     from .backtest import register_rows as RR
     app = get_app()
@@ -40,6 +41,9 @@ async def study(name: str, fetch: bool = False) -> dict[str, Any]:
     elif name == "laggard":
         from .laggard import report as lag_report
         res, rows = lag_report(app.journal), RR.laggard_rows
+    elif name == "market_news":
+        from .market_news_label import report as news_report
+        return news_report(app.journal)
     else:
         from .sweeps import report as sweep_report
         return sweep_report(app.journal)

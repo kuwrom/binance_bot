@@ -50,6 +50,9 @@ The shortbot state was injected at session start: kill switch, stale processes, 
 - Run `market_map` (`shortbot map`) before judging any single coin. It shows the regime, breadth, and each sector's move after removing BTC's move, plus rotation in/out.
   - Short laggards in weak or rotating-out sectors.
   - Never short into a sector rally or a rotation in (hard vetoes, docs/MARKET_MAP.md).
+  - A **`market_news`** alert (a tagged BTC/ETH headline: holder transfer, ETF flow, hack, geopolitics, regulation) is
+    context, not a trigger, until its forward data supports it (docs/MARKET_MAP.md "Market news"). Read it with
+    `coin_news BTC`, re-check `market_map` and the tide (#92), and weigh it in sizing and in open shorts' exits.
 - Run `shortbot governor`. It covers the daily and weekly caps, drawdown tiers, loss streak and give-back stop (docs/RISK_GOVERNANCE.md).
   - A halt means no new entries. Never work around it.
   - Conviction: C 0.5x, B 1x (default).
