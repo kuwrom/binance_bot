@@ -45,7 +45,7 @@ _NOT_WAR = re.compile(r"\b(?:price|fee|fees|bidding|culture|console|flippening|l
 _SCHEDULED = re.compile(r"\b(?:maintenance|upgrade|hard fork|scheduled|network update)\b", _I)
 
 # class: alternatives; one matches when every pattern in it matches
-_HOLDER = (r"\b(?:governments?|govt|seized|confiscated|doj|department of justice|marshals?|mt\.?\s?gox|silk road|"
+_HOLDER = (r"\b(?:governments?|govt?|seized|confiscated|doj|department of justice|marshals?|mt\.?\s?gox|silk road|"
            r"whales?|satoshi[- ]era|dormant|long[- ]term (?:\w+ )?holders?|lths?|miners?|foundation|bhutan\w*|"
            r"el salvador)\b")
 _MOVE = (r"\b(?:mov(?:e|es|ed|ing)|transfer(?:s|red|ring)?|sen(?:d|ds|t|ding)|deposit(?:s|ed|ing)?|offload\w*|"

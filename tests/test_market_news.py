@@ -58,6 +58,32 @@ NOISE = [
 ]
 
 
+# the reviewer's exact headlines (2026-10-08 review)
+REVIEW_NONE = [
+    "Bitcoin ETFs see $45M inflows", "BlackRock ETF flows: what they mean", "Bitcoin miners shift to AI",
+    "Ethereum Foundation shifts focus", "Shareholders approve Bitcoin treasury plan",
+    "Bitcoin miner strikes nuclear power deal", "China's digital yuan a threat to Bitcoin?",
+    "Binance Will Suspend Withdrawals on the Ethereum Network During the Fusaka Upgrade",
+    "Coinbase pauses withdrawals for scheduled maintenance",
+]
+REVIEW_TAGGED = [
+    ("US gov moves $1B from Bitfinex hack wallet", "holder_transfer"),   # hack_insolvency too is acceptable
+    ("Bitcoin dips amid Middle East tensions", "geopolitics"),
+    ("Long-term Bitcoin holders are selling", "holder_transfer"),
+    ("Trump signs executive order on crypto", "regulation"),
+]
+
+
+@pytest.mark.parametrize(("title", "want"), REVIEW_TAGGED)
+def test_the_reviewers_market_headlines_are_tagged(title, want):
+    assert want in classify(title)
+
+
+@pytest.mark.parametrize("title", REVIEW_NONE)
+def test_the_reviewers_noise_is_not(title):
+    assert classify(title) == []
+
+
 @pytest.mark.parametrize(("title", "want"), OCT_08 + OTHER_CLASSES)
 def test_market_moving_headlines_are_tagged(title, want):
     assert classify(title) == want
