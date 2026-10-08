@@ -27,6 +27,12 @@ OTHER_CLASSES = [
     ("Trump announces new tariffs on China; Bitcoin falls", ["geopolitics"]),
     ("Mt. Gox moves 10,000 BTC ahead of repayments", ["holder_transfer"]),
     ("Dormant Satoshi-era whale wakes, sends 8,000 BTC to Binance", ["holder_transfer"]),
+    ("Bitcoin ETF outflows hit $650M as BTC slips", ["etf_flow"]),
+    ("US Treasury sanctions crypto exchange over Bitcoin laundering", ["regulation"]),
+    # the review's misses
+    ("Middle East tensions escalate; Bitcoin slides", ["geopolitics"]),
+    ("Long-term Bitcoin holders selling at the fastest pace since 2024", ["holder_transfer"]),
+    ("Trump signs executive order opening 401(k)s to Bitcoin", ["regulation"]),
 ]
 NOISE = [
     "Bitcoin price prediction: can BTC reclaim $85K this week?",
@@ -39,6 +45,16 @@ NOISE = [
     "Bitcoin ETF options volume hits a record",
     "$480 million in crypto liquidations in one hour as Bitcoin drops",   # the move itself, not a cause
     "Small DeFi app exploited for $300K on Ethereum",
+    # the review's false positives
+    "Bitcoin ETFs see $120M inflows on Tuesday",                           # a routine daily flow report
+    "Spot Ether ETFs log $45M outflows, third day in a row",
+    "Whales shift 5,000 BTC between wallets",
+    "Ethereum treasury firm buys 10,000 ETH",
+    "US Treasury yields climb as Bitcoin holds steady",
+    "Binance strikes deal with Russia-linked payments firm on Bitcoin rails",
+    "Analysts see a threat to Bitcoin from China's quantum research",
+    "Binance suspends ETH withdrawals for scheduled network upgrade",
+    "Coinbase pauses deposits and withdrawals for Bitcoin wallet maintenance",
 ]
 
 
@@ -154,9 +170,16 @@ async def test_a_burst_gets_three_urgent_alerts_an_hour_then_routine_ones(monkey
     j, n = desk(tmp_path / "j.db")
     j.set(market_news.KV_INIT, "1")
     items = [headline(t, f"https://x.example/{i}") for i, (t, _) in enumerate(OCT_08 + OTHER_CLASSES[:1])]
+    sent, real = [], n.send
+
+    async def spy(kind, msg, *a, **k):
+        sent.append((kind, k.get("urgent")))
+        return await real(kind, msg, *a, **k)
+    n.send = spy
     assert (await poll(monkeypatch, j, n, {"BTC": items}))["new"] == 5
     ks = kinds(j)
-    assert ks.count("market_news") == 3 and ks.count("market_news_more") == 2
+    assert ks.count("market_news") == 3 and ks.count("market_news_more") == 2   # every item has its row
+    assert [k for k, _ in sent] == ["market_news"] * 3 + ["market_news_more"]   # Telegram: one overflow an hour
     assert not alerts_view.is_urgent("market_news_more")
     assert j.db.execute("SELECT COUNT(*) FROM market_news_events").fetchone()[0] == 5   # every one is logged
 
@@ -200,3 +223,45 @@ async def test_the_guardian_job_touches_no_order(monkeypatch):
     await g.market_news()
     assert [a["kind"] for a in g.j.alerts(20)] == ["market_news"]
     assert fake.orders == [] and not fake.limits and not fake.algo and not fake.stops and fake.position == 0
+
+
+async def test_an_item_is_marked_seen_only_once_alerted_and_logged(monkeypatch, tmp_path):
+    j, n = desk(tmp_path / "j.db")
+    j.set(market_news.KV_INIT, "1")
+    item = {"BTC": [headline(OCT_08[0][0], "https://x.example/gov")]}
+    real = j.write
+    calls = []
+
+    async def failing_once(fn, *a):
+        calls.append(fn)
+        if len(calls) == 1:
+            raise TimeoutError("journal locked")
+        return await real(fn, *a)
+    j.write = failing_once
+    with pytest.raises(TimeoutError):
+        await poll(monkeypatch, j, n, item)
+    assert not any(j.get(market_news.KV_SEEN + k) for k in item_keys(item["BTC"][0]))   # left for the next pass
+    assert (await poll(monkeypatch, j, n, item))["new"] == 1                            # alerted again, now logged
+    assert (await poll(monkeypatch, j, n, item))["new"] == 0
+    assert j.db.execute("SELECT COUNT(*) FROM market_news_events").fetchone()[0] == 1
+
+
+async def test_all_rss_feeds_down_is_an_error_so_the_job_can_fail(monkeypatch):
+    news._cache.pop("rss", None)
+
+    class Down:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            raise OSError("network down")
+    monkeypatch.setattr(news.httpx, "AsyncClient", Down)
+    with pytest.raises(RuntimeError, match="every RSS feed failed"):
+        await news.rss_headlines()
+    assert "rss" not in news._cache                                  # a failure is never cached

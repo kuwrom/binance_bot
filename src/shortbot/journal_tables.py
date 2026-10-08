@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS laggard_events (id INTEGER PRIMARY KEY, ts TEXT, ts_m
     control_ret4h REAL, control_px REAL, breadth REAL, outcome TEXT, labelled_at TEXT);
 CREATE TABLE IF NOT EXISTS market_news_events (id INTEGER PRIMARY KEY, ts TEXT, ts_ms INTEGER, published TEXT,
     source TEXT, coin TEXT, classes TEXT, title TEXT, url TEXT, key TEXT UNIQUE, ref TEXT, context TEXT, outcome TEXT,
-    labelled_at TEXT);
+    labelled_at TEXT, label_tries INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS level_sweeps (symbol TEXT, ts INTEGER, kind TEXT, tier INTEGER, level REAL,
     data TEXT, PRIMARY KEY (symbol, ts, kind, level));
 CREATE TABLE IF NOT EXISTS guardian_gaps (

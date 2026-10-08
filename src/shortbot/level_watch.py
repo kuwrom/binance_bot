@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import http, weight
-from .alerts_view import MINE
+from .alerts_view import MINE, body
 from .config import Settings
 
 EVERY_S = 45
@@ -68,9 +68,11 @@ def _alerts(db: Path, mode: str, after: int | None) -> tuple[int, list[str]]:
         top = c.execute(f"SELECT MAX(id) FROM alerts WHERE {MINE}", (mode,)).fetchone()[0] or 0
         if after is None or top <= after:
             return top, []
-        rows = c.execute(f"SELECT id, kind, symbol, substr(message, 1, 140) FROM alerts WHERE id > ? AND {MINE} "
+        rows = c.execute(f"SELECT id, kind, symbol, message FROM alerts WHERE id > ? AND {MINE} "
                          "ORDER BY id", (after, mode)).fetchall()
-        return top, [f"alert #{i} {k} {s or ''}: {m}" for i, k, s, m in rows]
+        # as the brief prints them: a line wakes the session outside any tool result, so third-party text
+        # (headlines, announcement titles) never appears, only where to read it as untrusted data
+        return top, [f"alert #{i} {k} {s or ''}: {body({'kind': k, 'symbol': s, 'message': m})}" for i, k, s, m in rows]
     finally:
         c.close()
 

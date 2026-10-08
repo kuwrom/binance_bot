@@ -183,7 +183,7 @@ class _Feeds:
     async def get(self, url, params=None):
         if url == news.CMS_LIST:
             return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {"catalogs": []}})
-        return SimpleNamespace(content=self.content)
+        return SimpleNamespace(raise_for_status=lambda: None, content=self.content)   # an httpx.Response 200
 
 
 async def test_a_headline_whose_link_fails_safe_url_still_alerts_on_an_open_short(monkeypatch):
