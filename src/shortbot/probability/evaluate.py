@@ -8,6 +8,7 @@ observation per (source, symbol) episode; every interval is a Wilson CI clustere
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -77,6 +78,41 @@ def expectancy(rows: list[dict], group: Callable[[dict], Any], min_n: int = 5) -
     return out
 
 
+SIGMA_KEYS = {"used": lambda r: r.get("sigma_h"), "ewma": lambda r: r["context"].get("sigma_ewma"),
+              "har": lambda r: r["context"].get("sigma_har")}
+
+
+def qlike(rows: list[dict]) -> dict[str, Any] | None:
+    """σ forecasts scored against the realized variance of their own window (Patton 2011: QLIKE is robust to a noisy
+    variance proxy): L = RV/σ² − ln(RV/σ²) − 1, 0 when exact; lower wins. Each estimator is scored on the rows where
+    every estimator logged a value, so the comparison is paired. median_rv_ratio < 1 = the forecast is too wide."""
+    have = [r for r in rows if r.get("rv_h") and all((f(r) or 0) > 0 for f in SIGMA_KEYS.values())]
+    if not have:
+        have = [r for r in rows if r.get("rv_h") and (r.get("sigma_h") or 0) > 0]
+        keys = {"used": SIGMA_KEYS["used"]}
+    else:
+        keys = SIGMA_KEYS
+    if not have:
+        return None
+    out: dict[str, Any] = {"n": len(have), "days": len({d for d in days_of(have) if isinstance(d, str)}),
+                           "paired": keys is SIGMA_KEYS}
+    for name, f in keys.items():
+        ratios = sorted(r["rv_h"] / f(r) ** 2 for r in have)
+        out[name] = {"qlike": round(sum(x - math.log(x) - 1 for x in ratios) / len(ratios), 4),
+                     "median_rv_ratio": round(ratios[len(ratios) // 2], 3)}
+    return out
+
+
+def barrier_calibration(rows: list[dict]) -> dict[str, Any]:
+    """The other two outcomes of each bracket: P(stop first) and P(time) logged in context vs what happened."""
+    out = {}
+    for key, outcome in (("p_stop", "stop"), ("p_time", "time")):
+        xs = [{**r, key: r["context"][key], "_y": r["outcome"] == outcome} for r in rows
+              if r["context"].get(key) is not None]
+        out[outcome] = brier(xs, key)
+    return out
+
+
 def report(journal) -> dict[str, Any]:
     rows = [r for r in journal.predictions(labelled_only=True) if r["kind"] == "bracket"]
     touch = [r for r in journal.predictions(labelled_only=True) if r["kind"] == "touch"]
@@ -98,6 +134,9 @@ def report(journal) -> dict[str, Any]:
         "model_calibration": model, "analyst_calibration": analyst,
         "analyst_skill_vs_baseline": bss,
         "fill_model_calibration": brier(touch, "p_model"),
+        "barrier_calibration": barrier_calibration(rows),
+        "sigma_qlike": qlike(rows),
+        "sigma_scale": _scale_verdict(journal),
         "expectancy_by_setup": expectancy(rows, ctx("setup")),
         "expectancy_by_tape_state": expectancy(rows, ctx("tape_state")),
         "expectancy_by_regime": expectancy(rows, ctx("regime")),
@@ -107,3 +146,16 @@ def report(journal) -> dict[str, Any]:
                        f"coin count once; descriptive_only = fewer than {MIN_DAYS} days. Sizing may use p only after "
                        "the gate in docs/PROBABILITY.md.",
     }
+
+
+def _scale_verdict(journal) -> dict[str, Any] | None:
+    """The stored σ-scale walk-forward verdict (recal.py), without its per-fold detail."""
+    import json
+
+    from .recal import KV
+    try:
+        v = json.loads(journal.get(KV) or "null")
+    except Exception:  # noqa: BLE001 - a report never fails on a stored verdict
+        return None
+    keys = ("applied", "scale", "fitted_scale", "rows", "n_eff", "why", "fitted_at")
+    return {k: v.get(k) for k in keys} if v else None

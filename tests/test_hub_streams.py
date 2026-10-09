@@ -125,10 +125,11 @@ async def test_a_budget_wait_is_recorded_as_deferred(tmp_path):
 async def test_source_is_recorded_and_the_scan_shape_is_identical(tmp_path):
     """The same bars from the store or REST: identical features apart from candle_source, logged next to `scan`."""
     (tmp_path / "rest").mkdir()
-    fill(tmp_path)
+    deep = bars(500)   # the store keeps 500 1h bars (streams.KEEP): the σ forecast's 499-bar history fits in it
+    fill(tmp_path, rows=deep)
     out = {}
     for name, path in (("stream", tmp_path), ("rest", tmp_path / "rest")):
-        h, ex = hub(path)
+        h, ex = hub(path, Public(deep))
         with clock.at(NOW), weight.tagged(weight.RESEARCH):
             evals, rows = await evaluate_tickers(ex, [{"symbol": SYM, "percentage": 12.0, "quoteVolume": 5e7,
                                                        "last": 70.5}], groups=("froth", "trigger"))   # no network

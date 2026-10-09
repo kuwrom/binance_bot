@@ -18,8 +18,8 @@ from .baseline import side_sign
 from .vol import BARS_PER_HOUR_5M, ewma_sigma_series, log_returns
 
 
-def standardized_residuals(closes_5m: list[float]) -> np.ndarray:
-    r = log_returns(closes_5m)
+def standardized_residuals(closes_5m: list[float], ts: list[float] | None = None) -> np.ndarray:
+    r = log_returns(closes_5m, ts)   # with timestamps: no return across a gap
     if len(r) < 60:
         return np.zeros(0)
     s = ewma_sigma_series(r)
@@ -59,12 +59,13 @@ def mc_grid(n_paths: int, steps: int) -> tuple[int, int]:
 
 def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: list[float], hours: float,
                    sigma_hourly: float, n_paths: int = 10_000, mean_block: float = 1.0,
-                   seed: int | None = 7, bridge: bool = True, side: str = "short") -> dict:
+                   seed: int | None = 7, bridge: bool = True, side: str = "short",
+                   ts: list[float] | None = None) -> dict:
     """For a short (default; side="long": the mirror, stop below and targets above) at `entry`: P(each target is
     reached before the stop within `hours`), P(stop first), P(time). Targets are checked independently against the
     same paths (each 'target before stop'), nearest first."""
     s = side_sign(side)
-    z = standardized_residuals(closes_5m)
+    z = standardized_residuals(closes_5m, ts)
     if len(z) == 0 or sigma_hourly <= 0:
         return {"ok": False, "error": "not enough 5m history for simulation"}
     rng = np.random.default_rng(seed)

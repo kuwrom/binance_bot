@@ -140,9 +140,10 @@ class PositionOps:
         from .market.regime import market_regime
         budget = await tr.budget(tr, symbol, (await market_regime(tr.ex))["verdict_for_shorts"])
         f8 = fr.get("fundingRate")
-        hub, sig, iv = await exit_odds.market_inputs(tr.ex, symbol)
-        res = reassess(trade, pos, c1h, f8, budget["risk_usd"], sigma_h=sig, funding_interval_h=iv)
-        res["budget"] = budget
+        hub, sig, iv = await exit_odds.market_inputs(tr.ex, symbol, tr.j, exit_odds.trade_horizon(trade))
+        res = reassess(trade, pos, c1h, f8, budget["risk_usd"], sigma_h=sig.get("used"), funding_interval_h=iv)
+        from .exit_marks import latest
+        res["budget"], res["next_level_cached"] = budget, latest(tr.j, trade["id"])   # the guardian's last 5m mark
         if res.get("stop") and res.get("target_now"):
             from .probability import ProbabilityEngine
             plan = trade.get("plan") or {}

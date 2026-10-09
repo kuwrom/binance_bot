@@ -174,21 +174,39 @@ def _sweep_proof(ex, last, high_24h, atr, stop_option) -> dict[str, Any]:
     return {"sweep_proof": {**stop_option(sp["price"], sp["basis"]), "level": sp["level"]}} if sp else {}
 
 
+K_STOPS, REWARDS = (0.5, 1.0, 1.5), (0.5, 1.0, 2.0)   # research bracket shapes, drawn per coin and scan
+
+
 def _log_research_brackets(journal, evals, rows, regime) -> None:
-    """Every evaluated coin gets a standard vol-scaled 24h short bracket (stop +1σ√T, target −2σ√T) with its
-    no-edge baseline p. Labelled 24h later, these measure where real drift exists (by setup, tape state, regime)."""
+    """Every evaluated coin gets a vol-scaled 24h short research bracket with its no-edge baseline odds. The geometry
+    is drawn per coin and scan (stop k in K_STOPS x σ√T, target REWARDS x the stop distance), so calibration covers
+    more than one bracket shape (research note 2026-10-09: one shape left a single populated reliability bucket);
+    P(stop) and P(time) are logged too. Labelled 24h later, these measure where real drift exists (by setup, tape
+    state, regime) and score the σ forecasts (QLIKE)."""
+    import random
+
+    from . import clock
     from .probability import vol_scaled_bracket
     from .probability.baseline import short_geometry
+    from .probability.recal import scale_for
+    from .probability.vol import clamp_sigma
+    scale, minute = scale_for(journal), clock.now_ms() // 60_000
     for ev, row in zip(evals, rows, strict=True):
-        price, s = ev.features.get("last"), ev.features.get("sigma_h")
+        f = ev.features
+        price, s = f.get("last"), clamp_sigma((f.get("sigma_h") or 0) * scale)
         if not price or not s:
             continue
+        rng = random.Random(f"{ev.symbol}:{minute}")   # reproducible draw
+        k, reward = rng.choice(K_STOPS), rng.choice(REWARDS)
         try:
-            stop, target = vol_scaled_bracket(price, s)
+            stop, target = vol_scaled_bracket(price, s, 24.0, k, reward)
             g = short_geometry(price, stop, target, s, 24.0)
         except (ValueError, ZeroDivisionError, OverflowError):
             continue  # research logging must never break a scan
         journal.log_prediction("scan", ev.symbol, price, stop, target, 24.0, "bracket", g["p_target"], sigma_h=s,
                                context={"setup": (row["setups"] or ["none"])[0], "setups": row["setups"],
                                         "tape_state": row["tape"]["state"], "regime": regime, "score": ev.score,
-                                        "tradable": not ev.vetoes})
+                                        "tradable": not ev.vetoes, "k_stop": k, "reward": reward,
+                                        "p_stop": round(g["p_stop"], 4), "p_time": round(g["p_time"], 4),
+                                        "sigma_ewma": f.get("sigma_h_ewma"), "sigma_har": f.get("sigma_h_har"),
+                                        "sigma_model": f.get("sigma_model"), "sigma_scale": scale})

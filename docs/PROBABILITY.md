@@ -67,6 +67,23 @@ Sources: López de Prado AFML (2018) and "10 Reasons Most ML Funds Fail" (JPM 20
 
 ## Implementation (src/shortbot/probability/)
 - **`baseline.py`:** closed forms (touch, race, three-way, BGK shift). `short_geometry` uses a PRICE martingale (ν = −σ²/2). A zero LOG drift biases price upward (Jensen) and would fake an edge. It and `simulate_short` take `side` ('short' default, 'long': the mirrored bracket).
+- **`vol.py` / `vol_har.py`:** σ inputs.
+  - Returns never span a timestamp gap (a hole folds several bars into one return); every forecast sits in a sanity
+    band of 0.05%-25% per hour.
+  - `used` = the **horizon-matched** forecast: Yang-Zhang on 15m bars (windows < 4h) or 1h bars, HAR-blended (daily,
+    weekly, ~20-day; fixed weights by horizon, never fitted per coin), times the hour-of-day profile integrated over
+    the window. Why: 5m returns overstated 24h variance by 15-30% on our coins, and the scan brackets were hit less
+    often than the EWMA σ implied (research note 2026-10-09). The legacy 5m EWMA stays beside it (`ewma`), falling
+    back when the 1h history is short.
+- **`recal.py`:** one σ scale (σ_used = s·σ), never a drift. Fitted daily (guardian `prob_recal`) on labelled
+  brackets by three-outcome log-likelihood, and applied only when it beats s = 1 out of sample on purged walk-forward
+  folds (most folds and in total) and lies in 0.7-1.3. While effective samples < ~1k a Platt map of P(target) is
+  reported per fold for comparison, never applied.
+- **Scoring σ directly:** the labeller stores each window's realized variance per hour (1m mark closes sampled every
+  60 min for windows ≥ 4h, else 15 min, averaged over offsets); `calibration_report` shows QLIKE (Patton 2011) of the
+  used, EWMA and HAR σ on the same rows, the stop and time odds' calibration, and the σ-scale verdict.
+- **Research brackets** draw their shape per coin and scan (stop 0.5/1/1.5 σ√T, target 0.5/1/2 x the stop) and log
+  P(stop) and P(time), so calibration covers more than one geometry.
 - **`montecarlo.py`:** filtered historical simulation.
   - **Bootstrap:** i.i.d. by default (`mean_block=1`). The block bootstrap replayed QNT's post-blow-off mean reversion and produced a fake +0.09R, so it is not a baseline.
   - **Drift correction:** exact, from the empirical residuals.
@@ -87,5 +104,7 @@ reward and give-back in initial R, and the EV net of the exit fee and the fundin
 POSITION_MANAGEMENT.md "Next-level check"). It is this zero-drift baseline (geometry plus costs), **not an edge
 estimate**: under it, holding is worth minus the costs, so it judges exit risk-reward (how much is left to win vs how
 much the stop gives back, and what the carry costs), never entries. `reassess` shows it with the `protect_profit` /
-`funding_drag` advice; the ladder logs it in `ladder_shadow.next_level`. Nothing acts on it automatically until it
+`funding_drag` advice; the ladder logs it in `ladder_shadow.next_level`; the guardian's research lane writes it per
+open position at every closed 5m bar (`next_level_marks`: σ parts, three-way odds, EV net of fees and funding, the
+analyst's p; Monte Carlo at 15m bars), which `reassess` shows as `next_level_cached`. Nothing acts on it automatically until it
 passes the sizing gate above on labelled outcomes.

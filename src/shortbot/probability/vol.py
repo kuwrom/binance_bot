@@ -1,20 +1,67 @@
 """Volatility estimates in PER-HOUR units (the probability layer's time unit).
-EWMA on 5m log returns (half-life ≈ 1 day) is the forecast; Parkinson on 1h ranges is the cross-check."""
+EWMA on 5m log returns (half-life ≈ 1 day) is the legacy forecast; Parkinson on 1h ranges is the cross-check. The
+horizon-matched forecast (HAR blend of range estimators with an hour-of-day profile) is vol_har.py.
+
+Returns never span a timestamp gap: a missing bar (a stream outage, a file join) would fold several bars' move into
+one return and inflate σ (research note 2026-10-09: 46 joins in hist5m made a fake 2.65x hour-0 spike)."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
 BARS_PER_HOUR_5M = 12
 HALF_LIFE_BARS = 288          # ≈ 1 day of 5m bars
+GAP_TOL = 1.5                 # a step longer than 1.5 bars is a gap
+SIGMA_FLOOR_H = 0.0005        # 0.05%/h (≈ 2.4%/day): below it the bars are stale or the coin is pegged
+SIGMA_CAP_H = 0.25            # 25%/h: above it the data is broken, not the market
 
 
-def log_returns(closes: list[float]) -> np.ndarray:
+def clamp_sigma(s: float | None) -> float | None:
+    """The sanity band for an hourly σ forecast; None stays None."""
+    if s is None or not math.isfinite(s) or s <= 0:
+        return None
+    return min(SIGMA_CAP_H, max(SIGMA_FLOOR_H, s))
+
+
+def bar_ms_of(ts: Sequence[float] | np.ndarray[Any, Any]) -> float:
+    """The series' bar length: the median step between timestamps."""
+    d = np.diff(np.asarray(ts, dtype=float))
+    d = d[d > 0]
+    return float(np.median(d)) if len(d) else 0.0
+
+
+def gap_mask(ts: Sequence[float] | np.ndarray[Any, Any], bar_ms: float | None = None) -> np.ndarray:
+    """For each step i -> i+1: True when it spans no gap (at most GAP_TOL bars)."""
+    t = np.asarray(ts, dtype=float)
+    if len(t) < 2:
+        return np.zeros(0, dtype=bool)
+    bar = bar_ms or bar_ms_of(t)
+    d = np.diff(t)
+    return (d > 0) & (d <= GAP_TOL * bar) if bar > 0 else np.ones(len(d), dtype=bool)
+
+
+def log_returns(closes: Sequence[float], ts: Sequence[float] | None = None, bar_ms: float | None = None) -> np.ndarray:
+    """Log returns of consecutive positive closes. With timestamps, a return across a gap (or a non-positive close)
+    is dropped, never stretched over the missing bars."""
     c = np.asarray(closes, dtype=float)
-    c = c[c > 0]
-    return np.diff(np.log(c)) if len(c) > 1 else np.zeros(0)
+    if ts is None:
+        c = c[c > 0]
+        return np.diff(np.log(c)) if len(c) > 1 else np.zeros(0)
+    if len(c) < 2:
+        return np.zeros(0)
+    ok = gap_mask(ts, bar_ms) & (c[:-1] > 0) & (c[1:] > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.log(np.where(c[1:] > 0, c[1:], 1.0) / np.where(c[:-1] > 0, c[:-1], 1.0))
+    return r[ok]
+
+
+def gaps(ts: Sequence[float], bar_ms: float | None = None) -> int:
+    """How many steps of the series span a gap (flagged next to every σ built from it)."""
+    return int((~gap_mask(ts, bar_ms)).sum())
 
 
 def ewma_sigma_series(rets: np.ndarray, half_life: int = HALF_LIFE_BARS) -> np.ndarray:
@@ -30,9 +77,9 @@ def ewma_sigma_series(rets: np.ndarray, half_life: int = HALF_LIFE_BARS) -> np.n
     return out
 
 
-def ewma_sigma_hourly(closes_5m: list[float]) -> float | None:
-    """Current EWMA vol of 5m returns, scaled to per hour."""
-    r = log_returns(closes_5m)
+def ewma_sigma_hourly(closes_5m: Sequence[float], ts: Sequence[float] | None = None) -> float | None:
+    """Current EWMA vol of 5m returns, scaled to per hour (the legacy forecast). With timestamps, gap-free returns."""
+    r = log_returns(closes_5m, ts)
     if len(r) < 30:
         return None
     lam = 0.5 ** (1 / HALF_LIFE_BARS)

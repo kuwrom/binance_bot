@@ -14,7 +14,7 @@ from tests.test_guardian import guardian_with
 from tests.test_guardian_loop import SLOW_JOBS, fast_guardian, noop
 
 ACCOUNT_JOBS = {"entries", "positions", "entry_reconcile", "watch", "governor", "announcements", "margin_mode",
-                "gateway", "setup_ladder", "setup_ladder_stops", "ladder", "coin_memory"}
+                "gateway", "setup_ladder", "setup_ladder_stops", "ladder", "coin_memory", "next_level"}
 
 
 def jobs(g) -> set[str]:

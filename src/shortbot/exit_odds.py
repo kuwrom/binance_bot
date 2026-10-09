@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import Any
 
 from .probability.baseline import short_geometry, side_sign, touch_down, touch_up
@@ -99,7 +100,8 @@ def next_level(side: str, price: float, stop: float | None, target: float | None
 
 
 def for_trade(trade: dict[str, Any], price: float, stop: float | None, age_h: float, sigma_h: float | None,
-              funding_rate: float | None, funding_interval_h: float | None, side: str = "short") -> dict[str, Any] | None:
+              funding_rate: float | None, funding_interval_h: float | None,
+              side: str = "short") -> dict[str, Any] | None:
     """The block for a journal trade: its next unhit plan target, its initial R per unit and its remaining time."""
     plan = trade.get("plan") or {}
     tgts = [float(t["price"]) for t in plan.get("targets") or [] if t.get("price")]
@@ -142,17 +144,27 @@ def actions(nl: dict[str, Any] | None, open_pnl_r: float, entry: float,
     return out
 
 
-async def market_inputs(ex: Any, symbol: str) -> tuple[Any, float | None, int | None]:
-    """(DataHub, hourly sigma, funding interval in hours) for the block; an unread input is None (the block is then
-    skipped, or the interval assumed 8h and flagged), never an error: reassess must answer."""
+def trade_horizon(trade: dict[str, Any], now: datetime | None = None) -> float:
+    """horizon_hours for a journal trade, from its opening time."""
+    opened = trade.get("opened_at")
+    age = ((now or datetime.now(UTC)) - datetime.fromisoformat(opened)).total_seconds() / 3600 if opened else 0.0
+    return horizon_hours(trade.get("plan") or {}, age)
+
+
+async def market_inputs(ex: Any, symbol: str, journal: Any = None,
+                        hours: float = DEFAULT_HOURS) -> tuple[Any, dict[str, Any], int | None]:
+    """(DataHub, σ for the window (engine.sigma_hourly: horizon-matched, times the applied σ scale), funding interval
+    in hours) for the block; an unread input is empty/None (the block is then skipped, or the interval assumed 8h and
+    flagged), never an error: reassess must answer."""
     from .exchange import to_raw
     from .market import DataHub
     from .probability.engine import sigma_hourly
+    from .probability.recal import scale_for
     hub = DataHub(ex)
-    sig: float | None = None
+    sig: dict[str, Any] = {}
     iv: int | None = None
     try:
-        sig = (await sigma_hourly(hub.context(symbol)))["used"]
+        sig = await sigma_hourly(hub.context(symbol), hours, scale_for(journal))
     except Exception as e:  # noqa: BLE001 - advice only: no sigma, no block
         log.warning("next-level sigma unread for %s (%s: %s)", symbol, type(e).__name__, e)
     try:

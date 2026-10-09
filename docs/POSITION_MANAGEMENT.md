@@ -70,8 +70,9 @@ P(target)·reward − P(stop)·give-back − fees − funding. Two extra actions
 
 It is the zero-drift baseline (geometry plus costs), **not an edge estimate**: under it the full EV of holding is minus
 the costs, and the bracket term leaves out the paths that hit neither. Use it for exit risk-reward, never to pick
-entries. Advice only: nothing exits on it. The guardian's ladder logs the same block in `ladder_shadow.next_level` so
-research can score acting on it against holding; it is promoted to anything automatic only after it passes the
+entries. Advice only: nothing exits on it. The guardian writes it per open position at every closed 5m bar
+(`next_level_marks`, shown by `reassess` as `next_level_cached`) and its ladder logs it in `ladder_shadow.next_level`,
+so research can score acting on it against holding; it is promoted to anything automatic only after it passes the
 calibration gate (docs/PROBABILITY.md "Sizing gate").
 
 ## (c) Limit entries: `shortbot propose` (entry groups)

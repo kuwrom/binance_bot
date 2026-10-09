@@ -40,6 +40,7 @@ from .guardian_loop import ESCALATE_AFTER_FAILS, Job, Lane, Streak, send_safe, s
 from .guardian_margin import MarginChecks
 from .guardian_plan import PlanChecks
 from .guardian_positions import PositionChecks
+from .guardian_prob import ProbJobs
 from .guardian_watch import WatchChecks
 from .killswitch import heartbeat_key
 from .margin import ADL_PERSIST_PASSES
@@ -82,7 +83,9 @@ MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600,
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600),
             "long_shadow": (900, 900), "onchain": (600, 300),
-            "market_news": (300, 120)}   # #92 shadow: tagged BTC/ETH headlines alerted to both desks and logged
+            "market_news": (300, 120),
+            "next_level": (60, 120),      # advisory next-level marks per open position at each closed 5m bar (shadow)
+            "prob_recal": (86400, 600)}   # σ-scale walk-forward fit (probability/recal.py)   # #92 shadow: tagged BTC/ETH headlines alerted to both desks and logged
 SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
         "cadence_shadow": (60, 50),   # #40: logs two rules every minute on live bars; no deep scores, no alerts
         "mtf_views": (60, 50)}        # #41: every coin's 5m-1d state at each 15m close, logged; no exchange calls
@@ -91,7 +94,7 @@ COINS = {"coin_memory": (900, 300)}   # focus coins: state, events, break scores
 # docs/DESKS.md). The rest, and coin_memory on its own book, are this account's and always run.
 MARKET_JOBS = frozenset({"social", "refresh", "housekeeping", "processes", "metrics", "research", "calendar",
                          "market_map", "sweeps", "supply", "laggard", "long_shadow", "scan", "cadence_shadow",
-                         "mtf_views", "onchain", "market_news"})
+                         "mtf_views", "onchain", "market_news", "prob_recal"})
 RESEARCH_START_DELAY_S = 30   # the first protective pass after a (re)start runs on its own
 DELAYED_LANES = ("research", "scan", "coins")   # they start RESEARCH_START_DELAY_S after the others
 # a user-data event runs its job at once, but no sooner than this after the job's last start: a burst is one run, and
@@ -101,7 +104,7 @@ TICK_S = 1.0
 STALL_ALERT_S = 60.0   # a journal write waiting this long for another process's lock is alerted, naming the holder
 
 
-class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs, CoinJobs):
+class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs, CoinJobs, ProbJobs):
     """Dumb and fixed on purpose: uses only the desk baseline (.env + desk limits), never AI research overrides. One exception:
     the kill-switch loss trips (daily loss, dd_stop) and the governor verdict (its halt withdraws resting entries,
     entry_gates.py) follow an active experiment's limits, the ones the session places and sizes under."""
@@ -158,7 +161,8 @@ class Guardian(PositionChecks, PlanChecks, WatchChecks, MarginChecks, MarketJobs
                "ladder": self.ladder_shadow, "laggard": self.laggard_study, "long_shadow": self.long_shadow,
                "scan": self.tiered_scan, "cadence_shadow": self.cadence_shadow, "mtf_views": self.mtf_views,
                "setup_ladder": self.setup_ladder_check, "setup_ladder_stops": self.forward_ladder_stops,
-               "coin_memory": self.coin_memory, "market_feed": self.check_market_feed}
+               "coin_memory": self.coin_memory, "market_feed": self.check_market_feed,
+               "next_level": self.next_level_marks, "prob_recal": self.prob_recal}
 
         market = self.app.settings.guardian_market
 

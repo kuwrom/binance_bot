@@ -14,6 +14,7 @@ warmup the exchange layer). A table grows by adding columns to COLUMNS; the Jour
 - laggard_events: the sector-laggard study (laggard.py)
 - market_news_events: tagged market-wide headlines and their next 1h/4h/24h (market_news.py, shadow, #92)
 - level_sweeps: the level-sweep study (sweeps.py)
+- next_level_marks: the advisory next-level check per open position at each closed 5m bar (exit_marks.py, shadow)
 - guardian_gaps: verified-heartbeat gaps over uptime.GAP_S, from the last stamp to the next, tagged `drill` inside a
   drill window (uptime.py, #46)
 """
@@ -47,6 +48,9 @@ CREATE TABLE IF NOT EXISTS guardian_gaps (
     pid INTEGER, tag TEXT
 );
 CREATE INDEX IF NOT EXISTS guardian_gaps_end ON guardian_gaps (end_at);
+CREATE TABLE IF NOT EXISTS next_level_marks (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, bar_ms INTEGER NOT NULL,
+    mode TEXT NOT NULL, trade_id INTEGER NOT NULL, symbol TEXT NOT NULL, price REAL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS next_level_marks_trade ON next_level_marks (trade_id, id);
 """
 # Plumbing drills' trades (drill.py, #46): real positions, so every reader of OPEN trades (exposure, risk, reconcile)
 # sees them; never statistics, so every reader of CLOSED results (closed_results and the rest) skips them. A NULL setup
@@ -62,5 +66,6 @@ def is_drill(setup: object) -> bool:
 COLUMNS: dict[str, dict[str, str]] = {
     "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL",
                       "next_level": "TEXT"},   # exit_odds.next_level as JSON (null: no stop/sigma)
-    "warmups": {"mode": "TEXT NOT NULL DEFAULT 'demo'"},   # a desk warms up its own account (DESKS.md)
+    "warmups": {"mode": "TEXT NOT NULL DEFAULT 'demo'"},
+    "predictions": {"rv_h": "REAL", "rv_k": "INTEGER"},   # realized variance per hour at labelling (QLIKE)   # a desk warms up its own account (DESKS.md)
 }

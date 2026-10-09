@@ -133,9 +133,11 @@ class ResearchStore:
         return self._rows("SELECT * FROM predictions WHERE labelled_at IS NULL AND ts_ms + hours*3600000 < ?"
                           " ORDER BY ts_ms LIMIT ?", (now_ms, limit))
 
-    def label_prediction(self, pid: int, outcome: str, mfe_r: float | None = None, mae_r: float | None = None) -> None:
-        self.db.execute("UPDATE predictions SET outcome=?, mfe_r=?, mae_r=?, labelled_at=datetime('now') WHERE id=?",
-                        (outcome, mfe_r, mae_r, pid))
+    def label_prediction(self, pid: int, outcome: str, mfe_r: float | None = None, mae_r: float | None = None,
+                         rv_h: float | None = None, rv_k: int | None = None) -> None:
+        """rv_h: realized variance per hour over the window, sampled every rv_k minutes (labels.realized_var_h)."""
+        self.db.execute("UPDATE predictions SET outcome=?, mfe_r=?, mae_r=?, rv_h=?, rv_k=?, labelled_at=datetime('now')"
+                        " WHERE id=?", (outcome, mfe_r, mae_r, rv_h, rv_k, pid))
         self.db.commit()
 
     def predictions(self, labelled_only: bool = True, limit: int = 20000) -> list[dict[str, Any]]:

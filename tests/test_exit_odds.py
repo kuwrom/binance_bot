@@ -120,8 +120,8 @@ def test_horizon_is_the_plans_time_left_or_24h():
 async def test_market_inputs_never_raise(monkeypatch):
     import shortbot.probability.engine as eng
 
-    async def sig(ctx):
-        return {"used": 0.02}
+    async def sig(ctx, hours=24.0, scale=1.0):
+        return {"used": 0.02 * scale, "hours": hours}
 
     async def broken():
         raise RuntimeError("fundingInfo down")
@@ -130,8 +130,8 @@ async def test_market_inputs_never_raise(monkeypatch):
         return {"KAIAUSDT": {"interval_h": 1, "cap": 0.02}}
 
     monkeypatch.setattr(eng, "sigma_hourly", sig)
-    _, s, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "KAIA/USDT:USDT")
-    assert (s, iv) == (0.02, 1)
+    _, s, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "KAIA/USDT:USDT", None, 6.0)
+    assert (s["used"], s["hours"], iv) == (0.02, 6.0, 1)
     _, _, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "BTC/USDT:USDT")
     assert iv == 8                                                       # not listed = the default 8h
     _, _, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=broken), "KAIA/USDT:USDT")
@@ -157,7 +157,7 @@ async def test_ladder_shadow_rows_log_the_next_level_without_changing_decisions(
         return SimpleNamespace(features={"funding_rate": -0.0136, "funding_interval_h": 4, "funding_8h": -0.027},
                                vetoes=[])
 
-    async def sig(ctx):
+    async def sig(ctx, hours=24.0, scale=1.0):
         return {"used": 0.015}
 
     monkeypatch.setattr(market, "DataHub", lambda ex: SimpleNamespace(context=lambda s: Ctx()))

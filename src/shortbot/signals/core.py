@@ -143,8 +143,9 @@ async def data_completeness(ctx: MarketContext) -> SignalOut:
 
 @signal("volatility", "core")
 async def volatility(ctx: MarketContext) -> SignalOut:
-    """Per-hour volatility (EWMA of 5m returns; Parkinson on 1h ranges): feeds the probability engine and
-    vol-scaled brackets. Features only."""
+    """Per-hour volatility for a 24h window (horizon-matched HAR, probability/vol_har.py; the legacy EWMA of 5m returns
+    and Parkinson on 1h ranges beside it): feeds the probability engine and vol-scaled brackets. Features only."""
     from ..probability.engine import sigma_hourly
     s = await sigma_hourly(ctx)
-    return SignalOut(features={"sigma_h": s["used"], "sigma_h_ewma": s["ewma"], "sigma_h_parkinson": s["parkinson"]})
+    return SignalOut(features={"sigma_h": s["used"], "sigma_h_ewma": s["ewma"], "sigma_h_parkinson": s["parkinson"],
+                               "sigma_h_har": s["har"], "sigma_model": s["model"]})
