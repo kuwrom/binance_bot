@@ -144,6 +144,8 @@ async def closed_history(ctx: Any, tf: str, n: int) -> list[list[float]]:
     bars = closed(await ctx.candles(tf, n + 1))
     if bars:
         _HIST.pop(key, None)
+        for k in [k for k, v in _HIST.items() if v[0] <= clock.now_ms()]:   # expired (a coin no longer read): ~125 KB
+            del _HIST[k]
         _HIST[key] = (bar_end, bars)
         while len(_HIST) > HIST_MAX:
             _HIST.pop(next(iter(_HIST)))

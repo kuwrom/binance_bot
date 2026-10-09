@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,6 +22,7 @@ log = logging.getLogger("shortbot.exit_marks")
 
 BAR_MS, MC_EVERY_MS = 300_000, 900_000   # closed forms per 5m bar; Monte Carlo per 15m bar
 PER_POSITION_S = 20.0
+PASS_BUDGET_S = 90.0   # under the job's 120 s lane timeout: a slow pass writes what it has instead of failing whole
 MC_PATHS = 4000
 MC_HISTORY_5M = 1000
 
@@ -75,16 +77,21 @@ async def _mc(hub: Any, sym: str, nl: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def run_pass(ex: Any, journal: Any, positions: list[dict[str, Any]], bar_ms: int) -> int:
-    """One mark per open journal-tracked position; each under PER_POSITION_S and its own try/except. Returns rows
-    written."""
+    """One mark per open journal-tracked position; each under PER_POSITION_S and its own try/except, the whole pass
+    under PASS_BUDGET_S. Returns rows written."""
     rows = []
     ts = datetime.fromtimestamp(bar_ms / 1000, UTC).isoformat(timespec="seconds")
+    t0 = time.monotonic()
     for p in positions:
+        left = PASS_BUDGET_S - (time.monotonic() - t0)
+        if left <= 1:
+            log.warning("next-level pass out of time: %s and later positions skipped this bar", p["symbol"])
+            break
         trade = journal.active_trade(p["symbol"])
         if not trade or trade.get("status") != "open":
             continue
         try:
-            m = await asyncio.wait_for(mark(ex, journal, trade, p, bar_ms), PER_POSITION_S)
+            m = await asyncio.wait_for(mark(ex, journal, trade, p, bar_ms), min(PER_POSITION_S, left))
         except Exception:  # noqa: BLE001 - research logging never blocks the guardian
             log.exception("next-level mark %s failed", p["symbol"])
             continue

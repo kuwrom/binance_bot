@@ -34,7 +34,7 @@ async def sigma_hourly(ctx: MarketContext, hours: float = 24.0, scale: float = 1
     model needs it; the scanner's per-coin signal leaves it off, so only the probability stage pays for its history)."""
     from .. import clock
     from .recal import active_model
-    model = model or active_model()
+    model = model or active_model(getattr(getattr(ctx, "hub", None), "extensions", {}).get("kv"))
     hz: dict[str, Any] | None = None
     h1: list[list[float]] = []
     if har or (har is None and model == "har"):

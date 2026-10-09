@@ -131,7 +131,7 @@ async def test_market_inputs_never_raise(monkeypatch):
 
     monkeypatch.setattr(eng, "sigma_hourly", sig)
     _, s, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "KAIA/USDT:USDT", None, 6.0)
-    assert (s["used"], s["hours"], s["model"], s["har_logged"], iv) == (0.02, 6.0, "ewma", True, 1)
+    assert (s["used"], s["hours"], s["model"], s["har_logged"], iv) == (0.02, 6.0, None, True, 1)   # no journal: sigma_hourly reads the gate
     _, _, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "BTC/USDT:USDT")
     assert iv == 8                                                       # not listed = the default 8h
     _, _, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=broken), "KAIA/USDT:USDT")
@@ -157,7 +157,10 @@ async def test_ladder_shadow_rows_log_the_next_level_without_changing_decisions(
         return SimpleNamespace(features={"funding_rate": -0.0136, "funding_interval_h": 4, "funding_8h": -0.027},
                                vetoes=[])
 
+    asked = []
+
     async def sig(ctx, hours=24.0, scale=1.0, model=None, har=None):
+        asked.append((scale, model))
         return {"used": 0.015}
 
     monkeypatch.setattr(market, "DataHub", lambda ex: SimpleNamespace(context=lambda s: Ctx()))
@@ -165,10 +168,13 @@ async def test_ladder_shadow_rows_log_the_next_level_without_changing_decisions(
     monkeypatch.setattr(eng, "sigma_hourly", sig)
     monkeypatch.setattr(tape, "classify", lambda f: {"state": "post_pump_decay"})
     j = Journal(":memory:")
+    from shortbot.probability import recal
+    recal.store_both(j, {"model": "har"}, {"applied": True, "scale": 0.9})   # a passed gate and fit: not the ladder's
     tid = j.create_trade("NMR/USDT:USDT", "pump_fade", "t", 17.62, 1, plan=nmr_trade()["plan"])
     j.activate_trade(tid, 16.341, 10, 163.41)
     pos = {"symbol": "NMR/USDT:USDT", "entry": 16.341, "mark": 15.258, "contracts": 10, "exchange_stop": 17.62}
     out = await ladder.build_ladder(SimpleNamespace(limits=None), j, pos)
+    assert asked == [(1.0, "ewma")]   # ladder_apply trades from it: the legacy σ until a code change says otherwise
     await j.flush()
     rows = j.db.execute("SELECT variant, action, next_level FROM ladder_shadow WHERE trade_id=?", (tid,)).fetchall()
     assert len(rows) == len(ladder.VARIANTS)

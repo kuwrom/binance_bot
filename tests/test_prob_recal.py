@@ -171,6 +171,18 @@ def test_the_persisted_model_verdict_is_what_sigma_hourly_falls_back_on():
     assert recal.sigma_model(j) == "ewma"
 
 
+def test_a_journal_less_caller_reads_the_shared_verdict_not_this_process_history(tmp_path):
+    # the level picker's engine has no journal: its model must not depend on whether this process read the verdict
+    from shortbot.market.supply import KVReader
+    j = Journal(tmp_path / "j.db")
+    kv = KVReader(tmp_path / "j.db")
+    assert recal.active_model(kv) == "ewma"
+    recal.store_model(j, recal.model_verdict(qrows(600, 10, 1.02, 1.2)))
+    recal._active["model"] = "ewma"   # a fresh process: nothing read yet
+    assert recal.active_model(kv) == "har" and recal.active_model() == "ewma"
+    assert recal.policy(None) == (1.0, None)   # so sigma_hourly resolves it through the hub's kv reader
+
+
 def test_the_scale_fit_uses_only_rows_of_the_model_in_use():
     rows = brackets(0.85, n=400)
     for r in rows[:100]:

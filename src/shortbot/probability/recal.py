@@ -193,6 +193,7 @@ KV_MODEL = "prob_sigma_model"
 GATE_ROWS, GATE_DAYS = 500, 7
 _active = {"model": "ewma"}                    # this process's last verdict read (sigma_hourly's default)
 _mcache: dict[int, tuple[float, str]] = {}
+_kv_model: list[tuple[float, str] | None] = [None]   # active_model(kv)'s one slot
 
 
 def model_verdict(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -216,6 +217,7 @@ def store_model(journal: Any, verdict: dict[str, Any]) -> None:
     """Keep the σ model verdict (kv `prob_sigma_model`): sigma_model reads it."""
     journal.set(KV_MODEL, json.dumps({**verdict, "decided_at": int(time.time())}, default=float))
     _mcache.pop(id(journal), None)
+    _kv_model[0] = None
 
 
 def sigma_model(journal: Any) -> str:
@@ -237,12 +239,31 @@ def sigma_model(journal: Any) -> str:
     return m
 
 
-def active_model() -> str:
-    return _active["model"]
+def active_model(kv: Any = None) -> str:
+    """The model for a caller without a journal. With a kv reader (DataHub.extensions["kv"]: the shared journal's,
+    JSON-decoded values) the persisted verdict, cached for an hour, so every process picks the same model; without
+    one, this process's last read verdict. One cache slot: every reader opens the same journal (a DataHub per call
+    must not grow a cache keyed by reader)."""
+    if kv is None:
+        return _active["model"]
+    hit = _kv_model[0]
+    if hit and time.monotonic() - hit[0] < CACHE_S:
+        return hit[1]
+    try:
+        m = (kv.get(KV_MODEL) or {}).get("model") or "ewma"
+        m = m if m in ("ewma", "har") else "ewma"
+    except Exception as e:  # noqa: BLE001 - a broken verdict keeps the legacy model
+        log.warning("σ model unread (%s: %s): ewma", type(e).__name__, e)
+        m = "ewma"
+    _kv_model[0] = (time.monotonic(), m)
+    return m
 
 
-def policy(journal: Any) -> tuple[float, str]:
-    """(σ scale, σ model) for a caller holding a journal."""
+def policy(journal: Any) -> tuple[float, str | None]:
+    """(σ scale, σ model) for a caller holding a journal; without one (1.0, None): sigma_hourly then reads the model
+    verdict through its DataHub (active_model(kv)), the same in every process."""
+    if journal is None:
+        return 1.0, None
     return scale_for(journal), sigma_model(journal)
 
 

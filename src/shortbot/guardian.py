@@ -83,9 +83,9 @@ MONITOR = {"governor": (300, 240), "announcements": (180, 240), "social": (3600,
 RESEARCH = {"metrics": (1800, 240), "research": (3600, 600), "calendar": (43200, 240), "market_map": (600, 900),
             "sweeps": (86400, 1800), "supply": (86400, 900), "ladder": (900, 240), "laggard": (900, 600),
             "long_shadow": (900, 900), "onchain": (600, 300),
-            "market_news": (300, 120),
+            "market_news": (300, 120),    # #92 shadow: tagged BTC/ETH headlines alerted to both desks and logged
             "next_level": (60, 120),      # advisory next-level marks per open position at each closed 5m bar (shadow)
-            "prob_recal": (86400, 600)}   # σ-scale walk-forward fit (probability/recal.py)   # #92 shadow: tagged BTC/ETH headlines alerted to both desks and logged
+            "prob_recal": (86400, 600)}   # σ model gate and σ-scale walk-forward fit (probability/recal.py)
 SCAN = {"scan": (15, 300),    # tiers 1-3 (#72): each 15m close, fast events between closes (they decay in 10-45 min)
         "cadence_shadow": (60, 50),   # #40: logs two rules every minute on live bars; no deep scores, no alerts
         "mtf_views": (60, 50)}        # #41: every coin's 5m-1d state at each 15m close, logged; no exchange calls

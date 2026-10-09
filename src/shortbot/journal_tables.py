@@ -66,6 +66,6 @@ def is_drill(setup: object) -> bool:
 COLUMNS: dict[str, dict[str, str]] = {
     "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL",
                       "next_level": "TEXT"},   # exit_odds.next_level as JSON (null: no stop/sigma)
-    "warmups": {"mode": "TEXT NOT NULL DEFAULT 'demo'"},
-    "predictions": {"rv_h": "REAL", "rv_k": "INTEGER"},   # realized variance per hour at labelling (QLIKE)   # a desk warms up its own account (DESKS.md)
+    "warmups": {"mode": "TEXT NOT NULL DEFAULT 'demo'"},   # a desk warms up its own account (DESKS.md)
+    "predictions": {"rv_h": "REAL", "rv_k": "INTEGER"},   # realized variance per hour at labelling (QLIKE)
 }

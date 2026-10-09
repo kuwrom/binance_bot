@@ -149,6 +149,7 @@ async def test_a_cold_store_costs_one_rest_kline_call_per_coin_per_bar(tmp_path)
         with clock.at(t + H):                # the next 1h bar
             await sigma_hourly(DataHub(ex).context("X/USDT:USDT"), 24.0, har=True)
         assert pub.calls.count("1h") == 2
+        assert all(k[1] == "1h" for k in vol_har._HIST)   # the expired 15m history is dropped, not kept for good
 
 
 async def test_the_scanner_computes_har_only_for_coins_reaching_the_probability_stage():

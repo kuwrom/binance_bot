@@ -72,6 +72,24 @@ async def test_a_pass_writes_one_row_per_position_and_a_failure_stays_local(monk
     assert d["mc"]["p_target_first"] > 0.5                       # a 15m bar: Monte Carlo too
 
 
+async def test_a_slow_pass_stops_inside_its_budget_and_keeps_what_it_has(monkeypatch):
+    import asyncio
+    stub_inputs(monkeypatch)
+    slow = "SLOW/USDT:USDT"
+    real = exit_odds.market_inputs
+
+    async def inputs(ex, symbol, journal=None, hours=24.0):
+        if symbol == slow:
+            await asyncio.sleep(10)   # a hung read: cut at the pass budget left, never the lane's timeout
+        return await real(ex, symbol, journal, hours)
+    monkeypatch.setattr(exit_odds, "market_inputs", inputs)
+    monkeypatch.setattr(xm, "PASS_BUDGET_S", 1.3)
+    j = journal_with_trades(SYM, slow, "LAST/USDT:USDT")
+    n = await asyncio.wait_for(xm.run_pass(EX, j, [pos(SYM), pos(slow), pos("LAST/USDT:USDT")], BAR15 + 300_000), 5)
+    await j.flush()
+    assert n == 1 and [r[0] for r in j.db.execute("SELECT symbol FROM next_level_marks")] == [SYM]
+
+
 async def test_closed_forms_only_between_15m_bars_and_latest_reads_the_newest(monkeypatch):
     stub_inputs(monkeypatch)
     j = journal_with_trades(SYM)

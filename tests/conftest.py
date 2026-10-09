@@ -369,5 +369,6 @@ def fresh_sigma_state():
     vol_har._HIST.clear()
     recal._cache.clear()
     recal._mcache.clear()
+    recal._kv_model[0] = None
     recal._active["model"] = "ewma"
     yield

@@ -180,9 +180,9 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
     ctx = DataHub(ex).context(sym)
     ev = await evaluate(ctx)
     f = ev.features
-    from .probability.recal import policy
-    scale, model = policy(journal)
-    sig = (await sigma_hourly(ctx, scale=scale, model=model))["used"] or 0.01
+    # pinned to the legacy σ (gap-free EWMA, no recalibration scale): ladder_apply trades from these decisions and
+    # the shadow series must stay comparable, so the σ gate and scale (recal.py) reach the ladder only by a code change
+    sig = (await sigma_hourly(ctx, scale=1.0, model="ewma"))["used"] or 0.01
     c1h = await ctx.candles("1h", 3)
     oi = await ctx.oi_history("1h", 3)
     now = datetime.now(UTC)
