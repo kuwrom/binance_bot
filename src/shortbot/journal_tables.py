@@ -9,7 +9,7 @@ warmup the exchange layer). A table grows by adding columns to COLUMNS; the Jour
 
 - target_orders: resting plan targets, write-ahead (targets.py, #65). history: every status change [{at, status, why,
   ex}] (ex: the exchange's own status when it decided)
-- ladder_shadow, trial_ledger: the ladder's shadow log and its variants (ladder.py)
+- ladder_shadow, trial_ledger: the ladder's shadow log and its variants (ladder.py); next_level: the exit check
 - warmups: cold-start warm-ups (warmup.py)
 - laggard_events: the sector-laggard study (laggard.py)
 - market_news_events: tagged market-wide headlines and their next 1h/4h/24h (market_news.py, shadow, #92)
@@ -60,6 +60,7 @@ def is_drill(setup: object) -> bool:
 
 
 COLUMNS: dict[str, dict[str, str]] = {
-    "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL"},
+    "ladder_shadow": {"variant": "TEXT DEFAULT 'base'", "stop_v": "REAL", "entry": "REAL", "init_r": "REAL",
+                      "next_level": "TEXT"},   # exit_odds.next_level as JSON (null: no stop/sigma)
     "warmups": {"mode": "TEXT NOT NULL DEFAULT 'demo'"},   # a desk warms up its own account (DESKS.md)
 }

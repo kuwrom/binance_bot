@@ -56,6 +56,24 @@ From the current price, compute `stop_now` (the structural invalidation), `targe
    - Exit if MFE < 0.5R by half that time.
    - Shorten the hold when funding turns negative and `|funding| × remaining intervals > 0.1R`.
 
+### Next-level check: `reassess` → `next_level` (src/shortbot/exit_odds.py)
+For the open position, from the current price: the next unhit plan target (or none), the current stop, P(target
+first), P(stop first) and P(neither) within the plan's remaining time (24h without a time stop), `reward_R` and
+`giveback_R` in the trade's initial R, the exit fee, the funding the current rate and interval charge until the expected
+exit (`expected_hold_h` = ∫ P(neither by t) dt; `funding_R_to_horizon` if held to the end), and `ev_R_net` =
+P(target)·reward − P(stop)·give-back − fees − funding. Two extra actions, next to the others:
+- **`protect_profit`**: `ev_R_net` < 0 while the position is in profit. Tighten to breakeven or structure (the action
+  carries both stops and the odds at breakeven), or take a partial. NMR #29 (learning #97): P(T1)=0.83 for 0.11R vs
+  ~1R back to the stop; it reversed and closed at ~0R.
+- **`funding_drag`**: the expected funding to the exit exceeds the expected reward P(target)·reward (or there is no
+  target left and the position pays). Hourly settlement multiplies the carry by 8 (KAIA-like 1h funding).
+
+It is the zero-drift baseline (geometry plus costs), **not an edge estimate**: under it the full EV of holding is minus
+the costs, and the bracket term leaves out the paths that hit neither. Use it for exit risk-reward, never to pick
+entries. Advice only: nothing exits on it. The guardian's ladder logs the same block in `ladder_shadow.next_level` so
+research can score acting on it against holding; it is promoted to anything automatic only after it passes the
+calibration gate (docs/PROBABILITY.md "Sizing gate").
+
 ## (c) Limit entries: `shortbot propose` (entry groups)
 **Levels.** Round numbers and prior highs, where take-profit orders cluster and stops sit just beyond (Osler 2003/2005 FX [WS]; crypto clustering in Urquhart 2017 and FRL 2022 [MX]).
 - Rest the sell limit **a few ticks below** a round number or prior high,

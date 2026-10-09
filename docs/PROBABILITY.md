@@ -66,7 +66,7 @@ Cost is about 0.17 s per symbol.
 Sources: López de Prado AFML (2018) and "10 Reasons Most ML Funds Fail" (JPM 2018); Joubert JFDS 2022; Meyer-Barziy-Joubert JFDS 2023; Perelló et al. PRE 2011; Cont (vol clustering); Liu & Tsyvinski RFS 2021; Baker & McHale Decision Analysis 2013; MacLean-Thorp-Ziemba QF 2010; Shreve SCII §7.2; Cox & Miller 1965; Broadie-Glasserman-Kou 1997; Glasserman 2004; Barone-Adesi et al. 1999; Politis-Romano 1994; Corsi 2009; Niculescu-Mizil & Caruana 2005; Murphy 1973; Lo-MacKinlay-Zhang JFE 2002; Gibbs & Candès NeurIPS 2021.
 
 ## Implementation (src/shortbot/probability/)
-- **`baseline.py`:** closed forms (touch, race, three-way, BGK shift). `short_geometry` uses a PRICE martingale (ν = −σ²/2). A zero LOG drift biases price upward (Jensen) and would fake an edge.
+- **`baseline.py`:** closed forms (touch, race, three-way, BGK shift). `short_geometry` uses a PRICE martingale (ν = −σ²/2). A zero LOG drift biases price upward (Jensen) and would fake an edge. It and `simulate_short` take `side` ('short' default, 'long': the mirrored bracket).
 - **`montecarlo.py`:** filtered historical simulation.
   - **Bootstrap:** i.i.d. by default (`mean_block=1`). The block bootstrap replayed QNT's post-blow-off mean reversion and produced a fake +0.09R, so it is not a baseline.
   - **Drift correction:** exact, from the empirical residuals.
@@ -77,6 +77,15 @@ Sources: López de Prado AFML (2018) and "10 Reasons Most ML Funds Fail" (JPM 20
 - **`evaluate.py`:** Brier + Murphy decomposition, reliability diagram with Wilson CIs, analyst-vs-baseline skill, and expectancy/edge by setup, tape state, regime and source.
 - **Where it runs:**
   - every scan logs a vol-scaled 24h research bracket (+1σ√T / −2σ√T) per evaluated coin
-  - `reassess` shows `probability_from_here`
+  - `reassess` shows `probability_from_here` and the `next_level` exit check (below)
   - limit entries log fill odds
   - CLI `shortbot prob|calibration`; MCP `probability`, `calibration_report`.
+
+## Next-level exit check (src/shortbot/exit_odds.py)
+For an open position: P(next unhit target first), P(stop first), P(neither) within the plan's remaining time, the
+reward and give-back in initial R, and the EV net of the exit fee and the funding expected until the exit (docs/
+POSITION_MANAGEMENT.md "Next-level check"). It is this zero-drift baseline (geometry plus costs), **not an edge
+estimate**: under it, holding is worth minus the costs, so it judges exit risk-reward (how much is left to win vs how
+much the stop gives back, and what the carry costs), never entries. `reassess` shows it with the `protect_profit` /
+`funding_drag` advice; the ladder logs it in `ladder_shadow.next_level`. Nothing acts on it automatically until it
+passes the sizing gate above on labelled outcomes.

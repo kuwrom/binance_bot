@@ -12,6 +12,7 @@ import math
 from datetime import UTC, datetime
 from typing import Any
 
+from . import exit_odds
 from .probability.baseline import short_geometry
 
 LAMBDA = 0.5            # score -> drift scale (assumption; calibrate from shadow outcomes)
@@ -199,6 +200,8 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
     hours_left = max(tsh - age_h, 1.0)
     levels = evaluate_ladder(price, stop, ladder_levels(price, stop, [t["price"] for t in plan.get("targets") or []],
                                                         sig * math.sqrt(hours_left)), sig, hours_left, score)
+    # the next-level check reassess shows (exit_odds.py), logged so research can score acting on it vs holding
+    nxt = exit_odds.for_trade(trade, price, stop, age_h, sig, f.get("funding_rate"), f.get("funding_interval_h"))
     orig = plan.get("full_size") or trade.get("amount") or pos["contracts"]
     x_actual = round(pos["contracts"] / orig, 3) if orig else 1.0
     seed_trials(journal)
@@ -231,13 +234,15 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
                       "relevel": note}
         if log and trade.get("id"):
             logged.append((now.isoformat(timespec="seconds"), trade["id"], sym, price, sc, json.dumps(parts),
-                           json.dumps(levels), x_star, x_actual, x_new, action, name, stop_v, entry, init_r))
+                           json.dumps(levels), x_star, x_actual, x_new, action, name, stop_v, entry, init_r,
+                           json.dumps(nxt)))
     if logged:   # one unit (#79)
         await journal.write(lambda j: j.db.executemany(
             "INSERT INTO ladder_shadow (ts, trade_id, symbol, price, score, parts, levels, x_star, x_actual,"
-            " x_virtual, action, variant, stop_v, entry, init_r) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", logged))
+            " x_virtual, action, variant, stop_v, entry, init_r, next_level) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            logged))
     b = rows["base"]
     return {"ts": now.isoformat(timespec="seconds"), "trade_id": trade.get("id"), "symbol": sym, "price": price,
             "stop": stop, "score": score, "parts": parts, "levels": levels, "x_star": b["x_star"],
             "x_actual": x_actual, "x_virtual": b["x_virtual"], "action": b["action"], "sigma_h": round(sig, 5),
-            "hours_left": round(hours_left, 1), "variants": rows}
+            "hours_left": round(hours_left, 1), "next_level": nxt, "variants": rows}

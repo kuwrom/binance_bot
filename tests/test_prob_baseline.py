@@ -98,3 +98,63 @@ def test_long_time_stop_simulates_capped_horizon_without_blowing_memory():
     tracemalloc.stop()
     assert r["ok"] and r["horizon_capped"] and r["hours_simulated"] < 750
     assert peak < 1_000_000_000                               # uncapped: ~5 GB
+
+
+# --- long side: the mirror of the short bracket (stop below, target above) ---------------------------------------
+
+def test_short_is_the_default_side_and_unknown_sides_are_refused():
+    assert b.short_geometry(1.0, 1.03, 0.97, SIG_H, 6.0) == b.short_geometry(1.0, 1.03, 0.97, SIG_H, 6.0, side="short")
+    with pytest.raises(ValueError):
+        b.short_geometry(1.0, 1.03, 0.97, SIG_H, 6.0, side="buy")
+
+
+def test_long_geometry_has_no_edge_without_drift():
+    g = b.short_geometry(entry=1.0, stop=0.95, target=1.10, sigma=SIG_H * 5, t=24 * 365, side="long")
+    assert g["ev_R_no_edge"] == pytest.approx(0.0, abs=0.01)   # R:R alone creates no edge for a long either
+    assert g["p_target"] == pytest.approx(0.05 / 0.15, abs=2e-3)  # price martingale: stop/(stop+target)
+    assert g["reward_R"] == pytest.approx(2.0)
+
+
+def test_long_geometry_mirrors_the_three_way_barriers():
+    g = b.short_geometry(1.0, 0.98, 1.03, SIG_H, 4.0, side="long")
+    tw = b.three_way(1.0, 1.03, 0.98, SIG_H, 4.0, -(SIG_H**2) / 2)
+    assert (g["p_target"], g["p_stop"], g["p_time"]) == (tw["up"], tw["down"], tw["time"])
+    assert g["p_target_no_time_limit"] == pytest.approx(b.race_up_first(1.0, 1.03, 0.98, SIG_H, -(SIG_H**2) / 2))
+
+
+def test_montecarlo_long_matches_closed_form_on_gaussian_history():
+    import numpy as np
+
+    from shortbot.probability.montecarlo import simulate_short
+    rng = np.random.default_rng(1)
+    sig_step = 0.004
+    closes = list(np.exp(np.cumsum(rng.normal(0, sig_step, 3000))))
+    sig_h = sig_step * math.sqrt(12)
+    mc = simulate_short(closes, 1.0, 0.97, [1.03], 6.0, sig_h, n_paths=8000, side="long")
+    ref = b.short_geometry(1.0, 0.97, 1.03, sig_h, 6.0, side="long")
+    t = mc["targets"][0]
+    assert t["p_target_first"] == pytest.approx(ref["p_target"], abs=0.03)
+    assert t["p_stop_first"] == pytest.approx(ref["p_stop"], abs=0.03)
+
+
+def test_fat_tails_change_long_hit_odds_but_not_ev():
+    import numpy as np
+
+    from shortbot.probability.montecarlo import simulate_short
+    rng = np.random.default_rng(3)
+    closes = list(np.exp(np.cumsum(rng.standard_t(2.5, 4000) * 0.004)))
+    r = simulate_short(closes, 1.0, 0.95, [1.10], 48.0, 0.02, n_paths=8000, side="long")["targets"][0]
+    assert abs(r["ev_R"]) < 4 * r["ev_R_se"] + 0.03        # no edge from tails
+    assert r["avg_stop_loss_R"] >= 1.0                        # overshoot below a long's stop = slippage
+
+
+def test_montecarlo_long_orders_targets_nearest_first_and_short_is_unchanged():
+    import numpy as np
+
+    from shortbot.probability.montecarlo import simulate_short
+    closes = list(np.exp(np.cumsum(np.random.default_rng(2).normal(0, 0.004, 2000))))
+    long = simulate_short(closes, 1.0, 0.97, [1.06, 1.03], 12.0, 0.014, n_paths=2000, side="long")
+    assert [t["target"] for t in long["targets"]] == [1.03, 1.06]
+    assert long["targets"][0]["p_target_first"] > long["targets"][1]["p_target_first"]
+    short = simulate_short(closes, 1.0, 1.03, [0.97, 0.94], 12.0, 0.014, n_paths=2000)
+    assert short == simulate_short(closes, 1.0, 1.03, [0.97, 0.94], 12.0, 0.014, n_paths=2000, side="short")

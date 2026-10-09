@@ -20,7 +20,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from . import clientid, errors, exposure, killswitch, stops, targets_sync
+from . import clientid, errors, exit_odds, exposure, killswitch, stops, targets_sync
 from . import indicators as ind
 from .audit import refusals
 from .exchange import to_symbol
@@ -67,7 +67,10 @@ def chandelier_stop(c1h: list[list[float]], n: int = 22, k: float = 3.0) -> floa
 
 
 def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float | None,
-             budget_usd: float, now: datetime | None = None) -> dict[str, Any]:
+             budget_usd: float, now: datetime | None = None, sigma_h: float | None = None,
+             funding_interval_h: int | None = None) -> dict[str, Any]:
+    """`funding_8h` is the current rate per funding interval; with `sigma_h` the next-level block (exit_odds.py)
+    adds its odds, costs and the protect_profit / funding_drag advice."""
     now = now or datetime.now(UTC)
     plan = trade.get("plan") or {}
     entry, mark, qty = trade["entry_price"], pos["mark"], pos["contracts"]
@@ -108,6 +111,8 @@ def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float |
             "widen beyond the sweep level with a size cut (≤ 1R) or accept the exit")
     if pnl > 0 and atr and (entry - mark) >= 0.5 * atr and budget_usd > 0:
         act("consider_add", "in profit by ≥ 0.5 ATR: pyramid possible if the stop moves so total worst case ≤ 1R")
+    nl = exit_odds.for_trade(trade, mark, stop, age_h, sigma_h, funding_8h, funding_interval_h)
+    acts += exit_odds.actions(nl, pnl / r1, entry, chand)
     if not acts:
         act("hold", "plan intact from the current state")
     return {"symbol": trade["symbol"], "price": mark, "entry": entry, "stop": stop, "contracts": qty,
@@ -116,7 +121,7 @@ def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float |
             "atr_1h": atr, "stop_in_atr": round((stop - mark) / atr, 2) if stop and atr else None,
             "chandelier_stop": chand, "target_now": target_now, "reward_risk_now": rr_now,
             "age_h": round(age_h, 2), "budget_now_usdt": round(budget_usd, 2),
-            "size_ideal": size_ideal, "funding_8h": funding_8h, "actions": acts}
+            "size_ideal": size_ideal, "funding_8h": funding_8h, "next_level": nl, "actions": acts}
 
 
 class PositionOps:
@@ -135,14 +140,15 @@ class PositionOps:
         from .market.regime import market_regime
         budget = await tr.budget(tr, symbol, (await market_regime(tr.ex))["verdict_for_shorts"])
         f8 = fr.get("fundingRate")
-        res = reassess(trade, pos, c1h, f8, budget["risk_usd"])
+        hub, sig, iv = await exit_odds.market_inputs(tr.ex, symbol)
+        res = reassess(trade, pos, c1h, f8, budget["risk_usd"], sigma_h=sig, funding_interval_h=iv)
         res["budget"] = budget
         if res.get("stop") and res.get("target_now"):
             from .probability import ProbabilityEngine
             plan = trade.get("plan") or {}
             left = max(1.0, float(plan.get("time_stop_hours") or 24) - res["age_h"])
-            pe = await ProbabilityEngine(tr.ex).short_bracket(symbol, res["stop"], [res["target_now"]], left,
-                                                              entry=res["price"])
+            pe = await ProbabilityEngine(tr.ex, hub=hub).short_bracket(symbol, res["stop"], [res["target_now"]],
+                                                                       left, entry=res["price"])
             if pe.get("ok"):
                 t = pe["targets"][0]
                 res["probability_from_here"] = {

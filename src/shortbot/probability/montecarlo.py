@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from .baseline import side_sign
 from .vol import BARS_PER_HOUR_5M, ewma_sigma_series, log_returns
 
 
@@ -58,9 +59,11 @@ def mc_grid(n_paths: int, steps: int) -> tuple[int, int]:
 
 def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: list[float], hours: float,
                    sigma_hourly: float, n_paths: int = 10_000, mean_block: float = 1.0,
-                   seed: int | None = 7, bridge: bool = True) -> dict:
-    """For a short at `entry`: P(each target is reached before the stop within `hours`), P(stop first), P(time).
-    Targets are checked independently against the same paths (each 'target before stop')."""
+                   seed: int | None = 7, bridge: bool = True, side: str = "short") -> dict:
+    """For a short (default; side="long": the mirror, stop below and targets above) at `entry`: P(each target is
+    reached before the stop within `hours`), P(stop first), P(time). Targets are checked independently against the
+    same paths (each 'target before stop'), nearest first."""
+    s = side_sign(side)
     z = standardized_residuals(closes_5m)
     if len(z) == 0 or sigma_hourly <= 0:
         return {"ok": False, "error": "not enough 5m history for simulation"}
@@ -92,8 +95,8 @@ def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: l
             hit = crossed | (rng.random(a.shape) < p_bridge)
         return np.where(hit.any(axis=1), hit.argmax(axis=1), steps + 1)
 
-    t_stop = first_hit(u, True)
-    r_unit = stop - entry
+    t_stop = first_hit(u, s == 1)   # a short's stop is above the entry, a long's below
+    r_unit = s * (stop - entry)
     rows = np.arange(n_paths)
     price = entry * np.exp(x)
 
@@ -107,17 +110,17 @@ def simulate_short(closes_5m: list[float], entry: float, stop: float, targets: l
     out = {"ok": True, "paths": n_paths, "hours": hours, "hours_simulated": round(hours_simulated, 2),
            "horizon_capped": hours_simulated < hours - 1e-9, "sigma_hourly": sigma_hourly,
            "p_stop_within_T": float(np.mean(t_stop <= steps)), "targets": []}
-    for tgt in sorted(targets, reverse=True):
-        t_tgt = first_hit(math.log(tgt / entry), False)
+    for tgt in sorted(targets, reverse=s == 1):
+        t_tgt = first_hit(math.log(tgt / entry), s != 1)
         win = (t_tgt < t_stop) & (t_tgt <= steps)
         lose = (t_stop < t_tgt) & (t_stop <= steps)
-        pnl = np.where(win, entry - exit_price(t_tgt, tgt, False),
-                       np.where(lose, entry - exit_price(t_stop, stop, True), entry - price[:, -1])) / r_unit
-        stop_fill = exit_price(t_stop, stop, True)[lose]
+        pnl = s * np.where(win, entry - exit_price(t_tgt, tgt, s != 1),
+                           np.where(lose, entry - exit_price(t_stop, stop, s == 1), entry - price[:, -1])) / r_unit
+        stop_fill = exit_price(t_stop, stop, s == 1)[lose]
         out["targets"].append({
             "target": tgt, "p_target_first": float(np.mean(win)), "p_stop_first": float(np.mean(lose)),
             "p_neither": float(np.mean(~win & ~lose)),
             "ev_R": float(np.mean(pnl)), "ev_R_se": float(np.std(pnl) / math.sqrt(n_paths)),
-            "avg_stop_loss_R": float(np.mean((stop_fill - entry) / r_unit)) if len(stop_fill) else None,
+            "avg_stop_loss_R": float(np.mean(s * (stop_fill - entry) / r_unit)) if len(stop_fill) else None,
             "se": float(math.sqrt(max(np.mean(win), 1e-9) * (1 - np.mean(win)) / n_paths))})
     return out

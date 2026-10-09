@@ -72,14 +72,31 @@ def bgk_shift(level: float, p0: float, sigma: float, dt: float) -> float:
     return level * math.exp(beta) if level > p0 else level * math.exp(-beta)
 
 
-def short_geometry(entry: float, stop: float, target: float, sigma: float, t: float) -> dict[str, float]:
-    """No-edge baseline for a SHORT: stop is the upper barrier, target the lower. "No edge" = the PRICE is a
-    martingale (log drift ν = −σ²/2; a zero LOG drift would bias price upward by Jensen). Returns P(target first),
-    P(stop first), P(time) and the no-edge EV in R (≈ 0 by construction, before costs)."""
+def side_sign(side: str) -> int:
+    """+1 for a short (profit when price falls), -1 for a long. Anything else is a caller bug."""
+    if side not in ("short", "long"):
+        raise ValueError(f"side must be 'short' or 'long', not {side!r}")
+    return 1 if side == "short" else -1
+
+
+def short_geometry(entry: float, stop: float, target: float, sigma: float, t: float,
+                   side: str = "short") -> dict[str, float]:
+    """No-edge baseline for a bracket. SHORT (default): stop is the upper barrier, target the lower; LONG: the
+    mirror (stop below, target above). "No edge" = the PRICE is a martingale (log drift ν = −σ²/2; a zero LOG drift
+    would bias price upward by Jensen). Returns P(target first), P(stop first), P(time) and the no-edge EV in R
+    (≈ 0 by construction, before costs)."""
+    s = side_sign(side)
     nu = -(sigma**2) / 2
-    tw = three_way(entry, stop, target, sigma, t, nu)
-    r = (stop - entry) / entry
-    reward_r = (entry - target) / entry / r if r > 0 else 0.0
-    ev_r = tw["down"] * reward_r - tw["up"] * 1.0
-    return {"p_target": tw["down"], "p_stop": tw["up"], "p_time": tw["time"], "reward_R": reward_r,
-            "ev_R_no_edge": ev_r, "p_target_no_time_limit": 1 - race_up_first(entry, stop, target, sigma, nu)}
+    if s == 1:
+        tw = three_way(entry, stop, target, sigma, t, nu)
+        p_t, p_s = tw["down"], tw["up"]
+        p_inf = 1 - race_up_first(entry, stop, target, sigma, nu)
+    else:
+        tw = three_way(entry, target, stop, sigma, t, nu)
+        p_t, p_s = tw["up"], tw["down"]
+        p_inf = race_up_first(entry, target, stop, sigma, nu)
+    r = s * (stop - entry) / entry
+    reward_r = s * (entry - target) / entry / r if r > 0 else 0.0
+    ev_r = p_t * reward_r - p_s * 1.0
+    return {"p_target": p_t, "p_stop": p_s, "p_time": tw["time"], "reward_R": reward_r,
+            "ev_R_no_edge": ev_r, "p_target_no_time_limit": p_inf}
