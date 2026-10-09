@@ -81,11 +81,13 @@ Sources: López de Prado AFML (2018) and "10 Reasons Most ML Funds Fail" (JPM 20
   - Cost: HAR's closed 1h (499) and 15m (96, windows < 4h only) histories are read through the DataHub (stream store
     first, then the weight-guarded REST client) and cached until the next bar of their timeframe closes: at most one
     REST kline call per coin, timeframe and bar. The scanner computes HAR only for tradable deep-scored coins
-    (`scanner.add_har`), not every scanned one; entries, `reassess`, the 5m marks and the ladder compute it on demand.
+    (`scanner.add_har`), not every scanned one; entries, `reassess` and the 5m marks compute it on demand.
 - **`recal.py`:** one σ scale (σ_used = s·σ) for the model in use, never a drift. Fitted daily (guardian `prob_recal`) on labelled
   brackets by three-outcome log-likelihood, and applied only when it beats s = 1 out of sample on purged walk-forward
   folds (most folds and in total) and lies in 0.7-1.3. While effective samples < ~1k a Platt map of P(target) is
-  reported per fold for comparison, never applied.
+  reported per fold for comparison, never applied. The scale applies where a journal is at hand (the `probability`
+  tool, entry odds, `reassess`, the 5m marks, research brackets); the level picker's odds run at scale 1.0 on the
+  gated model, and the ladder stays on the legacy EWMA at 1.0 (ladder_apply trades from it: a code change moves it).
 - **Scoring σ directly:** the labeller stores each window's realized variance per hour (1m mark closes sampled every
   60 min for windows ≥ 4h, else 15 min, averaged over offsets); `calibration_report` shows QLIKE (Patton 2011) of the
   used, EWMA and HAR σ on the same rows, the stop and time odds' calibration, and the σ-scale verdict.
@@ -100,7 +102,7 @@ Sources: López de Prado AFML (2018) and "10 Reasons Most ML Funds Fail" (JPM 20
 - **`labels.py`:** triple-barrier labels on 1m MARK candles; the guardian labels due predictions hourly.
 - **`evaluate.py`:** Brier + Murphy decomposition, reliability diagram with Wilson CIs, analyst-vs-baseline skill, and expectancy/edge by setup, tape state, regime and source.
 - **Where it runs:**
-  - every scan logs a vol-scaled 24h research bracket (+1σ√T / −2σ√T) per evaluated coin
+  - every scan logs a vol-scaled 24h research bracket (shape drawn per coin, above) per evaluated coin
   - `reassess` shows `probability_from_here` and the `next_level` exit check (below)
   - limit entries log fill odds
   - CLI `shortbot prob|calibration`; MCP `probability`, `calibration_report`.
