@@ -137,6 +137,7 @@ def report(journal) -> dict[str, Any]:
         "barrier_calibration": barrier_calibration(rows),
         "sigma_qlike": qlike(rows),
         "sigma_scale": _scale_verdict(journal),
+        "sigma_model": _model_verdict(journal),
         "expectancy_by_setup": expectancy(rows, ctx("setup")),
         "expectancy_by_tape_state": expectancy(rows, ctx("tape_state")),
         "expectancy_by_regime": expectancy(rows, ctx("regime")),
@@ -159,3 +160,14 @@ def _scale_verdict(journal) -> dict[str, Any] | None:
         return None
     keys = ("applied", "scale", "fitted_scale", "rows", "n_eff", "why", "fitted_at")
     return {k: v.get(k) for k in keys} if v else None
+
+
+def _model_verdict(journal) -> dict[str, Any] | None:
+    """The stored σ model gate (recal.model_verdict): which σ is `used`, and why."""
+    import json
+
+    from .recal import KV_MODEL
+    try:
+        return json.loads(journal.get(KV_MODEL) or "null")
+    except Exception:  # noqa: BLE001 - a report never fails on a stored verdict
+        return None

@@ -2,6 +2,7 @@
 vol_har.py), and engine.sigma_hourly choosing the horizon-matched forecast with the legacy EWMA beside it."""
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -84,10 +85,8 @@ def test_horizon_sigma_blends_components_and_uses_15m_for_short_windows():
 
 
 class Ctx:
-    symbol = "X/USDT:USDT"
-
-    def __init__(self, h1):
-        self.h1 = h1
+    def __init__(self, h1, symbol="X/USDT:USDT"):
+        self.h1, self.symbol = h1, symbol
 
     async def flow_candles(self, tf, n):
         return bars(300, 0.004, step_ms=300_000)
@@ -96,12 +95,74 @@ class Ctx:
         return {"1h": self.h1[-n:], "15m": bars(97, 0.005, step_ms=H // 4)}[tf]
 
 
-async def test_engine_uses_the_horizon_forecast_keeps_ewma_and_applies_the_scale():
+async def test_used_stays_on_ewma_with_har_logged_beside_it_until_the_gate_says_har():
+    from shortbot.probability import recal
     from shortbot.probability.engine import sigma_context, sigma_hourly
-    s = await sigma_hourly(Ctx(bars(500, 0.01)), 24.0, 0.9)
-    assert s["model"] == "har" and s["ewma"] and s["har"]
-    assert s["used"] == pytest.approx(s["har"] * 0.9)
-    assert sigma_context(s) == {"sigma_ewma": s["ewma"], "sigma_har": s["har"], "sigma_model": "har",
+    s = await sigma_hourly(Ctx(bars(500, 0.01)), 24.0, 0.9, har=True)
+    assert s["model"] == "ewma" and s["ewma"] and s["har"]
+    assert s["used"] == pytest.approx(vol.clamp_sigma(s["ewma"] * 0.9))
+    assert sigma_context(s) == {"sigma_ewma": s["ewma"], "sigma_har": s["har"], "sigma_model": "ewma",
                                 "sigma_scale": 0.9}
-    young = await sigma_hourly(Ctx(bars(8, 0.01)))
-    assert young["model"] == "ewma" and young["used"] == pytest.approx(young["ewma"])
+    quiet = await sigma_hourly(Ctx(bars(500, 0.01)))          # the per-coin scan signal: no HAR, no 1h history
+    assert quiet["har"] is None and quiet["used"] == pytest.approx(s["ewma"])
+    gated = await sigma_hourly(Ctx(bars(500, 0.01)), 24.0, 1.0, model="har")
+    assert gated["model"] == "har" and gated["used"] == pytest.approx(gated["har"])
+    recal._active["model"] = "har"                             # a persisted verdict read by this process
+    assert (await sigma_hourly(Ctx(bars(500, 0.01))))["model"] == "har"
+    young = await sigma_hourly(Ctx(bars(8, 0.01), "NEW/USDT:USDT"), model="har")   # 8 hours of history
+    assert young["model"] == "ewma" and young["used"] == pytest.approx(young["ewma"])   # no HAR: the legacy σ
+
+
+class Public:
+    """A cold store's REST side: every kline call counted per timeframe."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def fetch_ohlcv(self, symbol, tf="1h", since=None, limit=60, params=None):
+        from shortbot import clock
+        self.calls.append(tf)
+        step = {"1h": H, "15m": H // 4}[tf]
+        return [[r[0] - 600 * H + clock.now_ms() // step * step - T0, *r[1:]] for r in bars(limit, 0.01, step_ms=step)]
+
+
+async def test_a_cold_store_costs_one_rest_kline_call_per_coin_per_bar(tmp_path):
+    from shortbot import clock, weight
+    from shortbot.config import RiskLimits
+    from shortbot.market import DataHub
+    from shortbot.probability.engine import sigma_hourly
+    pub = Public()
+
+    async def flow(symbol, tf, limit):
+        return bars(limit, 0.004, step_ms=300_000)
+    ex = SimpleNamespace(settings=SimpleNamespace(db_path=tmp_path / "shortbot.db"), public=pub, limits=RiskLimits(),
+                         flow_klines=flow)
+    t = T0 + 10 * 60_000
+    with weight.tagged(weight.RESEARCH):
+        with clock.at(t):
+            for hours in (24.0, 2.0, 2.0):   # three callers, each its own context, within one 15m bar
+                await sigma_hourly(DataHub(ex).context("X/USDT:USDT"), hours, har=True)
+        assert pub.calls.count("1h") == 1 and pub.calls.count("15m") == 1
+        with clock.at(t + 15 * 60_000):      # the next 15m bar: one new 15m read, the 1h history still current
+            await sigma_hourly(DataHub(ex).context("X/USDT:USDT"), 2.0, har=True)
+        assert pub.calls.count("1h") == 1 and pub.calls.count("15m") == 2
+        with clock.at(t + H):                # the next 1h bar
+            await sigma_hourly(DataHub(ex).context("X/USDT:USDT"), 24.0, har=True)
+        assert pub.calls.count("1h") == 2
+
+
+async def test_the_scanner_computes_har_only_for_coins_reaching_the_probability_stage():
+    from shortbot.scanner import add_har
+    from shortbot.signals import Evaluation
+    asked = []
+
+    class Hub:
+        def context(self, symbol):
+            asked.append(symbol)
+            return Ctx(bars(500, 0.01), symbol)
+    ev = lambda s, vetoes=(), **f: Evaluation(s, {"sigma_h": 0.01, **f}, 50, [], list(vetoes), {})  # noqa: E731
+    evals = [ev("OK/USDT:USDT"), ev("VETO/USDT:USDT", ["squeeze"]), ev("LATE/USDT:USDT", data_deferred=True)]
+    assert await add_har(Hub(), evals) == 1
+    assert asked == ["OK/USDT:USDT"]
+    assert evals[0].features["sigma_h_har"] == pytest.approx(0.01, rel=0.25)
+    assert "sigma_h_har" not in evals[1].features and "sigma_h_har" not in evals[2].features

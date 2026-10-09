@@ -66,11 +66,11 @@ def chandelier_stop(c1h: list[list[float]], n: int = 22, k: float = 3.0) -> floa
     return min(c[3] for c in c1h[-n:]) + k * atr if atr else None
 
 
-def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float | None,
+def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_rate: float | None,
              budget_usd: float, now: datetime | None = None, sigma_h: float | None = None,
              funding_interval_h: int | None = None) -> dict[str, Any]:
-    """`funding_8h` is the current rate per funding interval; with `sigma_h` the next-level block (exit_odds.py)
-    adds its odds, costs and the protect_profit / funding_drag advice."""
+    """`funding_rate` is the current rate per funding interval (`funding_interval_h`, 8 when unread); with `sigma_h`
+    the next-level block (exit_odds.py) adds its odds, costs and the protect_profit / funding_drag advice."""
     now = now or datetime.now(UTC)
     plan = trade.get("plan") or {}
     entry, mark, qty = trade["entry_price"], pos["mark"], pos["contracts"]
@@ -95,8 +95,9 @@ def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float |
     tsh = plan.get("time_stop_hours")
     if tsh and age_h >= tsh / 2 and trade.get("mfe_pct", 0) * entry / 100 * qty < 0.5 * r1:
         act("exit_or_shorten", f"age {age_h:.1f}h ≥ half the {tsh}h time stop and MFE < 0.5R: not working")
-    if funding_8h is not None and funding_8h < 0 and tsh:
-        cost = abs(funding_8h) * max(tsh - age_h, 0) / 8 * mark * qty
+    iv = funding_interval_h or 8   # an hourly coin pays its rate 8x per 8h: the same helper as funding_drag
+    if funding_rate is not None and funding_rate < 0 and tsh:
+        cost = exit_odds.funding_frac("short", funding_rate, iv, max(tsh - age_h, 0)) * mark * qty
         if cost > 0.1 * r1:
             act("shorten", f"negative funding costs ~{cost:.2f} USDT over the remaining hold (> 0.1R)")
     if rr_now is not None and rr_now < 1:
@@ -111,7 +112,7 @@ def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float |
             "widen beyond the sweep level with a size cut (≤ 1R) or accept the exit")
     if pnl > 0 and atr and (entry - mark) >= 0.5 * atr and budget_usd > 0:
         act("consider_add", "in profit by ≥ 0.5 ATR: pyramid possible if the stop moves so total worst case ≤ 1R")
-    nl = exit_odds.for_trade(trade, mark, stop, age_h, sigma_h, funding_8h, funding_interval_h)
+    nl = exit_odds.for_trade(trade, mark, stop, age_h, sigma_h, funding_rate, funding_interval_h)
     acts += exit_odds.actions(nl, pnl / r1, entry, chand)
     if not acts:
         act("hold", "plan intact from the current state")
@@ -121,7 +122,9 @@ def reassess(trade: dict, pos: dict, c1h: list[list[float]], funding_8h: float |
             "atr_1h": atr, "stop_in_atr": round((stop - mark) / atr, 2) if stop and atr else None,
             "chandelier_stop": chand, "target_now": target_now, "reward_risk_now": rr_now,
             "age_h": round(age_h, 2), "budget_now_usdt": round(budget_usd, 2),
-            "size_ideal": size_ideal, "funding_8h": funding_8h, "next_level": nl, "actions": acts}
+            "size_ideal": size_ideal, "funding_rate": funding_rate, "funding_interval_h": iv,
+            "funding_8h": funding_rate * 8 / iv if funding_rate is not None else None, "next_level": nl,
+            "actions": acts}
 
 
 class PositionOps:
@@ -139,9 +142,9 @@ class PositionOps:
         fr = await tr.ex.public.fetch_funding_rate(symbol)
         from .market.regime import market_regime
         budget = await tr.budget(tr, symbol, (await market_regime(tr.ex))["verdict_for_shorts"])
-        f8 = fr.get("fundingRate")
+        rate = fr.get("fundingRate")
         hub, sig, iv = await exit_odds.market_inputs(tr.ex, symbol, tr.j, exit_odds.trade_horizon(trade))
-        res = reassess(trade, pos, c1h, f8, budget["risk_usd"], sigma_h=sig.get("used"), funding_interval_h=iv)
+        res = reassess(trade, pos, c1h, rate, budget["risk_usd"], sigma_h=sig.get("used"), funding_interval_h=iv)
         from .exit_marks import latest
         res["budget"], res["next_level_cached"] = budget, latest(tr.j, trade["id"])   # the guardian's last 5m mark
         if res.get("stop") and res.get("target_now"):

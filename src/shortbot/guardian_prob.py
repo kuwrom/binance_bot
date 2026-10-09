@@ -1,7 +1,7 @@
 """Guardian research-lane jobs of the probability layer. Neither touches orders, and both run in the research lane,
 apart from the protective one, so a slow fit or a hung read never delays a stop:
 - next_level: the advisory next-level mark per open position at each closed 5m bar (exit_marks.py, shadow)
-- prob_recal: the daily σ-scale walk-forward fit (probability/recal.py), computed off the event loop"""
+- prob_recal: the daily σ model gate (QLIKE) and σ-scale walk-forward fit (probability/recal.py), off the event loop"""
 
 from __future__ import annotations
 
@@ -37,7 +37,10 @@ class ProbJobs:
         log.debug("next-level marks: %s rows for bar %s", n, bar)
 
     async def prob_recal(self) -> None:
+        """The σ model gate (QLIKE: EWMA until HAR wins), then the σ scale for that model."""
         rows = self.j.predictions(labelled_only=True)
-        res = await asyncio.to_thread(recal.walk_forward, rows)
-        await self.j.write(recal.store, res)
-        log.info("σ scale: applied=%s scale=%s (%s)", res["applied"], res["scale"], res["why"])
+        verdict = await asyncio.to_thread(recal.model_verdict, rows)
+        res = await asyncio.to_thread(recal.walk_forward, rows, recal.FOLDS, verdict["model"])
+        await self.j.write(recal.store_both, verdict, res)
+        log.info("σ model %s (%s); scale: applied=%s scale=%s (%s)", verdict["model"], verdict["why"], res["applied"],
+                 res["scale"], res["why"])

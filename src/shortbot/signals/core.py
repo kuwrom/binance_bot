@@ -143,8 +143,10 @@ async def data_completeness(ctx: MarketContext) -> SignalOut:
 
 @signal("volatility", "core")
 async def volatility(ctx: MarketContext) -> SignalOut:
-    """Per-hour volatility for a 24h window (horizon-matched HAR, probability/vol_har.py; the legacy EWMA of 5m returns
-    and Parkinson on 1h ranges beside it): feeds the probability engine and vol-scaled brackets. Features only."""
+    """Per-hour volatility for a 24h window: the gated model (probability/recal.py: the legacy gap-free EWMA of 5m
+    returns until the horizon-matched HAR wins on QLIKE), Parkinson on 1h ranges beside it. HAR is computed here only
+    once it is the model; before that the scanner adds it for the coins reaching the probability stage
+    (scanner.add_har). Feeds the probability engine and vol-scaled brackets. Features only."""
     from ..probability.engine import sigma_hourly
     s = await sigma_hourly(ctx)
     return SignalOut(features={"sigma_h": s["used"], "sigma_h_ewma": s["ewma"], "sigma_h_parkinson": s["parkinson"],

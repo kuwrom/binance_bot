@@ -4,6 +4,7 @@ candidates, and build per-coin snapshots. The scanner orchestrates only; signals
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from . import clock, news
@@ -16,6 +17,8 @@ from .risk import FALLBACK_MAINT_MARGIN_PCT, max_leverage_for_stop
 from .setups import detect_all
 from .signals import Evaluation, evaluate
 from .tape import classify
+
+log = logging.getLogger("shortbot.scanner")
 
 
 def _row(ev: Evaluation) -> dict[str, Any]:
@@ -39,7 +42,27 @@ async def evaluate_tickers(ex: MarketSource, tickers: list[dict], groups: tuple[
     hub = DataHub(ex)
     await hub.funding_tables()  # warm the shared cache once before fanning out
     evals = list(await asyncio.gather(*(evaluate(hub.context(t["symbol"], t), groups) for t in tickers)))
+    await add_har(hub, evals)
     return evals, [_row(ev) for ev in evals]
+
+
+async def add_har(hub: DataHub, evals: list[Evaluation], hours: float = 24.0) -> int:
+    """The horizon-matched σ (logged beside the used one, so QLIKE can compare them) for the coins that reach the
+    probability stage: tradable (no veto) and complete. Not for every scanned coin: its 1h history costs a fetch per
+    coin per hour (vol_har.closed_history caches it per bar; the stream store first). Returns coins done."""
+    from .probability.vol_har import forecast
+    todo = [ev for ev in evals if ev.tradable and not ev.features.get("data_deferred")
+            and ev.features.get("sigma_h_har") is None]
+
+    async def one(ev: Evaluation) -> bool:
+        try:
+            hz, _ = await forecast(hub.context(ev.symbol), hours, clock.now_ms())
+        except Exception as e:  # noqa: BLE001 - research logging never breaks a scan
+            log.warning("HAR σ for %s failed (%s: %s)", ev.symbol, type(e).__name__, e)
+            return False
+        ev.features["sigma_h_har"] = (hz or {}).get("sigma_h")
+        return ev.features["sigma_h_har"] is not None
+    return sum(await asyncio.gather(*(one(ev) for ev in todo)))
 
 
 def log_scan(journal, evals: list[Evaluation], rows: list[dict[str, Any]], regime: str | None, scan: dict[str, Any],
@@ -188,12 +211,14 @@ def _log_research_brackets(journal, evals, rows, regime) -> None:
     from . import clock
     from .probability import vol_scaled_bracket
     from .probability.baseline import short_geometry
-    from .probability.recal import scale_for
+    from .probability.recal import policy
     from .probability.vol import clamp_sigma
-    scale, minute = scale_for(journal), clock.now_ms() // 60_000
+    (scale, model), minute = policy(journal), clock.now_ms() // 60_000
     for ev, row in zip(evals, rows, strict=True):
         f = ev.features
-        price, s = f.get("last"), clamp_sigma((f.get("sigma_h") or 0) * scale)
+        raw, used = ((f.get("sigma_h_har"), "har") if model == "har" and f.get("sigma_h_har") else
+                     (f.get("sigma_h_ewma"), "ewma") if f.get("sigma_h_ewma") else (f.get("sigma_h"), "parkinson"))
+        price, s = f.get("last"), clamp_sigma((raw or 0) * scale)
         if not price or not s:
             continue
         rng = random.Random(f"{ev.symbol}:{minute}")   # reproducible draw
@@ -209,4 +234,4 @@ def _log_research_brackets(journal, evals, rows, regime) -> None:
                                         "tradable": not ev.vetoes, "k_stop": k, "reward": reward,
                                         "p_stop": round(g["p_stop"], 4), "p_time": round(g["p_time"], 4),
                                         "sigma_ewma": f.get("sigma_h_ewma"), "sigma_har": f.get("sigma_h_har"),
-                                        "sigma_model": f.get("sigma_model"), "sigma_scale": scale})
+                                        "sigma_model": used, "sigma_scale": scale})

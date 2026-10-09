@@ -70,12 +70,19 @@ Sources: López de Prado AFML (2018) and "10 Reasons Most ML Funds Fail" (JPM 20
 - **`vol.py` / `vol_har.py`:** σ inputs.
   - Returns never span a timestamp gap (a hole folds several bars into one return); every forecast sits in a sanity
     band of 0.05%-25% per hour.
-  - `used` = the **horizon-matched** forecast: Yang-Zhang on 15m bars (windows < 4h) or 1h bars, HAR-blended (daily,
-    weekly, ~20-day; fixed weights by horizon, never fitted per coin), times the hour-of-day profile integrated over
-    the window. Why: 5m returns overstated 24h variance by 15-30% on our coins, and the scan brackets were hit less
-    often than the EWMA σ implied (research note 2026-10-09). The legacy 5m EWMA stays beside it (`ewma`), falling
-    back when the 1h history is short.
-- **`recal.py`:** one σ scale (σ_used = s·σ), never a drift. Fitted daily (guardian `prob_recal`) on labelled
+  - `used` = the legacy 5m EWMA (gap-free, in the band) until the **σ model gate** passes: HAR's QLIKE lower than the
+    EWMA's on >= 500 labelled brackets over >= 7 days, both scored on the same rows (verdict in kv `prob_sigma_model`,
+    refitted daily by the guardian's `prob_recal`, read by `sigma_hourly`). Shadow first: entries don't change until
+    the evidence says so.
+  - Logged beside it: the **horizon-matched** forecast (`vol_har.py`): Yang-Zhang on 15m bars (windows < 4h) or 1h
+    bars, HAR-blended (daily, weekly, ~20-day; fixed weights by horizon, never fitted per coin), times the hour-of-day
+    profile integrated over the window. Why: 5m returns overstated 24h variance by 15-30% on our coins, and the scan
+    brackets were hit less often than the EWMA σ implied (research note 2026-10-09).
+  - Cost: HAR's closed 1h (499) and 15m (96, windows < 4h only) histories are read through the DataHub (stream store
+    first, then the weight-guarded REST client) and cached until the next bar of their timeframe closes: at most one
+    REST kline call per coin, timeframe and bar. The scanner computes HAR only for tradable deep-scored coins
+    (`scanner.add_har`), not every scanned one; entries, `reassess`, the 5m marks and the ladder compute it on demand.
+- **`recal.py`:** one σ scale (σ_used = s·σ) for the model in use, never a drift. Fitted daily (guardian `prob_recal`) on labelled
   brackets by three-outcome log-likelihood, and applied only when it beats s = 1 out of sample on purged walk-forward
   folds (most folds and in total) and lies in 0.7-1.3. While effective samples < ~1k a Platt map of P(target) is
   reported per fold for comparison, never applied.

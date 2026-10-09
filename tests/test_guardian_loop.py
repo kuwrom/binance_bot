@@ -93,22 +93,25 @@ async def test_hung_slow_jobs_never_delay_the_protective_lane(monkeypatch):
 
 async def test_research_lane_waits_for_the_first_protective_pass(monkeypatch):
     g = fast_guardian(monkeypatch, research_delay=0.05)
-    order = []
+    order, metrics_ran = [], asyncio.Event()
 
     async def entries():
         order.append("entries")
 
     async def metrics():
         order.append("metrics")
+        metrics_ran.set()
     g.check_entries = entries
     for name in SLOW_JOBS:
         setattr(g, name, noop)
     g.record_metrics = metrics
     task = asyncio.create_task(g.run())
-    await asyncio.sleep(0.15)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:   # waits for the research job itself, not a fixed window (a loaded CI host can take longer than 0.15 s)
+        await asyncio.wait_for(metrics_ran.wait(), 30)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert order[0] == "entries" and "metrics" in order
 
 

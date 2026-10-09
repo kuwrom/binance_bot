@@ -25,7 +25,7 @@ import numpy as np
 from .vol import clamp_sigma, gap_mask
 
 H1_BARS = 499           # < 500: the klines weight-2 tier; ~20.8 days
-M15_BARS = 96           # 24h of 15m bars (a limit other signals already fetch)
+M15_BARS = 96           # 24h of 15m bars (a limit other signals already fetch: the same weight-1 tier)
 SHORT_H = 4.0           # horizons under this use 15m bars for the daily component
 SHRINK_N = 20           # hour-of-day factor shrinkage toward 1: weight n/(n + SHRINK_N)
 MIN_BARS = {"d": 12, "w": 72, "m": 240}
@@ -100,10 +100,12 @@ def window_factor(profile: Sequence[float], start_ms: int, hours: float) -> floa
     return acc / (hours * HOUR_MS)
 
 
-def horizon_sigma(c15: list[list[float]], c1h: list[list[float]], hours: float, now_ms: int) -> dict[str, Any] | None:
+def horizon_sigma(c15: list[list[float]], c1h: list[list[float]], hours: float, now_ms: int,
+                  drop_forming: bool = True) -> dict[str, Any] | None:
     """The hourly σ for a window of `hours` from now, with its parts (per-hour σ of each component, weights, the
-    seasonal factor). None when the 1h history is too short for even the daily component."""
-    h1, m15 = closed(c1h), closed(c15)
+    seasonal factor). None when the 1h history is too short for even the daily component. drop_forming=False: the
+    bars given are closed already (closed_history)."""
+    h1, m15 = (closed(c1h), closed(c15)) if drop_forming else (c1h, c15)
     use15 = hours < SHORT_H and len(m15) >= 2 * MIN_BARS["d"]
     v_d = yang_zhang_var(m15[-M15_BARS:]) if use15 else (yang_zhang_var(h1[-24:]) if len(h1) >= MIN_BARS["d"] else None)
     var_h = {"d": v_d * 4 if use15 and v_d is not None else v_d,
@@ -120,3 +122,36 @@ def horizon_sigma(c15: list[list[float]], c1h: list[list[float]], hours: float, 
     return {"sigma_h": sig, "parts": {k: round(math.sqrt(v), 6) for k, v in have.items()},
             "weights": {k: round(w[k] / total_w, 3) for k in have}, "season": round(season, 3),
             "sampling": "15m" if use15 else "1h", "bars_1h": len(h1)}
+
+
+# Closed bars change only when a bar closes: each (symbol, timeframe) history is fetched at most once per bar of that
+# timeframe in this process, whatever the number of contexts, passes or callers (a cold stream store means REST).
+_HIST: dict[tuple[str, str, int], tuple[int, list[list[float]]]] = {}
+HIST_MAX = 1024
+TF_MS = {"15m": HOUR_MS // 4, "1h": HOUR_MS}
+
+
+async def closed_history(ctx: Any, tf: str, n: int) -> list[list[float]]:
+    """The last n bars of `tf` minus the forming one, through ctx.candles (the stream store first, then the guarded
+    REST client: weight.py admits every call), cached until the next `tf` bar closes. A failed read is not cached."""
+    from .. import clock
+    step = TF_MS[tf]
+    bar_end = clock.now_ms() // step * step + step
+    key = (ctx.symbol, tf, n)
+    hit = _HIST.get(key)
+    if hit and hit[0] == bar_end:
+        return hit[1]
+    bars = closed(await ctx.candles(tf, n + 1))
+    if bars:
+        _HIST.pop(key, None)
+        _HIST[key] = (bar_end, bars)
+        while len(_HIST) > HIST_MAX:
+            _HIST.pop(next(iter(_HIST)))
+    return bars
+
+
+async def forecast(ctx: Any, hours: float, now_ms: int) -> tuple[dict[str, Any] | None, list[list[float]]]:
+    """(horizon_sigma, the closed 1h history it used). 15m bars are read only for windows under SHORT_H."""
+    h1 = await closed_history(ctx, "1h", H1_BARS - 1)
+    m15 = await closed_history(ctx, "15m", M15_BARS - 1) if hours < SHORT_H else []
+    return horizon_sigma(m15, h1, hours, now_ms, drop_forming=False), h1

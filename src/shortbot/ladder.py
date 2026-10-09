@@ -180,8 +180,9 @@ async def build_ladder(ex, journal, pos: dict[str, Any], log: bool = True) -> di
     ctx = DataHub(ex).context(sym)
     ev = await evaluate(ctx)
     f = ev.features
-    from .probability.recal import scale_for
-    sig = (await sigma_hourly(ctx, scale=scale_for(journal)))["used"] or 0.01
+    from .probability.recal import policy
+    scale, model = policy(journal)
+    sig = (await sigma_hourly(ctx, scale=scale, model=model))["used"] or 0.01
     c1h = await ctx.candles("1h", 3)
     oi = await ctx.oi_history("1h", 3)
     now = datetime.now(UTC)

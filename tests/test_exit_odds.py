@@ -120,8 +120,8 @@ def test_horizon_is_the_plans_time_left_or_24h():
 async def test_market_inputs_never_raise(monkeypatch):
     import shortbot.probability.engine as eng
 
-    async def sig(ctx, hours=24.0, scale=1.0):
-        return {"used": 0.02 * scale, "hours": hours}
+    async def sig(ctx, hours=24.0, scale=1.0, model=None, har=None):
+        return {"used": 0.02 * scale, "hours": hours, "model": model, "har_logged": har}
 
     async def broken():
         raise RuntimeError("fundingInfo down")
@@ -131,7 +131,7 @@ async def test_market_inputs_never_raise(monkeypatch):
 
     monkeypatch.setattr(eng, "sigma_hourly", sig)
     _, s, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "KAIA/USDT:USDT", None, 6.0)
-    assert (s["used"], s["hours"], iv) == (0.02, 6.0, 1)
+    assert (s["used"], s["hours"], s["model"], s["har_logged"], iv) == (0.02, 6.0, "ewma", True, 1)
     _, _, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=hourly), "BTC/USDT:USDT")
     assert iv == 8                                                       # not listed = the default 8h
     _, _, iv = await xo.market_inputs(SimpleNamespace(funding_intervals=broken), "KAIA/USDT:USDT")
@@ -157,7 +157,7 @@ async def test_ladder_shadow_rows_log_the_next_level_without_changing_decisions(
         return SimpleNamespace(features={"funding_rate": -0.0136, "funding_interval_h": 4, "funding_8h": -0.027},
                                vetoes=[])
 
-    async def sig(ctx, hours=24.0, scale=1.0):
+    async def sig(ctx, hours=24.0, scale=1.0, model=None, har=None):
         return {"used": 0.015}
 
     monkeypatch.setattr(market, "DataHub", lambda ex: SimpleNamespace(context=lambda s: Ctx()))
@@ -175,3 +175,15 @@ async def test_ladder_shadow_rows_log_the_next_level_without_changing_decisions(
     logged = json.loads(rows[0][2])
     assert logged["target"] == 15.0 and logged["funding_interval_h"] == 4 and logged == out["next_level"]
     assert {r[1] for r in rows} <= {"hold", "wait", "add", "reduce", "stopped"}
+
+
+def test_shorten_counts_an_hourly_coins_funding_8x_per_8h():
+    # -0.03% per settlement over the 21h left: ~0.08% of notional on 8h settlement (under 0.1R), 8x that hourly
+    t = {"symbol": "KAIA/USDT:USDT", "entry_price": 0.1, "initial_stop": 0.105, "amount": 1000, "mfe_pct": 0,
+         "opened_at": (NOW - timedelta(hours=3)).isoformat(), "targets_hit": [], "plan": {"time_stop_hours": 24}}
+    p = {"mark": 0.1, "contracts": 1000, "exchange_stop": 0.105}
+    slow = reassess(t, p, flat_1h(0.1), -0.0003, 5.0, NOW, funding_interval_h=8)
+    fast = reassess(t, p, flat_1h(0.1), -0.0003, 5.0, NOW, funding_interval_h=1)
+    assert "shorten" not in kinds(slow) and "shorten" in kinds(fast)
+    assert fast["funding_8h"] == pytest.approx(-0.0024) and slow["funding_8h"] == pytest.approx(-0.0003)
+    assert "shorten" not in kinds(reassess(t, p, flat_1h(0.1), -0.0003, 5.0, NOW))   # interval unread: 8h

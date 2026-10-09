@@ -153,18 +153,19 @@ def trade_horizon(trade: dict[str, Any], now: datetime | None = None) -> float:
 
 async def market_inputs(ex: Any, symbol: str, journal: Any = None,
                         hours: float = DEFAULT_HOURS) -> tuple[Any, dict[str, Any], int | None]:
-    """(DataHub, σ for the window (engine.sigma_hourly: horizon-matched, times the applied σ scale), funding interval
+    """(DataHub, σ for the window (engine.sigma_hourly: the gated model times the applied σ scale), funding interval
     in hours) for the block; an unread input is empty/None (the block is then skipped, or the interval assumed 8h and
     flagged), never an error: reassess must answer."""
     from .exchange import to_raw
     from .market import DataHub
     from .probability.engine import sigma_hourly
-    from .probability.recal import scale_for
+    from .probability.recal import policy
     hub = DataHub(ex)
     sig: dict[str, Any] = {}
     iv: int | None = None
     try:
-        sig = await sigma_hourly(hub.context(symbol), hours, scale_for(journal))
+        scale, model = policy(journal)
+        sig = await sigma_hourly(hub.context(symbol), hours, scale, model, har=True)
     except Exception as e:  # noqa: BLE001 - advice only: no sigma, no block
         log.warning("next-level sigma unread for %s (%s: %s)", symbol, type(e).__name__, e)
     try:

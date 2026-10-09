@@ -49,12 +49,14 @@ def three_way_vec(p0: np.ndarray, up: np.ndarray, lo: np.ndarray, sigma: np.ndar
     return p_up, p_dn, np.clip(1 - p_up - p_dn, 0, 1)
 
 
-def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Labelled short brackets with a σ, oldest first; σ is the RAW forecast (the logged one over its scale)."""
+def usable(rows: list[dict[str, Any]], model: str = "ewma") -> list[dict[str, Any]]:
+    """Labelled short brackets whose σ came from `model` (rows logged before the model was recorded: EWMA), oldest
+    first; σ is the RAW forecast (the logged one over its scale)."""
     out = []
     for r in rows:
         ctx = r.get("context") or {}
-        if (r.get("kind") == "bracket" and r.get("outcome") in ("target", "stop", "time") and r.get("sigma_h")
+        if ((ctx.get("sigma_model") or "ewma") == model and r.get("kind") == "bracket"
+                and r.get("outcome") in ("target", "stop", "time") and r.get("sigma_h")
                 and r.get("stop") and r.get("target") and r["stop"] > r["entry"] > r["target"] > 0):
             out.append({**r, "_sig": float(r["sigma_h"]) / float(ctx.get("sigma_scale") or 1.0)})
     out.sort(key=lambda r: r["ts_ms"])
@@ -110,12 +112,12 @@ def _binary_ll(p: np.ndarray, y: np.ndarray) -> float:
     return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
 
 
-def walk_forward(rows: list[dict[str, Any]], folds: int = FOLDS) -> dict[str, Any]:
+def walk_forward(rows: list[dict[str, Any]], folds: int = FOLDS, model: str = "ewma") -> dict[str, Any]:
     """Expanding-window, purged walk-forward: per test fold, s fitted on the brackets labelled before it began; the
     fold's log-loss at that s vs at 1.0. Platt (P(target) only) the same way while n_eff < PLATT_MAX_NEFF."""
-    rows = usable(rows)
+    rows = usable(rows, model)
     n_eff = len({(r["symbol"], int(r["ts_ms"] // 86_400_000)) for r in rows})
-    out: dict[str, Any] = {"rows": len(rows), "n_eff": n_eff, "folds": []}
+    out: dict[str, Any] = {"model": model, "rows": len(rows), "n_eff": n_eff, "folds": []}
     if len(rows) < MIN_ROWS:
         return {**out, "applied": False, "scale": 1.0, "why": f"{len(rows)} labelled brackets < {MIN_ROWS}"}
     a = Arrays(rows)
@@ -184,3 +186,67 @@ def scale_for(journal: Any) -> float:
         s = 1.0
     _cache[id(journal)] = (time.monotonic(), s)
     return s
+
+
+# ---- which σ model is `used` (engine.sigma_hourly): EWMA until HAR wins on QLIKE, an evidence gate like the scale's
+KV_MODEL = "prob_sigma_model"
+GATE_ROWS, GATE_DAYS = 500, 7
+_active = {"model": "ewma"}                    # this process's last verdict read (sigma_hourly's default)
+_mcache: dict[int, tuple[float, str]] = {}
+
+
+def model_verdict(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """"har" only when HAR's QLIKE is lower than the EWMA's on >= GATE_ROWS labelled brackets over >= GATE_DAYS days,
+    both scored on the same rows against the realized variance of each window; else "ewma"."""
+    from .evaluate import qlike
+    paired = [r for r in rows if r.get("kind") == "bracket" and r.get("rv_h")
+              and ((r.get("context") or {}).get("sigma_ewma") or 0) > 0
+              and ((r.get("context") or {}).get("sigma_har") or 0) > 0]
+    q = qlike(paired)
+    if not q or not q.get("paired"):
+        return {"model": "ewma", "n": 0, "days": 0, "why": "no labelled bracket with both σ and a realized variance"}
+    qh, qe = q["har"]["qlike"], q["ewma"]["qlike"]
+    ok = q["n"] >= GATE_ROWS and q["days"] >= GATE_DAYS and qh < qe
+    return {"model": "har" if ok else "ewma", "n": q["n"], "days": q["days"], "qlike_har": qh, "qlike_ewma": qe,
+            "why": f"HAR QLIKE {qh} vs EWMA {qe} on {q['n']} rows over {q['days']} days (HAR needs lower on >= "
+                   f"{GATE_ROWS} rows over >= {GATE_DAYS} days)"}
+
+
+def store_model(journal: Any, verdict: dict[str, Any]) -> None:
+    """Keep the σ model verdict (kv `prob_sigma_model`): sigma_model reads it."""
+    journal.set(KV_MODEL, json.dumps({**verdict, "decided_at": int(time.time())}, default=float))
+    _mcache.pop(id(journal), None)
+
+
+def sigma_model(journal: Any) -> str:
+    """The persisted model verdict ("ewma" without one, a journal or a readable row), cached for an hour; it also
+    becomes this process's active_model()."""
+    if journal is None:
+        return _active["model"]
+    hit = _mcache.get(id(journal))
+    if hit and time.monotonic() - hit[0] < CACHE_S:
+        return hit[1]
+    try:
+        m = json.loads(journal.get(KV_MODEL) or "{}").get("model") or "ewma"
+        m = m if m in ("ewma", "har") else "ewma"
+    except Exception as e:  # noqa: BLE001 - a broken verdict keeps the legacy model
+        log.warning("σ model unread (%s: %s): ewma", type(e).__name__, e)
+        m = "ewma"
+    _mcache[id(journal)] = (time.monotonic(), m)
+    _active["model"] = m
+    return m
+
+
+def active_model() -> str:
+    return _active["model"]
+
+
+def policy(journal: Any) -> tuple[float, str]:
+    """(σ scale, σ model) for a caller holding a journal."""
+    return scale_for(journal), sigma_model(journal)
+
+
+def store_both(journal: Any, verdict: dict[str, Any], res: dict[str, Any]) -> None:
+    """The model verdict and its scale fit, as one journal unit."""
+    store_model(journal, verdict)
+    store(journal, res)

@@ -18,31 +18,37 @@ from ..market import DataHub, MarketContext
 from . import baseline as bl
 from .montecarlo import simulate_short
 from .vol import clamp_sigma, ewma_sigma_hourly, gaps, parkinson_sigma_hourly
-from .vol_har import H1_BARS, M15_BARS, horizon_sigma
+from .vol_har import forecast
 
 log = logging.getLogger("shortbot.probability")
 
 MC_HISTORY_5M = 1000   # ≈ 3.5 days of 5m bars for residuals
 
 
-async def sigma_hourly(ctx: MarketContext, hours: float = 24.0, scale: float = 1.0) -> dict[str, Any]:
-    """Hourly σ for a window of `hours`: `used` = the horizon-matched HAR forecast (vol_har.py) times the
-    out-of-sample σ scale (recal.py; 1.0 until one passes), floored and capped; the legacy 5m EWMA when the 1h
-    history is short. `ewma` and `parkinson` stay for comparison (QLIKE in evaluate.py scores each)."""
+async def sigma_hourly(ctx: MarketContext, hours: float = 24.0, scale: float = 1.0, model: str | None = None,
+                       har: bool | None = None) -> dict[str, Any]:
+    """Hourly σ for a window of `hours`. `used` = the model's forecast times the out-of-sample σ scale (recal.py; 1.0
+    until a fit passes), in the vol.clamp_sigma band. `model` (None: recal.active_model(), the persisted QLIKE gate):
+    "ewma" (the legacy 5m EWMA, gap-free; the default until HAR wins on >= 500 labelled rows over >= 7 days) or "har"
+    (the horizon-matched forecast, vol_har.py). `har`: compute the HAR forecast to log beside it (None: only when the
+    model needs it; the scanner's per-coin signal leaves it off, so only the probability stage pays for its history)."""
     from .. import clock
+    from .recal import active_model
+    model = model or active_model()
+    hz: dict[str, Any] | None = None
+    h1: list[list[float]] = []
+    if har or (har is None and model == "har"):
+        try:   # first: its closed 1h history also serves Parkinson below (one 1h fetch per coin per bar)
+            hz, h1 = await forecast(ctx, hours, clock.now_ms())
+        except Exception as e:  # noqa: BLE001 - the legacy forecast covers it
+            log.warning("horizon σ failed for %s (%s: %s)", getattr(ctx, "symbol", "?"), type(e).__name__, e)
     flow = await ctx.flow_candles("5m", 288)
-    c1h = await ctx.candles("1h", 60)
     ew = ewma_sigma_hourly([c[4] for c in flow], [c[0] for c in flow])
-    pk = parkinson_sigma_hourly(c1h)
-    hz = None
-    try:
-        hz = horizon_sigma(await ctx.candles("15m", M15_BARS), await ctx.candles("1h", H1_BARS), hours,
-                           int(clock.now_dt().timestamp() * 1000))
-    except Exception as e:  # noqa: BLE001 - the legacy forecast covers it
-        log.warning("horizon σ failed for %s (%s: %s): EWMA used", getattr(ctx, "symbol", "?"), type(e).__name__, e)
-    har = (hz or {}).get("sigma_h")
-    base, model = (har, "har") if har else (ew, "ewma") if ew else (pk, "parkinson")
-    return {"ewma": ew, "parkinson": pk, "har": har, "har_parts": hz, "model": model, "scale": scale,
+    pk = parkinson_sigma_hourly(h1[-60:] if h1 else await ctx.candles("1h", 60))
+    hv = (hz or {}).get("sigma_h")
+    base, used = (hv, "har") if model == "har" and hv else (ew, "ewma") if ew else (pk, "parkinson") if pk \
+        else (hv, "har")
+    return {"ewma": ew, "parkinson": pk, "har": hv, "har_parts": hz, "model": used, "scale": scale,
             "hours": hours, "gaps_5m": gaps([c[0] for c in flow]) if flow else None,
             "used": clamp_sigma(base * scale) if base else None}
 
@@ -74,8 +80,9 @@ class ProbabilityEngine:
         ctx = self.hub.context(symbol)
         last = await ctx.last()
         entry = entry or last
-        from .recal import scale_for
-        sig = await sigma_hourly(ctx, hours, scale_for(self.j))
+        from .recal import policy
+        scale, model = policy(self.j)
+        sig = await sigma_hourly(ctx, hours, scale, model, har=True)   # HAR logged beside the used σ (QLIKE)
         s = sig["used"]
         if not s:
             return {"ok": False, "error": "no volatility estimate (not enough candles)"}

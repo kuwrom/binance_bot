@@ -134,7 +134,56 @@ def test_research_brackets_draw_their_geometry_and_log_every_outcome_odds():
     preds = j.predictions(labelled_only=False)
     shapes = {(p["context"]["k_stop"], p["context"]["reward"]) for p in preds}
     assert len(preds) == 40 and len(shapes) > 3 and all(k in K_STOPS and r in REWARDS for k, r in shapes)
-    p = preds[0]
-    assert p["sigma_h"] == pytest.approx(0.009) and p["context"]["sigma_scale"] == 0.9
+    p = preds[0]   # σ used = the EWMA (the model until the QLIKE gate passes) x the applied scale; HAR logged beside
+    assert p["sigma_h"] == pytest.approx(0.0108) and p["context"]["sigma_scale"] == 0.9
+    assert p["context"]["sigma_model"] == "ewma" and p["context"]["sigma_har"] == 0.01
     assert p["context"]["p_stop"] + p["context"]["p_time"] + p["p_model"] == pytest.approx(1.0, abs=2e-3)
     assert json.dumps(p["context"])   # serialisable as logged
+    recal.store_model(j, {"model": "har"})
+    _log_research_brackets(j, evals[:1], rows[:1], "caution")
+    last = j.predictions(labelled_only=False)[0]
+    assert last["context"]["sigma_model"] == "har" and last["sigma_h"] == pytest.approx(0.009)
+
+
+def qrows(n, days, har_err, ewma_err, seed=5):
+    """Labelled brackets whose realized variance is 1e-4/h; each σ forecast off by its own factor (1 = exact)."""
+    return [{"kind": "bracket", "outcome": "time", "rv_h": 1e-4, "sigma_h": 0.01, "symbol": f"C{i % 30}",
+             "ts_ms": int(i * days * DAY / n), "context": {"sigma_ewma": 0.01 * ewma_err, "sigma_har": 0.01 * har_err}}
+            for i in range(n)]
+
+
+def test_model_gate_needs_lower_har_qlike_on_500_rows_over_7_days():
+    assert recal.model_verdict(qrows(600, 10, 1.02, 1.2))["model"] == "har"
+    assert recal.model_verdict(qrows(400, 10, 1.02, 1.2))["model"] == "ewma"      # too few rows
+    assert recal.model_verdict(qrows(600, 5, 1.02, 1.2))["model"] == "ewma"       # too few days
+    worse = recal.model_verdict(qrows(600, 10, 1.3, 1.05))
+    assert worse["model"] == "ewma" and worse["qlike_har"] > worse["qlike_ewma"]
+    assert recal.model_verdict([])["model"] == "ewma"
+
+
+def test_the_persisted_model_verdict_is_what_sigma_hourly_falls_back_on():
+    j = Journal(":memory:")
+    assert recal.policy(j) == (1.0, "ewma") and recal.active_model() == "ewma"
+    recal.store_model(j, recal.model_verdict(qrows(600, 10, 1.02, 1.2)))
+    assert recal.sigma_model(j) == "har" and recal.active_model() == "har"
+    j.set(recal.KV_MODEL, "{broken")
+    recal._mcache.clear()
+    assert recal.sigma_model(j) == "ewma"
+
+
+def test_the_scale_fit_uses_only_rows_of_the_model_in_use():
+    rows = brackets(0.85, n=400)
+    for r in rows[:100]:
+        r["context"] = {"sigma_model": "har"}
+    assert len(recal.usable(rows)) == 300 and len(recal.usable(rows, "har")) == 100
+
+
+async def test_guardian_recal_stores_the_model_and_the_scale():
+    from shortbot.guardian_prob import ProbJobs
+    g = ProbJobs()
+    g.j = Journal(":memory:")
+    await g.prob_recal()
+    await g.j.flush()
+    assert json.loads(g.j.get(recal.KV_MODEL))["model"] == "ewma"
+    assert json.loads(g.j.get(recal.KV))["model"] == "ewma"
+    assert evaluate.report(g.j)["labelled"] == 0

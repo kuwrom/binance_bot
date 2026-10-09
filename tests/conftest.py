@@ -358,3 +358,16 @@ def no_user_stream_network(monkeypatch):
     async def offline(url):
         raise ConnectionRefusedError("tests: no network")
     monkeypatch.setattr("shortbot.user_stream.open_socket", offline)
+
+
+@pytest.fixture(autouse=True)
+def fresh_sigma_state():
+    """The probability layer's process caches start empty: closed-bar histories (vol_har, keyed by symbol and bar),
+    the σ-scale and σ-model verdicts (recal, keyed by journal id, which a later journal can reuse) and the model
+    sigma_hourly falls back on."""
+    from shortbot.probability import recal, vol_har
+    vol_har._HIST.clear()
+    recal._cache.clear()
+    recal._mcache.clear()
+    recal._active["model"] = "ewma"
+    yield
