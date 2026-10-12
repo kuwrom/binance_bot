@@ -10,12 +10,14 @@ Loaded in every session. It holds the rules our data supports; the numbers in br
   rejections.
 
 ## What to trade (best evidence first)
-1. **Token unlocks** (44): short 2-4 weeks before a large team or cliff unlock (2%+ of supply). Close around
-   the unlock date. Skip ecosystem unlocks. Unlock dates are added by hand, with a source (`unlock-add`).
-2. **New listings** (15, 36): short coins that got a spot listing or a HODLer airdrop, around day 7 after listing.
+1. **New listings** (15, 36): short coins that got a spot listing or a HODLer airdrop, around day 7 after listing.
    Wide stop, hold 30-60 days. Skip Alpha and futures-only listings: they often pump again first.
-3. **Pump fades only at a discount** (24): fade a coin that pumped only when the futures price is below spot (premium
+2. **Pump fades only at a discount** (24): fade a coin that pumped only when the futures price is below spot (premium
    -1% or lower), funding is -0.1% or lower, or funding is hourly. Plain pump fades lose money overall (51).
+3. **Token unlocks: half-size `exp_` only** (44): our own data shows no edge for pre-unlock shorts (685 coin-days,
+   -0.95% net 24h), and a falling market tide doesn't fix it (96, rejected). Trade them only as a half-size `exp_` until
+   a forward test is positive. If taken: a large team or cliff unlock (2%+ of supply), entry 2-4 weeks before it, a
+   fresh lower high, never in a broad rally; skip ecosystem unlocks. Unlock dates are added by hand (`unlock-add`).
 4. Anything else (breakdowns, level fades, bounce fades): test it on demo as an `exp_` trade first.
 
 ## How to enter

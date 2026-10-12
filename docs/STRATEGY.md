@@ -7,7 +7,7 @@ Profitable independents tie every strategy to a **forced or uneconomic flow**, s
 
 | Edge family | Status for us |
 |---|---|
-| **Supply shocks** (team/cliff unlocks: about 90% negative, team unlocks about −25%, pressure starting ~30d before; post-TGE/high-FDV listings: 88% of 2024 airdrops fell; delistings) | **#1 priority.** Best evidence, and a capacity edge (too small for big funds). Keyrock unlock/airdrop studies are practitioner research. |
+| **Supply shocks** (team/cliff unlocks: about 90% negative, team unlocks about −25%, pressure starting ~30d before; post-TGE/high-FDV listings: 88% of 2024 airdrops fell; delistings) | **#1 priority.** Best evidence, and a capacity edge (too small for big funds). Keyrock unlock/airdrop studies are practitioner research. **Update 2026-10-12:** our own data shows no edge for pre-unlock shorts (#44, #96; tide_study): unlocks are a half-size `exp_` until a forward test is positive (docs/DOCTRINE.md). Listings keep their place. |
 | **Funding-aware fades of overextended alts** | **#2.** Corrected by our data (#38): top-quintile aggregate carry meant trend-on, alt shorts lost; a coin's own funding is never a short trigger, and negative funding is a size flag, not a veto (#22). Rising-OI squeezes stay the main risk (#52). |
 | **Beta-hedged cross-sectional short leg** (weak momentum, high dilution) with a BTC trend (TSMOM) regime switch | **#3.** Peer-reviewed factor support (Liu-Tsyvinski-Wu JF 2022). Trend is the most robust crypto premium (Sharpe 0.8–1.5 in working papers). |
 | Liquidation-cascade fades | Secondary timing overlay only. There is no reliable early warning, and ADL can close winning shorts (Hyperliquid, $45–52M). |

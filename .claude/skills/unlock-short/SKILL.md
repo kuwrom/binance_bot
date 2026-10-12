@@ -8,6 +8,7 @@ when_to_use: The user mentions a token unlock, vesting cliff, or asks to researc
 
 **Thesis:** Keyrock's study of 16k+ unlock events: about 90% show negative pressure. Team unlocks averaged −25%, investor unlocks had little effect, ecosystem unlocks averaged +1.2%. Pressure starts about 30 days before and fades about 14 days after.
 **Status:** experimental. There's no free unlock API on the $0 budget, so dates come from public pages (Tokenomist or CryptoRank pages via WebFetch, project docs).
+**Our data disagrees (2026-10-12, #44, #96):** pre-unlock shorts showed no edge in 685 coin-days (-0.95% net 24h), and the desk's unlock shorts in rising-breadth weeks lost or scratched (H #40, ZRO #43, KITE #49). Trade them only as a half-size `exp_` until a forward test is positive, with a fresh lower high and never in a broad rally.
 
 ## Checklist
 - Unlock size ≥ 2% of circulating supply, and the recipient is the **team or cliff**, not ecosystem.
