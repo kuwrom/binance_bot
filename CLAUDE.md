@@ -43,7 +43,8 @@ You run the desk; your judgement is the edge (docs/QUANT_METHODS.md "Design prin
   here or in Claude memory.
 
 ## 7. Server and code
-- The desk runs on AWS (EC2 3.123.59.243, docker compose). Never start a guardian anywhere else: two guardians on one
+- The desk runs on a single AWS (EC2, docker compose) box owned by the human; its address is in the owner's
+  local notes, not the repo. Never start a guardian anywhere else: two guardians on one
   account fight each other.
 - Deploys: push to master → CI → the server deploys itself in about 8 min (deploy/DEPLOY.md §10). Push from the server
   with `GIT_SSH_COMMAND="ssh -i ~/.ssh/binance_bot_push -o IdentitiesOnly=yes" git push origin <branch>:master`.

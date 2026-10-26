@@ -13,3 +13,7 @@ h.txt
 
 # third-party quant repos cloned for study (docs/QUANT_METHODS.md); never committed or synced
 learning-repos/
+
+# off-box backups and deploy key material (contain live secrets); never committed
+server-export-*/
+push.pub
